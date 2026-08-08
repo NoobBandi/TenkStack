@@ -1,0 +1,21 @@
+# Dependencies and build output
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local state that must never be published: the session signing key would let
+# anyone forge a login, and the database holds password hashes and API keys.
+*.sqlite
+*.sqlite-*
+session.key
+*.key
+*.crt
+*.pem
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,408 @@
+"""Model management by editing llama-swap's config.yaml.
+
+llama-swap has no API for adding or changing models, but it does have
+-watch-config. So the config file *is* the management interface, and this module
+is the only thing allowed to write it.
+
+ruamel.yaml in round-trip mode, not PyYAML, because that file carries the
+comments explaining the VRAM policy. A plain safe_load/safe_dump cycle would
+silently delete every one of them on the first edit made through the UI.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import logging
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import LiteralScalarString
+
+logger = logging.getLogger(__name__)
+
+CONFIG_PATH = Path("/home/tenk/ai/llama-swap/config.yaml")
+MODELS_DIR = Path("/home/tenk/ai/models")
+WRAPPER = "${llama-sycl}"
+
+_yaml = YAML()
+_yaml.preserve_quotes = True
+_yaml.indent(mapping=2, sequence=4, offset=2)
+
+# Serialises writes. Two concurrent edits would otherwise interleave a
+# read-modify-write and lose one of them.
+_lock = asyncio.Lock()
+
+
+def _load() -> Any:
+    with CONFIG_PATH.open(encoding="utf-8") as handle:
+        return _yaml.load(handle)
+
+
+def _dump(data: Any) -> None:
+    """Write via a temp file and replace, so a crash mid-write cannot leave
+    llama-swap watching a truncated config.
+
+    The rendered text is parsed back before it is allowed anywhere near the real
+    file. Round-tripping comments is not always safe: emptying a commented
+    mapping makes ruamel print the orphaned comments and then a bare `{}` at
+    column zero, which is unparseable. That produced a config llama-swap could
+    not read, and the failure only surfaced on its next restart -- long after
+    the action that caused it. Verifying here turns that into an error at the
+    point of the edit.
+    """
+    buffer = io.StringIO()
+    _yaml.dump(data, buffer)
+    text = buffer.getvalue()
+
+    try:
+        YAML().load(text)
+    except Exception as exc:
+        logger.error("refusing to write a config that does not parse: %s", exc)
+        raise ValueError(
+            "產生的設定檔無法解析，已保留原檔未修改。"
+        ) from exc
+
+    tmp = CONFIG_PATH.with_suffix(".yaml.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(CONFIG_PATH)
+
+
+def read() -> dict:
+    data = _load()
+    return {
+        "models": dict(data.get("models") or {}),
+        "groups": dict(data.get("groups") or {}),
+        "path": str(CONFIG_PATH),
+    }
+
+
+def raw() -> str:
+    return CONFIG_PATH.read_text(encoding="utf-8")
+
+
+async def write_raw(text: str) -> None:
+    """Replace the whole file, after checking it parses.
+
+    Saving a config that llama-swap cannot read would take model serving down
+    until someone edited the file by hand, so a parse failure is refused here
+    rather than discovered by the watcher.
+    """
+    _yaml.load(text)  # raises on malformed YAML
+    async with _lock:
+        backup = CONFIG_PATH.with_suffix(".yaml.bak")
+        shutil.copy2(CONFIG_PATH, backup)
+        CONFIG_PATH.write_text(text, encoding="utf-8")
+
+
+def build_cmd(
+    model_file: str,
+    ctx_size: int = 16384,
+    n_gpu_layers: int = 99,
+    extra: str = "",
+    mmproj: str | None = None,
+) -> str:
+    """Assemble a llama-server command line.
+
+    --n-gpu-layers is written explicitly but defaults to 99 rather than being
+    omitted: llama.cpp refuses to auto-fit when the flag is present, so leaving
+    it out is the right choice for models that do not fit, and the UI has to be
+    able to clear it. Callers pass 0 to mean "let llama.cpp decide".
+    """
+    lines = [
+        WRAPPER,
+        f"--model ${{models-dir}}/{model_file}",
+        "--host 127.0.0.1 --port ${PORT}",
+    ]
+    if n_gpu_layers:
+        lines.append(f"--n-gpu-layers {n_gpu_layers}")
+    lines.append(f"--ctx-size {ctx_size}")
+    lines.append("--jinja")
+    if mmproj:
+        lines.append(f"--mmproj ${{models-dir}}/{mmproj}")
+    if extra.strip():
+        lines.extend(line.strip() for line in extra.strip().splitlines() if line.strip())
+    # A literal block scalar, not a plain str: otherwise ruamel emits the command
+    # as a quoted one-liner full of \n escapes, and the Settings page exists
+    # precisely so this file can be read and edited by hand.
+    return LiteralScalarString("\n".join(lines) + "\n")
+
+
+async def upsert_model(
+    model_id: str,
+    *,
+    name: str,
+    description: str,
+    model_file: str,
+    ctx_size: int,
+    n_gpu_layers: int,
+    ttl: int,
+    group: str | None,
+    extra: str = "",
+    mmproj: str | None = None,
+) -> None:
+    async with _lock:
+        data = _load()
+        models = data.setdefault("models", {})
+        models[model_id] = {
+            "name": name,
+            "description": description,
+            "cmd": build_cmd(model_file, ctx_size, n_gpu_layers, extra, mmproj),
+            "ttl": ttl,
+        }
+        _sync_group_membership(data, model_id, group)
+        _dump(data)
+    logger.info("upserted model %s (group=%s)", model_id, group)
+
+
+# Pulls the GGUF basename out of a cmd block, whatever macro prefixes the path.
+_FILE_FLAGS = re.compile(r"--(?:model|mmproj)\s+\S*?([^/\s]+\.gguf)")
+
+
+def _files_in_cmd(cmd: Any) -> set[str]:
+    return set(_FILE_FLAGS.findall(str(cmd or "")))
+
+
+_CTX_FLAG = re.compile(r"--ctx-size\s+(\d+)")
+_MMPROJ_FLAG = re.compile(r"--mmproj\s+\S+")
+
+
+def declared_vision() -> dict[str, bool]:
+    """Whether each model's command line asks for an mmproj.
+
+    Only a declaration. A model that is running reports the truth through
+    /props; this is what the UI falls back on for models that are stopped.
+    """
+    try:
+        models = _load().get("models") or {}
+    except Exception:
+        logger.exception("could not read the config while checking for mmproj")
+        return {}
+    return {
+        model_id: bool(_MMPROJ_FLAG.search(str(spec.get("cmd") or "")))
+        for model_id, spec in models.items()
+    }
+
+
+def context_sizes() -> dict[str, int]:
+    """Each model's --ctx-size, so the UI can show context used against its real
+    limit instead of a number the user has to remember."""
+    try:
+        models = _load().get("models") or {}
+    except Exception:
+        logger.exception("could not read the config while reading context sizes")
+        return {}
+
+    sizes = {}
+    for model_id, spec in models.items():
+        match = _CTX_FLAG.search(str(spec.get("cmd") or ""))
+        if match:
+            sizes[model_id] = int(match.group(1))
+    return sizes
+
+
+def files_for_model(model_id: str) -> list[dict]:
+    """The GGUF files a model entry points at, with size and sharing status.
+
+    `shared_with` matters: the same weights can back several entries (one per
+    context length, say), and deleting the file out from under the others would
+    break them silently. The caller decides what to do; this only reports it.
+    """
+    data = _load()
+    models = data.get("models") or {}
+    spec = models.get(model_id)
+    if spec is None:
+        return []
+
+    result = []
+    for filename in sorted(_files_in_cmd(spec.get("cmd"))):
+        others = sorted(
+            other_id for other_id, other in models.items()
+            if other_id != model_id and filename in _files_in_cmd(other.get("cmd"))
+        )
+        path = MODELS_DIR / filename
+        result.append({
+            "filename": filename,
+            "exists": path.exists(),
+            "size_bytes": path.stat().st_size if path.exists() else 0,
+            "shared_with": others,
+        })
+    return result
+
+
+async def delete_model(model_id: str, delete_files: bool = False) -> dict | None:
+    """Remove a model entry, optionally deleting its GGUF files.
+
+    Files still referenced by another entry are always kept, no matter what was
+    asked: honouring the request literally would leave the remaining entry
+    pointing at nothing, and a silently broken model is worse than a file left
+    on disk.
+    """
+    async with _lock:
+        data = _load()
+        models = data.get("models") or {}
+        if model_id not in models:
+            return None
+
+        candidates = files_for_model(model_id) if delete_files else []
+        del models[model_id]
+        _sync_group_membership(data, model_id, None)
+        _dump(data)
+
+    deleted: list[dict] = []
+    kept: list[dict] = []
+    for entry in candidates:
+        if entry["shared_with"]:
+            kept.append({"filename": entry["filename"],
+                         "reason": f"仍被 {', '.join(entry['shared_with'])} 使用"})
+            continue
+        path = MODELS_DIR / entry["filename"]
+        try:
+            path.unlink()
+            deleted.append({"filename": entry["filename"], "size_bytes": entry["size_bytes"]})
+            logger.info("deleted %s (%.1f GiB)", path.name, entry["size_bytes"] / 1024**3)
+        except FileNotFoundError:
+            kept.append({"filename": entry["filename"], "reason": "檔案不存在"})
+        except OSError as exc:
+            kept.append({"filename": entry["filename"], "reason": str(exc)})
+            logger.warning("could not delete %s: %s", path, exc)
+
+    logger.info("deleted model %s (files: %d removed, %d kept)", model_id, len(deleted), len(kept))
+    return {"deleted": deleted, "kept": kept}
+
+
+def delete_file(filename: str) -> dict:
+    """Delete one GGUF from disk, refusing if a model still points at it."""
+    # Basename only: a caller must not be able to reach outside the models
+    # directory by sending a path.
+    name = Path(filename).name
+    path = MODELS_DIR / name
+    if not path.exists():
+        return {"ok": False, "reason": "檔案不存在"}
+
+    data = _load()
+    users_of_file = sorted(
+        model_id for model_id, spec in (data.get("models") or {}).items()
+        if name in _files_in_cmd(spec.get("cmd"))
+    )
+    if users_of_file:
+        return {"ok": False, "reason": f"仍被 {', '.join(users_of_file)} 使用"}
+
+    size = path.stat().st_size
+    try:
+        path.unlink()
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
+    logger.info("deleted orphan file %s (%.1f GiB)", name, size / 1024**3)
+    return {"ok": True, "filename": name, "size_bytes": size}
+
+
+# The two group names the UI offers carry meaning, and creating either with the
+# wrong policy would make the console lie: picking "small" promises the model can
+# sit alongside ComfyUI, which only holds if the group is non-exclusive.
+_GROUP_POLICIES = {
+    "small": {"swap": False, "exclusive": False},
+    "large": {"swap": True, "exclusive": True},
+}
+
+
+def _group_policy(group: str) -> dict:
+    # Unknown group names fail safe as exclusive: on a 32 GB card, wrongly
+    # assuming a model shares the GPU costs an out-of-memory failure, while
+    # wrongly assuming it does not costs only an unnecessary unload.
+    return dict(_GROUP_POLICIES.get(group, {"swap": True, "exclusive": True}))
+
+
+def _sync_group_membership(data: Any, model_id: str, group: str | None) -> None:
+    """Put the model in exactly one group, creating it if needed.
+
+    Membership is rebuilt rather than appended to, so moving a model between
+    groups cannot leave it listed in both — which llama-swap would honour, with
+    the stricter group silently winning.
+    """
+    groups = data.get("groups") or {}
+    for spec in groups.values():
+        members = spec.get("members") or []
+        if model_id in members:
+            # Emptied, never removed. An empty group costs llama-swap nothing,
+            # while deleting the last one strands the comments above it and
+            # renders a config that will not parse.
+            spec["members"] = [m for m in members if m != model_id]
+
+    if group is None:
+        return
+
+    data.setdefault("groups", {})
+    if group not in data["groups"]:
+        data["groups"][group] = {**_group_policy(group), "members": []}
+    members = data["groups"][group].setdefault("members", [])
+    if model_id not in members:
+        members.append(model_id)
+
+
+def list_gguf_files() -> list[dict]:
+    """GGUF files on disk, each annotated with the models that reference it.
+
+    `used_by` being empty is what identifies an orphan -- weights left behind
+    after their model entry was removed. Those are exactly the files worth
+    reclaiming, and there is no other way to spot them from the config alone.
+    """
+    if not MODELS_DIR.is_dir():
+        return []
+
+    try:
+        models = _load().get("models") or {}
+    except Exception:
+        logger.exception("could not read the config while listing files")
+        models = {}
+
+    references: dict[str, list[str]] = {}
+    for model_id, spec in models.items():
+        for filename in _files_in_cmd(spec.get("cmd")):
+            references.setdefault(filename, []).append(model_id)
+
+    files = []
+    for path in sorted(MODELS_DIR.glob("*.gguf")):
+        stat = path.stat()
+        files.append({
+            "filename": path.name,
+            "size_bytes": stat.st_size,
+            "size_gib": round(stat.st_size / 1024**3, 2),
+            "modified": stat.st_mtime,
+            "is_mmproj": path.name.lower().startswith("mmproj"),
+            "used_by": sorted(references.get(path.name, [])),
+        })
+    return files
+
+
+def list_partials() -> list[dict]:
+    """Interrupted downloads. They are resumable, but they also occupy real
+    disk, so the UI has to be able to see and discard them."""
+    if not MODELS_DIR.is_dir():
+        return []
+    return [
+        {
+            "filename": path.name,
+            "size_bytes": path.stat().st_size,
+            "size_gib": round(path.stat().st_size / 1024**3, 2),
+        }
+        for path in sorted(MODELS_DIR.glob("*.part"))
+    ]
+
+
+def delete_partial(filename: str) -> dict:
+    name = Path(filename).name
+    if not name.endswith(".part"):
+        return {"ok": False, "reason": "只能刪除 .part 檔"}
+    path = MODELS_DIR / name
+    if not path.exists():
+        return {"ok": False, "reason": "檔案不存在"}
+    size = path.stat().st_size
+    try:
+        path.unlink()
+    except OSError as exc:
+        return {"ok": False, "reason": str(exc)}
+    return {"ok": True, "filename": name, "size_bytes": size}
