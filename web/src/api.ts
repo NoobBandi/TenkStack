@@ -416,7 +416,11 @@ export interface ChatParams {
 
 export const DEFAULT_PARAMS: ChatParams = {
   temperature: 0.6,
-  max_tokens: 8192,
+  // Higher than any single reply needs, on purpose: this is a ceiling, not a
+  // target. llama.cpp clamps n_predict to whatever context is left after the
+  // prompt, so a model with a smaller window stops at its own limit rather
+  // than erroring -- which is what makes one default safe across models.
+  max_tokens: 65536,
   // Qwen's own generation_config; llama.cpp picks these up from the GGUF, and
   // repeating them here keeps the panel honest about what is in effect.
   top_p: 0.95,
