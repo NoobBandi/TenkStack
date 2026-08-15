@@ -160,6 +160,14 @@ function ChatInner() {
     if (preview.target) setShowSettings(false);
   }, [preview.target]);
 
+  // A preview belongs to the reply it was opened from, so it cannot outlive the
+  // conversation containing that reply -- leaving it up would show one thread's
+  // code beside another thread's messages, with a re-run button that reloads
+  // something no longer on screen.
+  useEffect(() => {
+    preview.close();
+  }, [conversationId, preview.close]);
+
   /**
    * Drag the panel's leading edge to resize.
    *
