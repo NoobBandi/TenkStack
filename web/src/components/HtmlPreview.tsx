@@ -40,11 +40,70 @@ const CSP = [
 
 const META = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
 
-/** A dark ground, so a preview that sets no background is not a white flash. */
+/**
+ * In-memory stand-ins for the storage APIs.
+ *
+ * An opaque origin has no storage, and reading `window.localStorage` there does
+ * not return null -- it throws SecurityError. Generated code reaches for it at
+ * the top of a script often enough that this is not an edge case: one
+ * `localStorage.getItem('highScore')` in a variable declaration throws before a
+ * single event listener is registered, and the whole page renders perfectly
+ * while responding to nothing. That failure looks like "the JS is broken"
+ * rather than like a permission error, which is what makes it worth shimming.
+ *
+ * Values live for as long as the frame does, so a re-run starts clean. That is
+ * the honest behaviour for a preview: it is a scratch document, not a saved one.
+ */
+const STORAGE_SHIM = `<script>(function(){
+  function memory(){
+    var data = Object.create(null);
+    return {
+      getItem: function(k){ k = String(k);
+        return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function(k, v){ data[String(k)] = String(v); },
+      removeItem: function(k){ delete data[String(k)]; },
+      clear: function(){ data = Object.create(null); },
+      key: function(i){ var keys = Object.keys(data); return i < keys.length ? keys[i] : null; },
+      get length(){ return Object.keys(data).length; }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function(name){
+    var usable = false;
+    try { var s = window[name]; s.getItem('__probe'); usable = true; } catch (e) { usable = false; }
+    if (!usable) {
+      try { Object.defineProperty(window, name, { value: memory(), configurable: true }); } catch (e) {}
+    }
+  });
+  // document.cookie throws in an opaque origin too, and a script that sets one
+  // on load would die the same way.
+  try { void document.cookie; } catch (e) {
+    var jar = '';
+    try {
+      Object.defineProperty(document, 'cookie', {
+        configurable: true,
+        get: function(){ return jar; },
+        set: function(v){ jar = jar ? jar + '; ' + v : String(v); }
+      });
+    } catch (e2) {}
+  }
+})();<\/script>`;
+
+/** A light ground, so a preview that sets no background is not a dark void. */
 const BASE = `<style>
   html, body { margin: 0; padding: 0; }
   body { background: #ffffff; color: #111; font: 14px/1.5 system-ui, sans-serif; padding: 12px; }
 </style>`;
+
+/**
+ * Everything injected ahead of the model's own markup, in order.
+ *
+ * The charset comes first and is ours rather than the document's. A page's own
+ * `<meta charset>` only counts inside the first 1024 bytes, and the shim is
+ * long enough to push an existing one past that line -- which on a page of
+ * Chinese text is the difference between a preview and a screen of mojibake.
+ * A second charset later in the document is harmless; the first one wins.
+ */
+const PREAMBLE = `<meta charset="utf-8">${META}${STORAGE_SHIM}`;
 
 /**
  * Wrap the model's source in a complete document.
@@ -57,23 +116,24 @@ const BASE = `<style>
  */
 function buildDocument(source: string, language: string): string {
   if (language === 'svg') {
-    return `<!doctype html><html><head>${META}${BASE}</head><body>${source}</body></html>`;
+    return `<!doctype html><html><head>${PREAMBLE}${BASE}</head><body>${source}</body></html>`;
   }
 
   const whole = /<html[\s>]/i.test(source) || /<!doctype\s+html/i.test(source);
   if (!whole) {
-    return `<!doctype html><html><head>${META}${BASE}</head><body>${source}</body></html>`;
+    return `<!doctype html><html><head>${PREAMBLE}${BASE}</head><body>${source}</body></html>`;
   }
 
-  // Splice the meta in as early as the document allows: a CSP delivered after a
-  // resource has already been requested does not apply to it.
+  // Spliced in as early as the document allows, for two reasons: a CSP delivered
+  // after a resource has been requested does not apply to it, and the shim has
+  // to be in place before the document's own scripts run.
   if (/<head[^>]*>/i.test(source)) {
-    return source.replace(/<head[^>]*>/i, (m) => `${m}${META}`);
+    return source.replace(/<head[^>]*>/i, (m) => `${m}${PREAMBLE}`);
   }
   if (/<html[^>]*>/i.test(source)) {
-    return source.replace(/<html[^>]*>/i, (m) => `${m}<head>${META}</head>`);
+    return source.replace(/<html[^>]*>/i, (m) => `${m}<head>${PREAMBLE}</head>`);
   }
-  return `${META}${source}`;
+  return `${PREAMBLE}${source}`;
 }
 
 interface Props {
