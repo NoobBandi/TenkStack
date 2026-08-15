@@ -1,4 +1,50 @@
-/* antd owns component styling; this only covers what sits outside it. */
+/* antd owns component styling; this covers what sits outside it, plus the few
+ * places antd's tokens cannot reach. */
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans TC', sans-serif; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans TC', sans-serif;
+  background: #0a0a0a;
+}
+
+/* The Sider's collapse trigger is rendered outside the theme's component
+ * tokens, so it keeps antd's stock blue-grey unless overridden here. It is the
+ * one control that sits permanently on screen, and a stray colour there
+ * undermines the whole monochrome scheme. */
+.ant-layout-sider-trigger {
+  background: transparent !important;
+  color: rgba(255, 255, 255, 0.35) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  transition: color 160ms, background 160ms;
+}
+.ant-layout-sider-trigger:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+.ant-layout-sider-light .ant-layout-sider-trigger {
+  color: rgba(0, 0, 0, 0.4) !important;
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+.ant-layout-sider-light .ant-layout-sider-trigger:hover {
+  background: rgba(0, 0, 0, 0.04) !important;
+  color: rgba(0, 0, 0, 0.85) !important;
+}
+
+/* Thin, unobtrusive scrollbars: the panels are dense enough without a wide
+ * grey slab down the side of each one. */
+* { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.18) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
+
+/* The composer's hint text is guidance, not a control: on a narrow window the
+ * model picker and the send button both matter more, so it is dropped rather
+ * than allowed to wrap the row. */
+@media (max-width: 1100px) {
+  .composer-hint { display: none; }
+}

@@ -12,9 +12,14 @@
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
     "antd": "^6.5.4",
+    "dayjs": "^1.11.21",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "recharts": "^3.10.1"
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.2",
+    "recharts": "^3.10.1",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

@@ -93,16 +93,23 @@ def _disk(path: Path) -> dict | None:
     except OSError:
         return None
     total = stat.f_blocks * stat.f_frsize
-    # f_bavail, not f_bfree: the difference is the root-reserved portion, which
-    # an ordinary process cannot use and should not be shown as free.
+    # Three quantities, not two. f_bavail is what an ordinary process may use;
+    # f_bfree additionally counts the root-reserved blocks (5% on a default
+    # ext4). Reporting only "used" and "available" makes the arithmetic appear
+    # broken -- total minus used does not equal available -- so the reserve is
+    # reported explicitly and the three sum to the total.
     free = stat.f_bavail * stat.f_frsize
     used = total - (stat.f_bfree * stat.f_frsize)
+    reserved = (stat.f_bfree - stat.f_bavail) * stat.f_frsize
     return {
         "path": str(path),
         "total_bytes": total,
         "used_bytes": used,
         "free_bytes": free,
-        "percent": round(used / total * 100, 1) if total else 0.0,
+        "reserved_bytes": reserved,
+        # Matches `df`: the denominator is what is actually obtainable, so the
+        # figure lines up with the tool people check it against.
+        "percent": round(used / (used + free) * 100, 1) if (used + free) else 0.0,
     }
 
 

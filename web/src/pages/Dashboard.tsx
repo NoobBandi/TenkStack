@@ -1,110 +1,161 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  Alert, Button, Card, Col, Empty, Progress, Row, Statistic, Table, Tag, Typography,
-} from 'antd';
-import { ThunderboltOutlined, DatabaseOutlined, DashboardOutlined, PictureOutlined } from '@ant-design/icons';
-import {
-  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts';
-import Endpoints from '../components/Endpoints';
+import { useEffect, useState } from 'react';
+import { Alert, Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { PictureOutlined } from '@ant-design/icons';
+import GpuChart from '../components/GpuChart';
+import StatTile from '../components/StatTile';
 import SystemStats from '../components/SystemStats';
+import Versions from '../components/Versions';
+import { useStream } from '../stream';
 import {
-  fetchComfy, fetchModels, subscribe, unloadAll,
-  type ComfyStatus, type GpuSample, type ModelInfo, type StreamEvent, type SystemSample,
-  type Throughput,
+  fetchComfy, unloadAll, type ComfyStatus, type GpuSample, type ModelInfo,
 } from '../api';
+import { MONO } from '../theme';
+import { clockCeiling, powerCeiling, tempCeiling } from '../hardware';
 
 const { Text } = Typography;
 
-/** ~60 samples at one every 2s is two minutes of history, which is enough to
- *  see a generation start and finish without turning the chart into a smear. */
-const HISTORY_LENGTH = 60;
-
-interface Point {
-  t: number;
-  power: number;
-  vram: number;
-  freq: number;
-}
-
 const STATE_COLOURS: Record<string, string> = {
-  ready: 'green',
-  starting: 'processing',
-  stopping: 'orange',
-  stopped: 'default',
+  ready: 'green', starting: 'processing', stopping: 'orange', stopped: 'default',
 };
 
+/**
+ * A row of tiles that fills its width whatever the count.
+ *
+ * Flex rather than the 24-column grid: a grid needs spans chosen up front, so
+ * three tiles at span 8 filled the row while two at span 6 left a quarter of it
+ * blank. Flex items share out the remainder instead, so any number of tiles
+ * ends up flush, and they rewrap as the window narrows.
+ */
+function TileRow({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Basis, not a fixed width: below it the row wraps, above it the tiles grow to
+ * share what is left.
+ *
+ * 150px keeps all six tiles on one line from 1280px of window upward, which
+ * covers every screen this is read on. Narrower than that they wrap, and a tile
+ * left alone on the last line stretches across it -- still preferable to the
+ * fixed grid, which left a quarter of the row blank at every width.
+ */
+function Tile({ children }: { children: React.ReactNode }) {
+  return <div style={{ flex: '1 1 150px', minWidth: 0 }}>{children}</div>;
+}
+
+/**
+ * One card's counters.
+ *
+ * Repeated per device rather than aggregated: a total tells you the machine is
+ * busy but not which card is, and with models pinned to particular devices that
+ * is the question actually being asked. The label is dropped when there is only
+ * one card, where naming it says nothing.
+ */
+function gpuTiles(gpu: GpuSample, showTemp: boolean) {
+  const used = gpu.memory_used_mib ?? 0;
+  const total = gpu.memory_total_mib ?? 0;
+  const vramPercent = total ? Math.round((used / total) * 100) : 0;
+  const temp = gpu.temperature_c;
+
+  return (
+    <>
+      <Tile>
+        <StatTile
+          label="POWER" value={(gpu.power_w ?? 0).toFixed(0)} unit="W"
+          percent={((gpu.power_w ?? 0) / powerCeiling(gpu)) * 100}
+          footnote={`上限 ${powerCeiling(gpu).toFixed(0)} W`}
+        />
+      </Tile>
+      <Tile>
+        <StatTile
+          label="VRAM" value={(used / 1024).toFixed(1)}
+          unit={`/ ${(total / 1024).toFixed(0)} GiB`}
+          percent={vramPercent} warn={vramPercent > 92}
+          footnote={`剩餘 ${((total - used) / 1024).toFixed(1)} GiB`}
+        />
+      </Tile>
+      <Tile>
+        <StatTile
+          label="CLOCK" value={(gpu.frequency_mhz ?? 0).toFixed(0)} unit="MHz"
+          percent={((gpu.frequency_mhz ?? 0) / clockCeiling(gpu)) * 100}
+          footnote={`上限 ${clockCeiling(gpu).toFixed(0)} MHz`}
+        />
+      </Tile>
+      {/* Omitted entirely when no card reports a temperature: a tile that can
+          only ever read "—" is worse than one tile fewer. This B70 does report
+          one, through sysfs rather than xpu-smi. */}
+      {showTemp && (
+        <Tile>
+          <StatTile
+            label="TEMP"
+            value={temp === null ? '—' : temp.toFixed(0)}
+            unit={temp === null ? undefined : '°C'}
+            percent={temp === null ? undefined : (temp / tempCeiling(gpu)) * 100}
+            warn={temp !== null && temp > tempCeiling(gpu) * 0.85}
+            footnote={temp === null ? '此卡未回報'
+              : `臨界 ${tempCeiling(gpu).toFixed(0)} °C`}
+          />
+        </Tile>
+      )}
+    </>
+  );
+}
+
+/** The card's name, shown only when there is more than one to tell apart. */
+function GpuLabel({ gpu }: { gpu: GpuSample }) {
+  return (
+    <Space size={8} style={{ marginBottom: 8 }}>
+      <Tag style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>xpu:{gpu.index}</Tag>
+      <Text style={{ fontSize: 11, opacity: 0.4 }}>{gpu.name}</Text>
+      {gpu.busy && <Text style={{ fontSize: 10, opacity: 0.5 }}>運算中</Text>}
+    </Space>
+  );
+}
+
 export default function Dashboard() {
-  const [gpu, setGpu] = useState<GpuSample | null>(null);
-  const [history, setHistory] = useState<Point[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const { gpus, system, models, throughput, connected, refreshModels } =
+    useStream();
   const [comfy, setComfy] = useState<ComfyStatus | null>(null);
-  const [throughput, setThroughput] = useState<Throughput | null>(null);
-  const [sys, setSys] = useState<SystemSample | null>(null);
-  const [connected, setConnected] = useState(true);
   const [unloading, setUnloading] = useState(false);
-  const startedAt = useRef(Date.now());
 
-  const refresh = useCallback(() => {
-    fetchModels().then(setModels).catch(() => undefined);
-    fetchComfy().then(setComfy).catch(() => undefined);
-  }, []);
-
+  // ComfyUI publishes no event stream to the console, so its queue depth is
+  // the one thing here that genuinely has to be polled.
   useEffect(() => {
-    refresh();
-    // ComfyUI has no event stream of its own, so its queue depth is the one
-    // thing here that genuinely has to be polled.
-    const timer = window.setInterval(refresh, 5000);
+    const load = () => fetchComfy().then(setComfy).catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 5000);
     return () => window.clearInterval(timer);
-  }, [refresh]);
-
-  useEffect(() => {
-    const unsubscribe = subscribe((event: StreamEvent) => {
-      if (event.type === 'gpu') {
-        const sample = event.data as GpuSample;
-        setGpu(sample);
-        setHistory((prev) => [
-          ...prev.slice(-(HISTORY_LENGTH - 1)),
-          {
-            t: Math.round((Date.now() - startedAt.current) / 1000),
-            power: sample.power_w ?? 0,
-            vram: sample.memory_used_mib ?? 0,
-            freq: sample.frequency_mhz ?? 0,
-          },
-        ]);
-      } else if (event.type === 'modelStatus') {
-        // Full array on every change, not a delta, so replace rather than merge.
-        const next = event.data as ModelInfo[];
-        setModels((prev) =>
-          next.map((m) => ({
-            ...m,
-            running: m.state === 'ready' || m.state === 'starting',
-            proxy: prev.find((p) => p.id === m.id)?.proxy ?? null,
-          })),
-        );
-      } else if (event.type === 'throughput') {
-        setThroughput(event.data as Throughput);
-      } else if (event.type === 'system') {
-        setSys(event.data as SystemSample);
-      }
-    }, setConnected);
-    return unsubscribe;
   }, []);
 
   const onUnload = async () => {
     setUnloading(true);
     try {
       await unloadAll();
-      refresh();
+      refreshModels();
     } finally {
       setUnloading(false);
     }
   };
 
-  const vramUsed = gpu?.memory_used_mib ?? 0;
-  const vramTotal = gpu?.memory_total_mib ?? 0;
-  const vramPercent = vramTotal ? Math.round((vramUsed / vramTotal) * 100) : 0;
-  const vramFreeGib = ((vramTotal - vramUsed) / 1024).toFixed(1);
+  const multiple = gpus.length > 1;
+  const showTemp = gpus.some((g) => g.temperature_c !== null);
+
+  /** Machine-wide, not per card: llama-swap reports one figure however many
+   *  devices are serving it. */
+  const globalTiles = (
+    <>
+      <Tile>
+        <StatTile
+          label="THROUGHPUT" value={(throughput?.tokens_per_second ?? 0).toFixed(1)} unit="t/s"
+          footnote={throughput ? `最近 ${throughput.tokens} tokens` : '尚無資料'}
+        />
+      </Tile>
+    </>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -117,102 +168,45 @@ export default function Dashboard() {
         />
       )}
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={12} xl={6}>
-          <Card>
-            <Statistic
-              title="GPU 功耗"
-              value={gpu?.power_w ?? 0}
-              precision={0}
-              suffix="W"
-              prefix={<ThunderboltOutlined />}
-              valueStyle={{ color: gpu?.busy ? '#cf1322' : undefined }}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              閒置約 46 W ・ {gpu?.busy ? '運算中' : '閒置'}
-            </Text>
-          </Card>
-        </Col>
+      {/* One card: everything shares a row, so five tiles come out evenly and
+          nothing is left hanging. Two or more: each card keeps its own labelled
+          row, because tiles from different cards side by side cannot be told
+          apart, and the machine-wide figures follow in a row of their own. */}
+      {multiple ? (
+        <>
+          {gpus.map((g) => (
+            <div key={g.index}>
+              <GpuLabel gpu={g} />
+              <TileRow>{gpuTiles(g, showTemp)}</TileRow>
+            </div>
+          ))}
+          <TileRow>{globalTiles}</TileRow>
+        </>
+      ) : (
+        <TileRow>
+          {gpus.length === 0 ? (
+            <Tile><StatTile label="GPU" value="—" footnote="xpu-smi 無回應" /></Tile>
+          ) : (
+            gpuTiles(gpus[0], showTemp)
+          )}
+          {globalTiles}
+        </TileRow>
+      )}
 
-        <Col xs={24} sm={12} xl={6}>
-          <Card>
-            <Statistic
-              title="顯存"
-              value={(vramUsed / 1024).toFixed(1)}
-              suffix={`/ ${(vramTotal / 1024).toFixed(0)} GiB`}
-              prefix={<DatabaseOutlined />}
-            />
-            <Progress
-              percent={vramPercent}
-              size="small"
-              status={vramPercent > 90 ? 'exception' : 'normal'}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>剩餘 {vramFreeGib} GiB</Text>
-          </Card>
-        </Col>
+      {/* Rendered bare rather than in a Row: antd gives a gutter Row negative
+          inline margins, which made this block sit 6px wider on each side than
+          the tiles above it. Full width now that the log has its own page, so
+          the two line up. */}
+      <GpuChart latest={gpus} />
 
-        <Col xs={24} sm={12} xl={6}>
-          <Card>
-            <Statistic
-              title="核心頻率"
-              value={gpu?.frequency_mhz ?? 0}
-              precision={0}
-              suffix="MHz"
-              prefix={<DashboardOutlined />}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>閒置 400 MHz</Text>
-          </Card>
-        </Col>
+      <SystemStats sample={system} />
 
-        <Col xs={24} sm={12} xl={6}>
-          <Card>
-            <Statistic
-              title="最近生成速度"
-              value={throughput?.tokens_per_second ?? 0}
-              precision={1}
-              suffix="t/s"
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {throughput ? `${throughput.tokens} tokens` : '尚無資料'}
-            </Text>
-          </Card>
-        </Col>
-      </Row>
-
-      <Card title={gpu?.name ?? 'GPU'} size="small">
-        {history.length < 2 ? (
-          <Empty description="正在收集資料…" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={history} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
-              <XAxis dataKey="t" tickFormatter={(v) => `${v}s`} fontSize={12} />
-              <YAxis yAxisId="power" fontSize={12} width={44} />
-              <YAxis yAxisId="vram" orientation="right" fontSize={12} width={52} />
-              <Tooltip
-                formatter={(value) => (typeof value === 'number' ? Math.round(value) : value)}
-                labelFormatter={(v) => `啟動後 ${v} 秒`}
-              />
-              <Area
-                yAxisId="power" type="monotone" dataKey="power" name="功耗 (W)"
-                stroke="#cf1322" fill="#cf1322" fillOpacity={0.15}
-              />
-              <Area
-                yAxisId="vram" type="monotone" dataKey="vram" name="顯存 (MiB)"
-                stroke="#1677ff" fill="#1677ff" fillOpacity={0.12}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </Card>
-
-      <SystemStats sample={sys} />
-
-      <Row gutter={[16, 16]}>
-        <Col xs={24} xl={16}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
+        <div style={{ flex: '2 1 420px', minWidth: 0 }}>
           <Card
-            title="模型"
+            title={<span style={{ fontSize: 12, opacity: 0.75 }}>模型</span>}
             size="small"
+            style={{ height: '100%' }}
             extra={
               <Button size="small" onClick={onUnload} loading={unloading}
                       disabled={!models.some((m) => m.running)}>
@@ -228,59 +222,60 @@ export default function Dashboard() {
               locale={{ emptyText: '設定檔中沒有模型' }}
               columns={[
                 {
-                  title: '名稱',
-                  dataIndex: 'name',
+                  title: '名稱', dataIndex: 'name',
                   render: (name: string | undefined, row) => (
                     <div>
                       <div>{name || row.id}</div>
-                      <Text type="secondary" style={{ fontSize: 12 }}>{row.id}</Text>
+                      <Text type="secondary" style={{ fontSize: 11 }}>{row.id}</Text>
                     </div>
                   ),
                 },
                 {
-                  title: '狀態',
-                  dataIndex: 'state',
-                  width: 110,
+                  title: '狀態', dataIndex: 'state', width: 100,
                   render: (state: string) => (
                     <Tag color={STATE_COLOURS[state] ?? 'default'}>{state}</Tag>
                   ),
                 },
                 {
-                  title: 'TTL',
-                  dataIndex: 'ttl',
-                  width: 90,
+                  title: 'CONTEXT', dataIndex: 'ctx_size', width: 100,
+                  render: (n: number | null | undefined) => (
+                    <Text style={{ fontSize: 11, fontFamily: 'ui-monospace, monospace' }}>
+                      {n ? `${Math.round(n / 1024)}K` : '—'}
+                    </Text>
+                  ),
+                },
+                {
+                  title: 'TTL', dataIndex: 'ttl', width: 70,
                   render: (ttl: number | null | undefined) =>
                     ttl ? `${Math.round(ttl / 60)} 分` : '—',
                 },
               ]}
             />
           </Card>
-        </Col>
-
-        <Col xs={24} xl={8}>
-          <Card title={<><PictureOutlined /> ComfyUI</>} size="small">
+        </div>
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+          <Card
+            title={<span style={{ fontSize: 12, opacity: 0.75 }}><PictureOutlined /> ComfyUI</span>}
+            size="small"
+            style={{ height: '100%' }}
+          >
             {comfy?.reachable ? (
               <Row gutter={16}>
-                <Col span={12}>
-                  <Statistic title="佇列中" value={comfy.queue_pending ?? 0} />
-                </Col>
-                <Col span={12}>
-                  <Statistic title="執行中" value={comfy.queue_running ?? 0} />
-                </Col>
-                <Col span={24} style={{ marginTop: 12 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    版本 {comfy.version}
-                  </Text>
+                <Col span={12}><Statistic title="佇列中" value={comfy.queue_pending ?? 0} /></Col>
+                <Col span={12}><Statistic title="執行中" value={comfy.queue_running ?? 0} /></Col>
+                <Col span={24} style={{ marginTop: 10 }}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>版本 {comfy.version}</Text>
                 </Col>
               </Row>
             ) : (
               <Alert type="info" showIcon message="ComfyUI 未執行" />
             )}
           </Card>
-        </Col>
-      </Row>
+        </div>
+      </div>
 
-      <Endpoints />
+      <Versions />
+
     </div>
   );
 }

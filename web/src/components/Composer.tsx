@@ -1,10 +1,11 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { App as AntApp, Button, Image, Space, Tag, Tooltip, Typography } from 'antd';
+import { App as AntApp, Button, Image, Select, Space, Tooltip, Typography } from 'antd';
 import {
-  CloseOutlined, CodeOutlined, FileTextOutlined, PictureOutlined,
-  SendOutlined, StopOutlined,
+  ClearOutlined, CloseOutlined, CodeOutlined, FileTextOutlined, HistoryOutlined,
+  PaperClipOutlined, SendOutlined, SlidersOutlined, StopOutlined,
 } from '@ant-design/icons';
-import type { ModelCapabilities } from '../api';
+import type { ModelCapabilities, ModelInfo } from '../api';
+import { LINE, MONO } from '../theme';
 
 const { Text } = Typography;
 
@@ -110,11 +111,22 @@ interface Props {
   capabilities?: ModelCapabilities;
   images: string[];
   onImagesChange: (images: string[]) => void;
+  models: ModelInfo[];
+  model?: string;
+  onModelChange: (id: string) => void;
+  onClear: () => void;
+  canClear: boolean;
+  onToggleSettings: () => void;
+  settingsOpen: boolean;
+  onToggleHistory: () => void;
+  historyOpen: boolean;
 }
 
 export default function Composer({
   value, onChange, onSend, onStop, streaming, disabled,
   capabilities, images, onImagesChange,
+  models, model, onModelChange, onClear, canClear,
+  onToggleSettings, settingsOpen, onToggleHistory, historyOpen,
 }: Props) {
   const { message: toast } = AntApp.useApp();
   const filePicker = useRef<HTMLInputElement>(null);
@@ -364,35 +376,70 @@ export default function Composer({
         onChange={(e) => { if (e.target.files) void attach(e.target.files); e.target.value = ''; }}
       />
 
-      <Space style={{ width: '100%', justifyContent: 'space-between', marginTop: 8 }}>
-        <Space size={8} wrap>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 8, marginTop: 8, flexWrap: 'wrap',
+      }}>
+        <Space size={4} wrap>
+          {/* The model belongs here, next to send: it is part of the act of
+              sending, not a page-level setting. */}
+          <Select
+            size="small"
+            value={model}
+            onChange={onModelChange}
+            // Shrinks rather than forcing the row to wrap: on a narrow window a
+            // 190px minimum pushed the send button onto its own line.
+            style={{ minWidth: 120, maxWidth: 220 }}
+            popupMatchSelectWidth={240}
+            variant="borderless"
+            options={models.map((m) => ({
+              value: m.id,
+              label: (
+                <Space size={6}>
+                  <span style={{
+                    width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
+                    background: m.state === 'ready' ? '#5ccf8f'
+                      : m.state === 'starting' ? '#e0a83c' : LINE.strong,
+                  }} />
+                  <span style={{ fontSize: 12 }}>{m.name || m.id}</span>
+                </Space>
+              ),
+            }))}
+          />
+
           <Tooltip title="插入程式碼區塊">
-            <Button size="small" icon={<CodeOutlined />}
-                    onClick={() => insertAtCaret('```\n', '\n```')}>
-              程式碼
-            </Button>
+            <Button type="text" size="small" icon={<CodeOutlined />}
+                    onClick={() => insertAtCaret('```\n', '\n```')} />
           </Tooltip>
-          <Tooltip title="文字與程式碼檔會直接插入訊息，任何模型都讀得到">
-            <Button size="small" icon={<FileTextOutlined />}
-                    onClick={() => filePicker.current?.click()}>
-              附加檔案
-            </Button>
+          <Tooltip title={capabilities?.vision
+            ? '附加檔案或圖片，圖片也可直接貼上'
+            : '附加文字或程式碼檔。這個模型沒有載入視覺投影檔，無法讀圖'}>
+            <Button type="text" size="small"
+                    icon={capabilities?.vision ? <PaperClipOutlined /> : <FileTextOutlined />}
+                    onClick={() => filePicker.current?.click()} />
           </Tooltip>
-          <Tooltip
-            title={capabilities?.vision
-              ? '可附加圖片，也可以直接貼上'
-              : '這個模型沒有載入視覺投影檔（mmproj），無法讀圖'}
-          >
-            <Tag
-              icon={<PictureOutlined />}
-              color={capabilities?.vision ? 'green' : 'default'}
-              style={{ marginInlineEnd: 0, opacity: capabilities?.vision ? 1 : 0.55 }}
-            >
-              {capabilities?.vision ? '支援圖片' : '不支援圖片'}
-            </Tag>
+          <Tooltip title={historyOpen ? '隱藏對話紀錄' : '顯示對話紀錄'}>
+            <Button type="text" size="small" icon={<HistoryOutlined />}
+                    onClick={onToggleHistory}
+                    style={{ opacity: historyOpen ? 1 : 0.45 }} />
           </Tooltip>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {inCode ? '程式碼區塊內 ・ Enter 換行、Tab 縮排' : 'Enter 送出 ・ Shift+Enter 換行'}
+          <Tooltip title={settingsOpen ? '隱藏參數' : '顯示參數'}>
+            <Button type="text" size="small" icon={<SlidersOutlined />}
+                    onClick={onToggleSettings}
+                    style={{ opacity: settingsOpen ? 1 : 0.45 }} />
+          </Tooltip>
+          <Tooltip title="開始新對話">
+            <Button type="text" size="small" icon={<ClearOutlined />}
+                    disabled={!canClear} onClick={onClear} />
+          </Tooltip>
+
+          {/* Hint text is the first thing to go when space is short: it is a
+              reminder, not a control. */}
+          <Text className="composer-hint" style={{
+            fontSize: 10.5, opacity: 0.35, fontFamily: MONO, marginInlineStart: 4,
+            whiteSpace: 'nowrap',
+          }}>
+            {inCode ? 'CODE ・ ENTER 換行 ・ TAB 縮排' : 'ENTER 送出 ・ SHIFT+ENTER 換行'}
           </Text>
         </Space>
 
@@ -400,11 +447,11 @@ export default function Composer({
           <Button danger icon={<StopOutlined />} onClick={onStop}>停止</Button>
         ) : (
           <Button type="primary" icon={<SendOutlined />} onClick={onSend}
-                  disabled={!value.trim() || disabled}>
+                  disabled={(!value.trim() && images.length === 0) || disabled}>
             送出
           </Button>
         )}
-      </Space>
+      </div>
     </div>
   );
 }

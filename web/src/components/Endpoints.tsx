@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Collapse, Segmented, Space, Table, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Segmented, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import { CopyOutlined, LockOutlined, SafetyCertificateOutlined, UnlockOutlined } from '@ant-design/icons';
 import {
-  fetchEndpoints, fetchModels, fetchNetwork,
-  type Endpoint, type ModelInfo, type NetworkHost, type NetworkInfo,
+  fetchEndpoints, fetchNetwork,
+  type Endpoint, type NetworkHost, type NetworkInfo,
 } from '../api';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 function urlFor(endpoint: Endpoint, host: string): string {
   const path = endpoint.path === '/' ? '' : endpoint.path;
@@ -18,13 +18,11 @@ function urlFor(endpoint: Endpoint, host: string): string {
 export default function Endpoints() {
   const { message } = AntApp.useApp();
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
-  const [models, setModels] = useState<ModelInfo[]>([]);
   const [network, setNetwork] = useState<NetworkInfo | null>(null);
   const [hostKey, setHostKey] = useState<string>();
 
   useEffect(() => {
     fetchEndpoints().then(setEndpoints).catch(() => undefined);
-    fetchModels().then(setModels).catch(() => undefined);
     fetchNetwork()
       .then((info) => {
         setNetwork(info);
@@ -50,66 +48,11 @@ export default function Endpoints() {
     network?.hosts.find((h) => h.key === hostKey) ?? network?.hosts[0];
   const hostname = host?.host ?? window.location.hostname;
 
-  const apiBase = endpoints.find((e) => e.key === 'api-http') ?? endpoints.find((e) => e.key === 'api-https');
-  const base = apiBase ? urlFor(apiBase, hostname) : 'http://<host>:8000/v1';
-  const modelId = models[0]?.id ?? '<model-id>';
-
-  const snippets: { key: string; label: string; code: string }[] = [
-    {
-      key: 'curl',
-      label: 'curl',
-      code: `curl ${base}/chat/completions \\
-  -H "Authorization: Bearer $AI_CONSOLE_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{
-    "model": "${modelId}",
-    "messages": [{"role": "user", "content": "你好"}],
-    "chat_template_kwargs": {"enable_thinking": false}
-  }'`,
-    },
-    {
-      key: 'python',
-      label: 'Python (OpenAI SDK)',
-      code: `from openai import OpenAI
-
-client = OpenAI(base_url="${base}", api_key="sk-console-...")
-
-resp = client.chat.completions.create(
-    model="${modelId}",
-    messages=[{"role": "user", "content": "你好"}],
-    extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-)
-print(resp.choices[0].message.content)`,
-    },
-    {
-      key: 'opencode',
-      label: 'opencode',
-      code: `// ~/.config/opencode/opencode.json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "local": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "AI Console",
-      "options": {
-        "baseURL": "${base}",
-        "apiKey": "{env:AI_CONSOLE_KEY}"
-      },
-      "models": {
-        "${modelId}": { "name": "${models[0]?.name || modelId}" }
-      }
-    }
-  }
-}
-
-// opencode 不會送 chat_template_kwargs，思考模式會是開的，
-// 導致完全產不出 tool call。請在「模型」頁的額外參數加上：
-//   --reasoning-budget 0`,
-    },
-  ];
 
   return (
-    <Card title="連線方式" size="small">
+    // Fills the column so the two blocks in the top row end level; the
+    // shorter one keeps trailing space rather than leaving a ragged edge.
+    <Card title="連線方式" size="small" style={{ height: '100%' }}>
       {network && network.hosts.length > 1 && (
         <Space direction="vertical" size={6} style={{ width: '100%', marginBottom: 12 }}>
           <Segmented
@@ -182,37 +125,6 @@ print(resp.choices[0].message.content)`,
         ]}
       />
 
-      <Collapse
-        ghost
-        size="small"
-        style={{ marginTop: 8 }}
-        items={[{
-          key: 'snippets',
-          label: <Text style={{ fontSize: 13 }}>用戶端設定範例</Text>,
-          children: (
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Paragraph type="secondary" style={{ fontSize: 12, margin: 0 }}>
-                API key 到「使用者」頁建立，只會顯示一次。
-              </Paragraph>
-              {snippets.map((snippet) => (
-                <div key={snippet.key}>
-                  <Space size={8} style={{ marginBottom: 4 }}>
-                    <Text strong style={{ fontSize: 13 }}>{snippet.label}</Text>
-                    <Button type="text" size="small" icon={<CopyOutlined />}
-                            onClick={() => copy(snippet.code)} />
-                  </Space>
-                  <pre style={{
-                    background: 'rgba(128,128,128,0.12)', padding: 12, borderRadius: 6,
-                    overflowX: 'auto', margin: 0, fontSize: 12, lineHeight: 1.5,
-                  }}>
-                    <code>{snippet.code}</code>
-                  </pre>
-                </div>
-              ))}
-            </Space>
-          ),
-        }]}
-      />
     </Card>
   );
 }

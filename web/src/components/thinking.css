@@ -1,0 +1,129 @@
+/* The reasoning trace.
+ *
+ * Structure and motion follow beautifului.dev's Thinking primitive; the colours
+ * do not. Its dark surfaces sit around #1c1d1f, four steps lighter than this
+ * console's #0a0a0a, and adopting them would undo a palette that was measured
+ * rather than chosen. What is worth taking is how it moves.
+ */
+
+/* Expanding to auto height, properly: a 0fr -> 1fr grid row animates where
+ * max-height only approximates, and a trace can be three lines or eighty. */
+.tt-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 400ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 200ms ease;
+}
+
+.tt-body-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* The grid child must clip, or the collapsed row still paints. */
+.tt-clip { overflow: hidden; }
+
+.tt-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin-inline-start: -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 100ms;
+}
+
+.tt-head:hover { background: rgba(255, 255, 255, 0.05); }
+
+.tt-label {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: rgba(242, 242, 242, 0.45);
+}
+
+/* A light sweeping across the word while tokens are still arriving. The text
+ * itself is transparent and the gradient shows through it, so the motion reads
+ * as the label being alive rather than as a separate spinner. */
+.tt-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    rgba(242, 242, 242, 0.3) 0%,
+    rgba(242, 242, 242, 0.3) 40%,
+    rgba(242, 242, 242, 0.95) 50%,
+    rgba(242, 242, 242, 0.3) 60%,
+    rgba(242, 242, 242, 0.3) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer-text 1.8s linear infinite;
+}
+
+@keyframes shimmer-text {
+  0% { background-position: 150%; }
+  100% { background-position: -50%; }
+}
+
+.tt-chevron {
+  font-size: 9px;
+  opacity: 0.3;
+  transition: transform 300ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.tt-chevron-open { transform: rotate(90deg); }
+
+.tt-meta {
+  font-size: 10.5px;
+  opacity: 0.3;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A hairline rail down the left of the trace, content indented past it: the
+ * reasoning reads as a track running beside the answer rather than as another
+ * paragraph of it. */
+.tt-rail {
+  position: relative;
+  margin-top: 4px;
+  margin-inline-start: 5px;
+  padding-inline-start: 16px;
+}
+
+.tt-rail::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 3px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.tt-text {
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  color: rgba(242, 242, 242, 0.5);
+}
+
+/* Each turn arrives rather than appears. */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+.turn-in { animation: fade-up 600ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-body, .tt-chevron { transition-duration: 1ms; }
+  .tt-shimmer { animation: none; color: rgba(242, 242, 242, 0.6); }
+  .turn-in { animation: none; }
+}

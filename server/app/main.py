@@ -24,7 +24,10 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import auth, catalog, config, gpu, llamaswap, system, users
+from . import (
+    auth, catalog, channels, chats, config, gpu, gpu_history, llamaswap, logs as journal,
+    system, users, versions,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -33,7 +36,7 @@ COMFYUI_URL = "http://127.0.0.1:8188"
 GPU_POLL_SECONDS = 2.0
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
-app = FastAPI(title="AI Console", version="0.1.0")
+app = FastAPI(title="Tenks Console", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,11 +50,23 @@ app.add_middleware(
 @app.on_event("startup")
 async def _startup() -> None:
     users.init()
+    chats.init()
+    # Sampling starts with the process, not with the first browser: the chart
+    # should show the last hour on load rather than begin at zero.
+    gpu_history.start()
+    journal.start()
     if not auth.enforcement_enabled():
         logger.warning(
             "no accounts exist yet, so authentication is OFF. It switches on by "
             "itself as soon as the first user is created."
         )
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    """Let go of the child processes before uvicorn waits on them."""
+    await journal.stop()
+    await gpu_history.stop()
 
 
 @app.middleware("http")
@@ -111,9 +126,49 @@ async def whoami(request: Request):
 # GPU
 # --------------------------------------------------------------------------
 
+@app.get("/api/logs")
+async def read_logs(limit: int = 400):
+    """Recent lines from every service, oldest first."""
+    return {"lines": journal.history(limit), "units": journal.UNITS}
+
+
 @app.get("/api/gpu")
 async def read_gpu():
-    return await gpu.sample_dict(0) or {"error": "xpu-smi unavailable"}
+    """Live counters for every installed GPU, lowest index first."""
+    samples = gpu_history.latest_all()
+    if not samples:
+        # Before the poller's first tick, ask directly rather than answering
+        # with an empty list that the UI would read as "no GPU".
+        one = await gpu.sample_dict(0)
+        samples = [one] if one else []
+    return samples or {"error": "xpu-smi unavailable"}
+
+
+@app.get("/api/gpu/history")
+async def read_gpu_history(seconds: int = 900, points: int = 600):
+    """Samples collected since the backend started, thinned for drawing.
+
+    Keyed by device index. JSON object keys are strings, which the client has
+    to parse back -- the alternative, a list positioned by index, breaks the
+    moment indices are not contiguous.
+    """
+    series = gpu_history.history_all(seconds, points)
+    return {
+        "interval": gpu_history.SAMPLE_INTERVAL,
+        "devices": {str(i): pts for i, pts in series.items()},
+    }
+
+
+@app.get("/api/gpu/devices")
+async def read_gpu_devices():
+    """Every GPU with its full inventory and live counters."""
+    return await gpu.list_devices()
+
+
+@app.get("/api/versions")
+async def read_versions():
+    """Installed versions of every moving part, each probed independently."""
+    return await versions.collect()
 
 
 @app.get("/api/system")
@@ -196,6 +251,20 @@ async def create_model(spec: ModelSpec):
         mmproj=spec.mmproj,
     )
     return {"ok": True, "id": spec.id}
+
+
+@app.get("/api/models/{model_id}/spec")
+async def read_model_spec(model_id: str):
+    """The current settings, in the shape the editor expects."""
+    spec = config.read_model_spec(model_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="no such model")
+    return spec
+
+
+@app.post("/api/models/{model_id}/unload")
+async def unload_one(model_id: str):
+    return {"ok": await llamaswap.unload_model(model_id)}
 
 
 @app.get("/api/models/{model_id}/files")
@@ -398,6 +467,75 @@ async def comfyui_image(filename: str, subfolder: str = "", type: str = "output"
 
 
 # --------------------------------------------------------------------------
+# Conversation history
+# --------------------------------------------------------------------------
+
+def _caller_id(request: Request) -> int | None:
+    """Whose conversations these are. None before any account exists, which is
+    the same state in which authentication is off."""
+    identity = getattr(request.state, "identity", None)
+    return (identity or {}).get("user_id")
+
+
+class ChatSave(BaseModel):
+    id: int | None = None
+    model: str = ""
+    params: dict = Field(default_factory=dict)
+    messages: list[dict] = Field(default_factory=list)
+    title: str | None = None
+
+
+@app.get("/api/chats")
+async def list_chats(request: Request, q: str = ""):
+    user_id = _caller_id(request)
+    if q.strip():
+        return chats.search(q.strip(), user_id)
+    return chats.list_conversations(user_id)
+
+
+@app.post("/api/chats")
+async def save_chat(request: Request, payload: ChatSave):
+    try:
+        return chats.save(
+            payload.id,
+            messages=payload.messages,
+            model=payload.model,
+            params=payload.params,
+            user_id=_caller_id(request),
+            title=payload.title,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such conversation")
+
+
+@app.get("/api/chats/{conversation_id}")
+async def read_chat(conversation_id: int):
+    conversation = chats.get_conversation(conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return conversation
+
+
+@app.patch("/api/chats/{conversation_id}")
+async def patch_chat(conversation_id: int, payload: dict = Body(...)):
+    ok = chats.update(
+        conversation_id,
+        title=payload.get("title"),
+        pinned=payload.get("pinned"),
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="nothing to update")
+    return {"ok": True}
+
+
+@app.delete("/api/chats/{conversation_id}")
+async def remove_chat(conversation_id: int):
+    if not chats.delete(conversation_id):
+        raise HTTPException(status_code=404, detail="no such conversation")
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------
 # Users and API keys
 # --------------------------------------------------------------------------
 
@@ -476,10 +614,13 @@ async def _merged_stream() -> AsyncIterator[str]:
 
     async def pump_gpu() -> None:
         while True:
-            sample = await gpu.sample_dict(0)
-            if sample is not None:
+            samples = gpu_history.latest_all()
+            if samples:
                 with contextlib.suppress(asyncio.QueueFull):
-                    queue.put_nowait({"type": "gpu", "data": sample})
+                    # A list even for one card: the client renders per device,
+                    # and a payload whose shape depends on how many cards are
+                    # installed would need two code paths on both sides.
+                    queue.put_nowait({"type": "gpu", "data": samples})
             # Reading /proc is cheap enough to do inline; keeping it on the same
             # tick means the CPU and GPU figures on screen describe one moment.
             with contextlib.suppress(Exception):
@@ -487,17 +628,42 @@ async def _merged_stream() -> AsyncIterator[str]:
             await asyncio.sleep(GPU_POLL_SECONDS)
 
     async def pump_downloads() -> None:
-        """Only emitted while something is downloading, so an idle console is
-        not woken once a second for an empty list."""
+        """Emitted while something is downloading, plus one snapshot after the
+        last one stops.
+
+        Sending only while active is what froze the progress bar just short of
+        the end: the tick that would have carried state="done" and 100% is
+        exactly the tick this loop skipped, so the client's newest snapshot
+        stayed the one from a second earlier. The transition to idle has to be
+        reported once, or a finished download is indistinguishable from a
+        stalled one.
+        """
+        was_active = False
         while True:
-            if catalog.active_count():
+            active = catalog.active_count() > 0
+            if active or was_active:
                 with contextlib.suppress(asyncio.QueueFull):
                     queue.put_nowait({"type": "downloads", "data": catalog.status()})
-                await asyncio.sleep(1.0)
-            else:
-                await asyncio.sleep(3.0)
+            was_active = active
+            await asyncio.sleep(1.0 if active else 3.0)
+
+    async def pump_journal() -> None:
+        """Forward new log lines.
+
+        Nothing is logged in here: this process's own journal is one of the
+        sources, so a line written per line read would feed itself.
+        """
+        queue_in = journal.subscribe()
+        try:
+            while True:
+                line = await queue_in.get()
+                with contextlib.suppress(asyncio.QueueFull):
+                    queue.put_nowait({"type": "journal", "data": line})
+        finally:
+            journal.unsubscribe(queue_in)
 
     tasks = [
+        asyncio.create_task(pump_journal()),
         asyncio.create_task(pump_llamaswap()),
         asyncio.create_task(pump_gpu()),
         asyncio.create_task(pump_downloads()),
@@ -583,6 +749,39 @@ def _port_open(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.4)
         return probe.connect_ex(("127.0.0.1", port)) == 0
+
+
+@app.get("/api/channels")
+async def read_channels():
+    """Optional ways in, and whether each is currently open."""
+    return channels.status()
+
+
+@app.post("/api/channels/{name}")
+async def write_channel(name: str, payload: dict):
+    """Open or close one channel. The console's own site is not in this set."""
+    try:
+        return await channels.set_enabled(name, bool(payload.get("enabled")))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such channel")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/channels/{name}/scopes")
+async def write_channel_scopes(name: str, payload: dict):
+    """Which networks may reach one channel, as a Caddy bind list."""
+    scopes = payload.get("scopes")
+    if not isinstance(scopes, list):
+        raise HTTPException(status_code=400, detail="scopes must be a list")
+    try:
+        return await channels.set_scopes(name, scopes)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="no such channel")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/endpoints")
@@ -673,6 +872,45 @@ async def read_network():
 # OpenAI-compatible proxy
 # --------------------------------------------------------------------------
 
+def _log_request_shape(path: str, body: bytes, request: Request) -> None:
+    """Summarise what a client actually sent.
+
+    Third-party agents are opaque about which knobs they translate into request
+    fields -- documentation and issue trackers disagree, and the only authority
+    is the bytes that arrive. This proxy is the one place that sees them, so it
+    reports the shape (never the prompt text) of every completion request.
+    """
+    if not path.startswith("chat/completions") or not body:
+        return
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return
+
+    agent = request.headers.get("user-agent", "?")[:40]
+    reasoning_fields = {
+        key: payload[key] for key in
+        ("chat_template_kwargs", "reasoning_budget_tokens", "thinking",
+         "reasoning", "reasoning_effort", "enable_thinking")
+        if key in payload
+    }
+    logger.info(
+        "/v1 request from %s: model=%s messages=%d tools=%d stream=%s "
+        "max_tokens=%s temperature=%s multimodal=%s reasoning_fields=%s",
+        agent,
+        payload.get("model"),
+        len(payload.get("messages") or []),
+        len(payload.get("tools") or []),
+        payload.get("stream"),
+        payload.get("max_tokens") or payload.get("max_completion_tokens"),
+        payload.get("temperature"),
+        # Content parts rather than a plain string means an image or file made
+        # it into the request instead of being stripped by the client.
+        any(isinstance(m.get("content"), list) for m in (payload.get("messages") or [])),
+        reasoning_fields or "none",
+    )
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "OPTIONS"])
 async def openai_proxy(path: str, request: Request):
     """Forward /v1/* to llama-swap behind this console's authentication.
@@ -686,6 +924,7 @@ async def openai_proxy(path: str, request: Request):
     would turn every reply into one long pause.
     """
     body = await request.body()
+    _log_request_shape(path, body, request)
     headers = {
         key: value for key, value in request.headers.items()
         # Hop-by-hop and identity headers are dropped: Host would be wrong for
@@ -728,8 +967,26 @@ async def openai_proxy(path: str, request: Request):
 # --------------------------------------------------------------------------
 
 if WEB_DIST.is_dir():
-    app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+    # Vite fingerprints every asset, so the file at a given name can never
+    # change: caching it for a year costs nothing and saves the round trip.
+    class _ImmutableAssets(StaticFiles):
+        def file_response(self, *args, **kwargs):  # type: ignore[override]
+            response = super().file_response(*args, **kwargs)
+            response.headers["cache-control"] = "public, max-age=31536000, immutable"
+            return response
+
+    app.mount("/assets", _ImmutableAssets(directory=WEB_DIST / "assets"), name="assets")
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str):
-        return FileResponse(WEB_DIST / "index.html")
+        """The shell, which must never be cached.
+
+        It carries the hashed names of the current bundle, so a stale copy
+        points a browser at the previous build and every deployment silently
+        fails to arrive. It had an ETag but no Cache-Control, which leaves the
+        browser to invent a freshness lifetime of its own -- and it did.
+        """
+        return FileResponse(
+            WEB_DIST / "index.html",
+            headers={"cache-control": "no-cache, must-revalidate"},
+        )

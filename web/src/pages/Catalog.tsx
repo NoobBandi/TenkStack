@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Empty, Input, List, Progress, Space, Table, Tag, Typography,
 } from 'antd';
-import { CloudDownloadOutlined, StopOutlined } from '@ant-design/icons';
+import { CloseOutlined, CloudDownloadOutlined, StopOutlined } from '@ant-design/icons';
 import {
   cancelDownload, catalogFiles, fetchDownloads, searchCatalog, startDownload, subscribe,
   type CatalogFile, type CatalogRepo, type DownloadStatus,
@@ -14,6 +14,20 @@ const { Text } = Typography;
  *  so the UI says so before the download rather than after. */
 const VRAM_GIB = 32;
 
+const keyOf = (d: DownloadStatus) => `${d.repo_id}/${d.filename}`;
+
+const ENDED = ['done', 'error', 'cancelled'];
+
+/** How each state reads: bar style, label, and whether the row can be dropped. */
+const STATE_VIEW: Record<string, { status: 'active' | 'success' | 'exception' | 'normal';
+                                   label: string; tag?: string }> = {
+  queued: { status: 'active', label: '排隊中' },
+  downloading: { status: 'active', label: '下載中' },
+  done: { status: 'success', label: '完成', tag: 'success' },
+  error: { status: 'exception', label: '失敗', tag: 'error' },
+  cancelled: { status: 'normal', label: '已取消' },
+};
+
 export default function Catalog() {
   const { message } = AntApp.useApp();
   const [query, setQuery] = useState('');
@@ -23,13 +37,35 @@ export default function Catalog() {
   const [files, setFiles] = useState<CatalogFile[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
+  // Finished rows stay until dismissed, so a download that ended while the user
+  // was on another page is still reported when they come back.
+  const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
+  // Already-announced completions. Seeded from the first fetch, otherwise every
+  // reload would toast for downloads that finished days ago.
+  const announced = useRef<Set<string>>(new Set());
+  // The stream can deliver a snapshot before that first fetch resolves. Until
+  // it has, nothing is announced: a completion from days ago would otherwise
+  // toast on every page load. The row still shows its state either way.
+  const seeded = useRef(false);
 
-  useEffect(() => { fetchDownloads().then(setDownloads).catch(() => undefined); }, []);
+  useEffect(() => {
+    fetchDownloads().then((list) => {
+      for (const d of list) if (d.state === 'done') announced.current.add(keyOf(d));
+      setDownloads(list);
+    }).catch(() => undefined).finally(() => { seeded.current = true; });
+  }, []);
 
-  // Progress is pushed only while something is actually downloading.
   useEffect(() => subscribe((event) => {
-    if (event.type === 'downloads') setDownloads(event.data as DownloadStatus[]);
-  }), []);
+    if (event.type !== 'downloads') return;
+    const list = event.data as DownloadStatus[];
+    for (const d of list) {
+      if (seeded.current && d.state === 'done' && !announced.current.has(keyOf(d))) {
+        announced.current.add(keyOf(d));
+        message.success(`${d.filename} 下載完成`);
+      }
+    }
+    setDownloads(list);
+  }), [message]);
 
   const onSearch = useCallback(async (value: string) => {
     if (!value.trim()) return;
@@ -68,38 +104,69 @@ export default function Catalog() {
     }
   };
 
-  const active = downloads.filter((d) => d.state === 'downloading' || d.state === 'queued');
+  const shown = downloads.filter((d) => !dismissed.has(keyOf(d)));
+  const running = shown.filter((d) => !ENDED.includes(d.state)).length;
+
+  const dismiss = (d: DownloadStatus) =>
+    setDismissed((prev) => new Set(prev).add(keyOf(d)));
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {active.length > 0 && (
-        <Card title="下載中" size="small">
+      {shown.length > 0 && (
+        <Card title={running ? `下載中 (${running})` : '下載'} size="small">
           <List
-            dataSource={active}
-            renderItem={(d) => (
-              <List.Item
-                actions={[
-                  <Button key="cancel" size="small" danger icon={<StopOutlined />}
-                          onClick={() => cancelDownload(d.repo_id, d.filename)}>
-                    取消
-                  </Button>,
-                ]}
-              >
-                <List.Item.Meta
-                  title={d.filename}
-                  description={
-                    <div style={{ maxWidth: 640 }}>
-                      <Progress percent={d.percent} size="small" status="active" />
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {(d.downloaded_bytes / 1024 ** 3).toFixed(1)} /{' '}
-                        {(d.total_bytes / 1024 ** 3).toFixed(1)} GiB ・ {d.mib_per_second} MiB/s
-                        ・ {d.repo_id}
-                      </Text>
-                    </div>
-                  }
-                />
-              </List.Item>
-            )}
+            dataSource={shown}
+            renderItem={(d) => {
+              const view = STATE_VIEW[d.state] ?? STATE_VIEW.downloading;
+              const ended = ENDED.includes(d.state);
+              return (
+                <List.Item
+                  actions={[
+                    ended ? (
+                      <Button key="dismiss" size="small" type="text" icon={<CloseOutlined />}
+                              onClick={() => dismiss(d)}>
+                        關閉
+                      </Button>
+                    ) : (
+                      <Button key="cancel" size="small" danger icon={<StopOutlined />}
+                              onClick={() => cancelDownload(d.repo_id, d.filename)}>
+                        取消
+                      </Button>
+                    ),
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={8}>
+                        <span>{d.filename}</span>
+                        {view.tag && <Tag color={view.tag}>{view.label}</Tag>}
+                      </Space>
+                    }
+                    description={
+                      <div style={{ maxWidth: 640 }}>
+                        {/* A finished download is pinned to 100: the last byte
+                            lands between two progress ticks, so the final
+                            reported figure is a rounding short of the end. */}
+                        <Progress
+                          percent={d.state === 'done' ? 100 : d.percent}
+                          size="small"
+                          status={view.status}
+                        />
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {d.state === 'done'
+                            ? `${(d.total_bytes / 1024 ** 3).toFixed(1)} GiB ・ ${d.repo_id}`
+                            : d.state === 'error'
+                              ? `${d.error || '下載失敗'} ・ ${d.repo_id}`
+                              : `${(d.downloaded_bytes / 1024 ** 3).toFixed(1)} / `
+                                + `${(d.total_bytes / 1024 ** 3).toFixed(1)} GiB `
+                                + `・ ${d.mib_per_second} MiB/s ・ ${d.repo_id}`}
+                        </Text>
+                      </div>
+                    }
+                  />
+                </List.Item>
+              );
+            }}
           />
         </Card>
       )}

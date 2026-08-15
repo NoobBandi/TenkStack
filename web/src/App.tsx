@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  App as AntApp, Button, ConfigProvider, Dropdown, Layout, Menu, Space, Spin, Switch,
-  Typography, theme,
+  App as AntApp, Button, ConfigProvider, Dropdown, Layout, Space, Spin, Typography,
 } from 'antd';
-import {
-  AppstoreOutlined, CloudDownloadOutlined, DashboardOutlined, LogoutOutlined, MessageOutlined,
-  PictureOutlined, SettingOutlined, TeamOutlined, UserOutlined,
-} from '@ant-design/icons';
+import { LogoutOutlined, UserOutlined } from '@ant-design/icons';
 import zhTW from 'antd/locale/zh_TW';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import Sidebar, { NAV_GROUPS, SIDEBAR_COLLAPSED, SIDEBAR_WIDTH } from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Models from './pages/Models';
@@ -15,94 +13,77 @@ import Catalog from './pages/Catalog';
 import ComfyUI from './pages/ComfyUI';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
+import Gpu from './pages/Gpu';
+import Connections from './pages/Connections';
+import Logs from './pages/Logs';
 import Login from './pages/Login';
+import { StreamProvider, useStream } from './stream';
+import { ChatProvider } from './chat';
 import { fetchAuth, logout, type AuthState } from './api';
+import { darkTheme, LINE, MONO } from './theme';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Content } = Layout;
 const { Title, Text } = Typography;
 
-const NAV = [
-  { key: 'dashboard', icon: <DashboardOutlined />, label: '總覽', element: <Dashboard /> },
-  { key: 'chat', icon: <MessageOutlined />, label: '對話', element: <Chat /> },
-  { key: 'models', icon: <AppstoreOutlined />, label: '模型', element: <Models /> },
-  { key: 'catalog', icon: <CloudDownloadOutlined />, label: '模型目錄', element: <Catalog /> },
-  { key: 'comfyui', icon: <PictureOutlined />, label: '圖像生成', element: <ComfyUI /> },
-  { key: 'users', icon: <TeamOutlined />, label: '使用者', element: <Users /> },
-  { key: 'settings', icon: <SettingOutlined />, label: '設定', element: <Settings /> },
+const ROUTES = [
+  { path: '/', element: <Dashboard /> },
+  { path: '/chat', element: <Chat /> },
+  { path: '/models', element: <Models /> },
+  { path: '/catalog', element: <Catalog /> },
+  { path: '/comfyui', element: <ComfyUI /> },
+  { path: '/users', element: <Users /> },
+  { path: '/gpu', element: <Gpu /> },
+  { path: '/connections', element: <Connections /> },
+  { path: '/logs', element: <Logs /> },
+  { path: '/settings', element: <Settings /> },
 ];
 
-export default function App() {
-  const [page, setPage] = useState('dashboard');
-  const [dark, setDark] = useState(true);
-  const [collapsed, setCollapsed] = useState(false);
-  const [auth, setAuth] = useState<AuthState | null>(null);
+const TITLES: Record<string, string> = Object.fromEntries(
+  NAV_GROUPS.flatMap((g) => g.items.map((i) => [i.key, i.label])),
+);
 
-  const refreshAuth = useCallback(() => {
-    fetchAuth()
-      .then(setAuth)
-      // A 401 is the expected answer when signed out, not a failure to report.
-      .catch(() => setAuth({ identity: null, enforcement: true }));
-  }, []);
+function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) {
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sider') === 'collapsed');
+  const { gpus, models } = useStream();
 
-  useEffect(() => { refreshAuth(); }, [refreshAuth]);
+  useEffect(() => {
+    localStorage.setItem('sider', collapsed ? 'collapsed' : 'expanded');
+  }, [collapsed]);
 
-  const current = NAV.find((n) => n.key === page) ?? NAV[0];
-  const themeConfig = { algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm };
-
-  if (auth === null) {
-    return (
-      <ConfigProvider locale={zhTW} theme={themeConfig}>
-        <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
-          <Spin size="large" />
-        </div>
-      </ConfigProvider>
-    );
-  }
-
-  if (auth.enforcement && !auth.identity) {
-    return (
-      <ConfigProvider locale={zhTW} theme={themeConfig}>
-        <AntApp><Login onSuccess={refreshAuth} /></AntApp>
-      </ConfigProvider>
-    );
-  }
+  // The browser tab is often one of many; naming the page makes it findable.
+  useEffect(() => {
+    const title = TITLES[location.pathname];
+    document.title = title ? `${title} ・ Tenks Console` : 'Tenks Console';
+  }, [location.pathname]);
 
   return (
-    <ConfigProvider locale={zhTW} theme={themeConfig}>
+    <ConfigProvider locale={zhTW} theme={darkTheme}>
       <AntApp>
         <Layout style={{ minHeight: '100vh' }}>
-          <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed}
-                 theme={dark ? 'dark' : 'light'} width={200}>
-            <div style={{
-              height: 48, margin: 12, display: 'flex', alignItems: 'center',
-              justifyContent: collapsed ? 'center' : 'flex-start', overflow: 'hidden',
-            }}>
-              <Title level={5} style={{ margin: 0, whiteSpace: 'nowrap' }}>
-                {collapsed ? 'AI' : 'AI Console'}
-              </Title>
-            </div>
-            <Menu
-              theme={dark ? 'dark' : 'light'}
-              mode="inline"
-              selectedKeys={[page]}
-              items={NAV.map(({ key, icon, label }) => ({ key, icon, label }))}
-              onClick={({ key }) => setPage(key)}
-            />
-          </Sider>
+          <Sidebar collapsed={collapsed} onCollapse={setCollapsed} gpus={gpus} models={models} />
 
-          <Layout>
+          {/* The sider is fixed, so the content needs the space reserved. */}
+          <Layout style={{
+            marginInlineStart: collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_WIDTH,
+            transition: 'margin-inline-start 200ms',
+          }}>
             <Header style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              paddingInline: 24,
+              paddingInline: 24, position: 'sticky', top: 0, zIndex: 10,
+              borderBottom: `1px solid ${LINE.faint}`,
             }}>
-              <Title level={4} style={{ margin: 0 }}>{current.label}</Title>
+              <Title level={5} style={{
+                margin: 0, fontFamily: MONO, letterSpacing: 1, fontWeight: 400,
+              }}>
+                {TITLES[location.pathname] ?? 'Tenks Console'}
+              </Title>
               <Space size={16}>
-                <Switch checked={dark} onChange={setDark} checkedChildren="暗" unCheckedChildren="亮" />
                 {auth.identity ? (
                   <Dropdown
                     menu={{
                       items: [{ key: 'logout', icon: <LogoutOutlined />, label: '登出' }],
-                      onClick: () => logout().then(refreshAuth),
+                      onClick: onSignOut,
                     }}
                   >
                     <Button type="text" icon={<UserOutlined />}>{auth.identity.username}</Button>
@@ -114,13 +95,60 @@ export default function App() {
             </Header>
 
             <Content style={{ padding: 24 }}>
-              {/* Keyed so switching pages resets page-local state instead of
-                  carrying one page's form values into the next. */}
-              <div key={current.key}>{current.element}</div>
+              <Routes>
+                {ROUTES.map(({ path, element }) => (
+                  <Route key={path} path={path} element={element} />
+                ))}
+                {/* Unknown paths go home rather than showing a blank frame. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
             </Content>
           </Layout>
         </Layout>
       </AntApp>
     </ConfigProvider>
+  );
+}
+
+export default function App() {
+  const [auth, setAuth] = useState<AuthState | null>(null);
+  const refreshAuth = useCallback(() => {
+    fetchAuth()
+      // A 401 is the expected answer when signed out, not a failure to report.
+      .then(setAuth)
+      .catch(() => setAuth({ identity: null, enforcement: true }));
+  }, []);
+
+  useEffect(() => { refreshAuth(); }, [refreshAuth]);
+
+  if (auth === null) {
+    return (
+      <ConfigProvider locale={zhTW} theme={darkTheme}>
+        <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
+          <Spin size="large" />
+        </div>
+      </ConfigProvider>
+    );
+  }
+
+  if (auth.enforcement && !auth.identity) {
+    return (
+      <ConfigProvider locale={zhTW} theme={darkTheme}>
+        <AntApp><Login onSuccess={refreshAuth} /></AntApp>
+      </ConfigProvider>
+    );
+  }
+
+  return (
+    <BrowserRouter>
+      {/* Inside the router so pages can navigate, and inside the auth gate so
+          the stream is never opened by a caller who would only get 401s. */}
+      <StreamProvider>
+        {/* Above the routes so a streaming reply survives navigating away. */}
+        <ChatProvider>
+          <Shell auth={auth} onSignOut={() => logout().then(refreshAuth)} />
+        </ChatProvider>
+      </StreamProvider>
+    </BrowserRouter>
   );
 }

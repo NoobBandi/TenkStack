@@ -1,103 +1,137 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Avatar, Button, Card, Collapse, Empty, Image, InputNumber,
-  Progress, Select, Space, Switch, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Drawer, Empty, Grid, Image, Space, Tag,
+  Tooltip, Typography,
 } from 'antd';
-import {
-  ClearOutlined, CopyOutlined, DownOutlined, RedoOutlined, RobotOutlined, UserOutlined,
-} from '@ant-design/icons';
+import { CopyOutlined, DownOutlined, RedoOutlined, SlidersOutlined } from '@ant-design/icons';
 import Composer from '../components/Composer';
-import {
-  chatStream, fetchModels,
-  type ChatMessage, type ModelInfo, type Timings, type Usage,
-} from '../api';
+import ChatSettings from '../components/ChatSettings';
+import ChatHistory from '../components/ChatHistory';
+import Markdown from '../components/Markdown';
+import ThinkingTrace from '../components/ThinkingTrace';
+import { useStream } from '../stream';
+import { useChat, type Turn } from '../chat';
+import { LINE, MONO } from '../theme';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
-/** Starter prompts, so an empty thread is not a blank wall. */
+const HISTORY_WIDTH = 232;
+const HISTORY_GUTTER = 16;
+// Wider than the history list: every row here is a slider paired with a number
+// box, and squeezing that pair is what clipped the controls when this panel was
+// first docked.
+const SETTINGS_WIDTH = 300;
+const SETTINGS_GUTTER = 16;
+/** Space outside each panel's rule. Carried by the panel, not by a flex gap on
+ *  the row, so a closed panel collapses to nothing instead of leaving a gap. */
+const PANEL_MARGIN = 20;
+const PANEL_TRANSITION = 'width 220ms cubic-bezier(0.4,0,0.2,1), opacity 160ms ease,'
+  + ' padding 220ms cubic-bezier(0.4,0,0.2,1), margin 220ms cubic-bezier(0.4,0,0.2,1)';
+
 const SUGGESTIONS = [
   '用三句話解釋 MoE 模型',
-  '寫一個 Python 函式，計算費氏數列',
+  '寫一個 Python 的 LRU cache，含測試',
   '這台機器適合跑多大的模型？',
 ];
 
-interface Turn extends ChatMessage {
-  usage?: Usage;
-  timings?: Timings;
-  /** 'length' means the reply was cut off at max tokens, not finished. */
-  finish_reason?: string;
-  /** Time to first token, measured in the browser -- the one number that is
-   *  legitimately client-side, because it is what the user actually waits. */
-  ttft_ms?: number;
+/**
+ * Seconds since the request went out, ticking.
+ *
+ * A fixed "thinking…" looks identical whether the model is composing a long
+ * answer or the backend has stopped answering at all. A number that keeps
+ * moving distinguishes the two without the reader having to ask.
+ */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(performance.now()), 100);
+    return () => window.clearInterval(id);
+  }, []);
+  const seconds = Math.max(0, (now - since) / 1000);
+  return (
+    <Text style={{ fontSize: 11, opacity: 0.35, fontFamily: MONO }}>
+      {seconds.toFixed(1)}s
+    </Text>
+  );
 }
 
-function renderContent(text: string) {
-  const parts = text.split(/```/);
-  return parts.map((part, index) => {
-    if (index % 2 === 0) {
-      return <span key={index} style={{ whiteSpace: 'pre-wrap' }}>{part}</span>;
-    }
-    const newline = part.indexOf('\n');
-    const body = newline >= 0 ? part.slice(newline + 1) : part;
-    const language = newline >= 0 ? part.slice(0, newline).trim() : '';
-    return (
-      <pre key={index} style={{
-        background: 'rgba(128,128,128,0.16)', padding: 12, borderRadius: 6,
-        overflowX: 'auto', margin: '8px 0', fontSize: 13, lineHeight: 1.55,
-      }}>
-        {language && <div style={{ opacity: 0.55, fontSize: 11, marginBottom: 6 }}>{language}</div>}
-        <code>{body}</code>
-      </pre>
-    );
-  });
-}
-
-/** Server-measured stats for one reply. */
 function TurnStats({ turn }: { turn: Turn }) {
   const t = turn.timings;
   if (!t && !turn.usage) return null;
-
   const bits: string[] = [];
   if (t) {
-    bits.push(`生成 ${t.predicted_n} tok ・ ${t.predicted_per_second.toFixed(1)} t/s`);
-    bits.push(`prompt ${t.prompt_n} tok ・ ${t.prompt_per_second.toFixed(0)} t/s`);
-    if (t.cache_n > 0) bits.push(`快取命中 ${t.cache_n} tok`);
+    bits.push(`${t.predicted_n} tok`);
+    bits.push(`${t.predicted_per_second.toFixed(1)} t/s`);
+    if (t.cache_n > 0) bits.push(`快取 ${t.cache_n}`);
   } else if (turn.usage) {
     bits.push(`${turn.usage.completion_tokens} tok`);
   }
-  if (turn.ttft_ms !== undefined) bits.push(`首字 ${(turn.ttft_ms / 1000).toFixed(2)} s`);
+  if (turn.ttft_ms !== undefined) bits.push(`首字 ${(turn.ttft_ms / 1000).toFixed(2)}s`);
 
   return (
-    <Tooltip title="數字取自 llama-server 的內部計時，不含網路與排隊時間">
-      <Text type="secondary" style={{ fontSize: 11 }}>{bits.join(' ・ ')}</Text>
+    <Tooltip title="取自 llama-server 的內部計時，不含網路與排隊時間">
+      <Text style={{ fontSize: 10.5, opacity: 0.35, fontFamily: MONO }}>{bits.join('  ')}</Text>
     </Tooltip>
   );
 }
 
 export default function Chat() {
   const { message: toast } = AntApp.useApp();
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [model, setModel] = useState<string>();
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [draft, setDraft] = useState('');
-  const [images, setImages] = useState<string[]>([]);
-  const [streaming, setStreaming] = useState(false);
-  const [thinking, setThinking] = useState(false);
-  const [temperature, setTemperature] = useState(0.7);
-  const [maxTokens, setMaxTokens] = useState(2048);
+  const { models } = useStream();
+  const {
+    model, setModel, turns, draft, setDraft, images, setImages,
+    params, setParams, streaming, streamStartedAt, conversationId, historyKey,
+    send, stop, regenerate, openConversation, newConversation, error, clearError,
+  } = useChat();
+
+  const screens = useBreakpoint();
+  // Below lg the conversation cannot afford a docked column: subtracting the
+  // nav and a 232px panel from a narrow window leaves ~200px, which is less
+  // than the composer's own controls need. It overlays instead.
+  const roomForPanel = screens.lg ?? false;
+  // Settings need a higher bar than history, because the two can be open at
+  // once. At lg the pair would eat ~600px and leave the conversation under
+  // 150px; xl is the first width where both fit and the reply still reads.
+  const roomForSettings = screens.xl ?? false;
+
   const [atBottom, setAtBottom] = useState(true);
-  const abort = useRef<AbortController | null>(null);
+  // Both panels are remembered: whether they sit beside the conversation is a
+  // lasting preference rather than a per-visit one. This was not true while
+  // settings were a modal -- reopening one over the conversation on every visit
+  // would have been an interruption rather than a layout.
+  const [showSettings, setShowSettings] = useState(
+    () => localStorage.getItem('chat.settings') === 'on',
+  );
+  const [showHistory, setShowHistory] = useState(
+    () => localStorage.getItem('chat.history') === 'on',
+  );
   const scroller = useRef<HTMLDivElement>(null);
 
+  // Pick a loaded model once the list arrives; a stopped one would make the
+  // first message pay for a multi-GiB load nobody asked for.
   useEffect(() => {
-    fetchModels()
-      .then((list) => { setModels(list); setModel((c) => c ?? list[0]?.id); })
-      .catch(() => undefined);
-  }, []);
+    if (model && models.some((m) => m.id === model)) return;
+    const next = models.find((m) => m.state === 'ready')?.id
+      ?? models.find((m) => m.state === 'starting')?.id
+      ?? models[0]?.id;
+    if (next) setModel(next);
+  }, [models, model, setModel]);
 
-  // Stick to the bottom only while the reader is already there. Yanking the
-  // view down while someone is reading earlier output is the single most
-  // annoying thing a streaming chat can do.
+  useEffect(() => {
+    if (error) { toast.error(error); clearError(); }
+  }, [error, toast, clearError]);
+
+  useEffect(() => {
+    localStorage.setItem('chat.history', showHistory ? 'on' : 'off');
+  }, [showHistory]);
+
+  useEffect(() => {
+    localStorage.setItem('chat.settings', showSettings ? 'on' : 'off');
+  }, [showSettings]);
+
+  const active = models.find((m) => m.id === model);
+
   const onScroll = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
@@ -110,71 +144,6 @@ export default function Chat() {
     }
   }, [turns, atBottom]);
 
-  const run = useCallback(async (history: Turn[]) => {
-    if (!model) return;
-    setTurns([...history, { role: 'assistant', content: '', reasoning: '' }]);
-    setStreaming(true);
-    setAtBottom(true);
-
-    const controller = new AbortController();
-    abort.current = controller;
-    const startedAt = performance.now();
-    let ttft: number | undefined;
-
-    try {
-      for await (const delta of chatStream({
-        model, messages: history, temperature, maxTokens, thinking,
-        signal: controller.signal,
-      })) {
-        if ((delta.content || delta.reasoning) && ttft === undefined) {
-          ttft = performance.now() - startedAt;
-        }
-        setTurns((prev) => {
-          const next = [...prev];
-          const last = { ...next[next.length - 1] };
-          if (delta.content) last.content += delta.content;
-          if (delta.reasoning) last.reasoning = (last.reasoning ?? '') + delta.reasoning;
-          if (delta.usage) last.usage = delta.usage;
-          if (delta.timings) last.timings = delta.timings;
-          if (delta.finish_reason) last.finish_reason = delta.finish_reason;
-          if (ttft !== undefined) last.ttft_ms = ttft;
-          next[next.length - 1] = last;
-          return next;
-        });
-      }
-    } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        toast.error((error as Error).message);
-        // Drop the empty assistant turn so a retry does not send a blank reply
-        // back as context.
-        setTurns((prev) => (prev[prev.length - 1]?.content ? prev : prev.slice(0, -1)));
-      }
-    } finally {
-      setStreaming(false);
-      abort.current = null;
-    }
-  }, [model, temperature, maxTokens, thinking, toast]);
-
-  const send = useCallback((text?: string) => {
-    const content = (text ?? draft).trim();
-    // An image on its own is a valid message; text is only required when there
-    // is nothing else to send.
-    if ((!content && images.length === 0) || !model || streaming) return;
-    setDraft('');
-    setImages([]);
-    void run([...turns, {
-      role: 'user',
-      content: content || '請描述這張圖片。',
-      images: images.length ? images : undefined,
-    }]);
-  }, [draft, images, model, streaming, turns, run]);
-
-  const regenerate = useCallback(() => {
-    const lastUser = [...turns].reverse().findIndex((t) => t.role === 'user');
-    if (lastUser < 0) return;
-    void run(turns.slice(0, turns.length - lastUser));
-  }, [turns, run]);
-
   const copy = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -184,88 +153,93 @@ export default function Chat() {
     }
   };
 
-  const active = models.find((m) => m.id === model);
-  const ctxLimit = active?.ctx_size ?? 0;
-  // The last reply's usage covers the whole prompt, so it is the current
-  // occupancy of the context window rather than a per-message figure.
-  const lastUsage = [...turns].reverse().find((t) => t.usage)?.usage;
-  const ctxUsed = lastUsage ? (lastUsage.prompt_tokens + lastUsage.completion_tokens) : 0;
-  const ctxPercent = ctxLimit ? Math.min(100, Math.round((ctxUsed / ctxLimit) * 100)) : 0;
+  const contextUsed = useMemo(() => {
+    const usage = [...turns].reverse().find((t) => t.usage)?.usage;
+    return usage ? usage.prompt_tokens + usage.completion_tokens : 0;
+  }, [turns]);
+
+  // Switching models mid-thread is supported, but a model without a vision
+  // projector silently ignores the images already in the history rather than
+  // erroring, so the mismatch has to be said out loud.
+  const imagesInThread = turns.some((t) => t.images?.length);
+  const visionLost = imagesInThread && active?.capabilities?.source === 'live'
+    && !active.capabilities.vision;
+
+  // The reply that produced the thread may not be the model selected now.
+  const priorModels = useMemo(() => {
+    const seen = turns.map((t) => t.model).filter((m): m is string => !!m && m !== model);
+    return [...new Set(seen)];
+  }, [turns, model]);
+
+  const history = (
+    <ChatHistory
+      currentId={conversationId}
+      onOpen={(id) => { void openConversation(id); if (!roomForPanel) setShowHistory(false); }}
+      onNew={() => { newConversation(); if (!roomForPanel) setShowHistory(false); }}
+      refreshKey={historyKey}
+    />
+  );
+
+  const settings = (
+    <ChatSettings params={params} onChange={setParams} model={active} contextUsed={contextUsed} />
+  );
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {models.length === 0 && (
-        <Alert type="info" showIcon message="尚未設定任何模型"
-               description="請先到「模型」頁新增，才能在這裡對話。" />
+    <div style={{
+      // No flex gap: the spacing between a panel and the conversation belongs to
+      // the panel, so that a closed one takes no room at all.
+      display: 'flex',
+      // Fill the viewport below the sticky header and the page padding, so the
+      // composer sits at the bottom instead of below the fold.
+      height: 'calc(100vh - 56px - 48px)',
+    }}>
+      {roomForPanel && (
+        // The outer width has to include the padding, because box-sizing is
+        // border-box: setting it to HISTORY_WIDTH left a 216px content box for
+        // a 232px child, and overflow:hidden silently clipped the right edge.
+        // That clipping was the cut-off controls, not their size.
+        <div style={{
+          width: showHistory ? HISTORY_WIDTH + HISTORY_GUTTER : 0,
+          flexShrink: 0, overflow: 'hidden',
+          opacity: showHistory ? 1 : 0,
+          borderInlineEnd: `1px solid ${showHistory ? LINE.faint : 'transparent'}`,
+          paddingInlineEnd: showHistory ? HISTORY_GUTTER : 0,
+          marginInlineEnd: showHistory ? PANEL_MARGIN : 0,
+          transition: PANEL_TRANSITION,
+        }}>
+          <div style={{ width: HISTORY_WIDTH, height: '100%' }}>{history}</div>
+        </div>
       )}
 
-      <Card size="small">
-        <Space wrap size={16} style={{ width: '100%' }}>
-          <Space size={8}>
-            <Select
-              value={model}
-              onChange={setModel}
-              style={{ minWidth: 250 }}
-              options={models.map((m) => ({ value: m.id, label: m.name || m.id }))}
-            />
-            {active && <Tag color={active.state === 'ready' ? 'green' : 'default'}>{active.state}</Tag>}
-          </Space>
-          <Space size={8}>
-            <Text type="secondary">思考</Text>
-            <Switch size="small" checked={thinking} onChange={setThinking} />
-          </Space>
-          <Space size={8}>
-            <Text type="secondary">temp</Text>
-            <InputNumber size="small" min={0} max={2} step={0.1} value={temperature}
-                         onChange={(v) => setTemperature(v ?? 0.7)} style={{ width: 72 }} />
-          </Space>
-          <Space size={8}>
-            <Text type="secondary">max tokens</Text>
-            <InputNumber size="small" min={16} max={65536} step={256} value={maxTokens}
-                         onChange={(v) => setMaxTokens(v ?? 2048)} style={{ width: 92 }} />
-          </Space>
-          <Button size="small" icon={<ClearOutlined />} disabled={!turns.length || streaming}
-                  onClick={() => setTurns([])}>
-            清空
-          </Button>
-        </Space>
-
-        {ctxLimit > 0 && (
-          <div style={{ marginTop: 10 }}>
-            <Space size={8} style={{ width: '100%' }}>
-              <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                Context {ctxUsed.toLocaleString()} / {ctxLimit.toLocaleString()}
-              </Text>
-              <Progress
-                percent={ctxPercent}
-                size="small"
-                showInfo={false}
-                status={ctxPercent > 90 ? 'exception' : 'normal'}
-                style={{ width: 220 }}
-              />
-            </Space>
-          </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {models.length === 0 && (
+          <Alert type="info" showIcon style={{ marginBottom: 12 }}
+                 message="尚未設定任何模型"
+                 description="請先到「模型」頁新增，才能在這裡對話。" />
         )}
 
-        {thinking && (
-          <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
-            思考模式下模型可能把整個 token 預算用在推理上而回傳空答案，
-            工具呼叫也可能完全產不出來。遇到請調高 max tokens 或關掉。
-          </Paragraph>
+        {visionLost && (
+          <Alert type="warning" showIcon closable style={{ marginBottom: 12 }}
+                 message="目前的模型讀不到這段對話裡的圖片"
+                 description="它沒有載入視覺投影檔，圖片會被略過而不會報錯。要讓它看圖，請換回有視覺能力的模型。" />
         )}
-      </Card>
 
-      <div style={{ position: 'relative' }}>
-        <Card size="small" styles={{ body: { padding: 16 } }}>
+        {priorModels.length > 0 && (
+          <Alert type="info" showIcon closable style={{ marginBottom: 12 }}
+                 message={`這段對話混用了模型：${priorModels.join('、')}`}
+                 description="接續是可行的——歷史只是文字。每則回覆上方標示的是實際產生它的模型。" />
+        )}
+
+        <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           <div
             ref={scroller}
             onScroll={onScroll}
-            style={{ minHeight: '42vh', maxHeight: '58vh', overflowY: 'auto', paddingRight: 4 }}
+            style={{ height: '100%', overflowY: 'auto', paddingRight: 12 }}
           >
             {turns.length === 0 ? (
-              <div style={{ paddingTop: 32 }}>
-                <Empty description="開始對話以測試模型" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                <Space wrap size={8} style={{ justifyContent: 'center', width: '100%', marginTop: 12 }}>
+              <div style={{ paddingTop: '18vh' }}>
+                <Empty description="開始一段對話" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                <Space wrap size={8} style={{ justifyContent: 'center', width: '100%', marginTop: 16 }}>
                   {SUGGESTIONS.map((s) => (
                     <Button key={s} size="small" onClick={() => send(s)} disabled={!model}>
                       {s}
@@ -274,115 +248,207 @@ export default function Chat() {
                 </Space>
               </div>
             ) : (
-              <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                {turns.map((turn, index) => {
-                  const isUser = turn.role === 'user';
-                  const isLast = index === turns.length - 1;
-                  return (
-                    <div key={index} style={{
-                      display: 'flex', gap: 10,
-                      flexDirection: isUser ? 'row-reverse' : 'row',
+              turns.map((turn, index) => {
+                const isUser = turn.role === 'user';
+                const isLast = index === turns.length - 1;
+                return (
+                  <div
+                    key={index}
+                    className="turn-in"
+                    style={{
+                      // No bubbles: long code answers read as a document, and a
+                      // tinted box around a 60-line snippet fights the content.
+                      // Sides carry the speaker instead.
+                      padding: '18px 0',
+                      borderTop: index === 0 ? 'none' : `1px solid ${LINE.faint}`,
+                      display: 'flex',
+                      justifyContent: isUser ? 'flex-end' : 'flex-start',
+                    }}
+                  >
+                    <div style={{
+                      minWidth: 0,
+                      // The reply runs full width because code and tables need
+                      // it; the prompt is short and sits in a narrower column
+                      // on the right, which is what makes the sides readable.
+                      maxWidth: isUser ? '76%' : '100%',
+                      width: isUser ? undefined : '100%',
+                      // A hairline on the reader's side rather than a fill.
+                      borderInlineEnd: isUser ? `2px solid ${LINE.soft}` : undefined,
+                      paddingInlineEnd: isUser ? 14 : 0,
                     }}>
-                      <Avatar
-                        size={28}
-                        icon={isUser ? <UserOutlined /> : <RobotOutlined />}
-                        style={{ flexShrink: 0, background: isUser ? '#1677ff' : 'rgba(128,128,128,0.35)' }}
-                      />
-                      <div style={{ maxWidth: '80%', minWidth: 0 }}>
-                        <div style={{
-                          background: isUser ? 'rgba(22,119,255,0.16)' : 'rgba(128,128,128,0.11)',
-                          padding: '10px 14px', borderRadius: 10,
-                        }}>
-                          {turn.reasoning ? (
-                            <Collapse
-                              ghost
-                              size="small"
-                              // Open while it is the thing currently streaming,
-                              // closed once the answer itself has arrived.
-                              defaultActiveKey={isLast && streaming && !turn.content ? ['r'] : []}
-                              style={{ marginBottom: turn.content ? 8 : 0 }}
-                              items={[{
-                                key: 'r',
-                                label: <Text type="secondary" style={{ fontSize: 12 }}>思考過程</Text>,
-                                children: (
-                                  <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
-                                    {turn.reasoning}
-                                  </Text>
-                                ),
-                              }]}
-                            />
-                          ) : null}
-                          {turn.images?.length ? (
-                            <Space wrap size={6} style={{ marginBottom: 8 }}>
-                              {turn.images.map((src, i) => (
-                                <Image key={i} src={src} width={110}
-                                       style={{ borderRadius: 6 }} />
-                              ))}
-                            </Space>
-                          ) : null}
-                          {renderContent(turn.content)}
-                          {isLast && streaming && !turn.content && !turn.reasoning && (
-                            <Text type="secondary" style={{ fontSize: 12 }}>思考中…</Text>
-                          )}
-                          {turn.finish_reason === 'length' && (
-                            <div style={{ marginTop: 8 }}>
-                              <Tooltip title={`回覆在 ${maxTokens} tokens 處被切斷，不是模型講完了。調高上方的 max tokens 後重新生成即可取得完整內容。`}>
-                                <Tag color="warning" style={{ marginInlineEnd: 0 }}>
-                                  已達 max tokens 上限，內容被截斷
-                                </Tag>
-                              </Tooltip>
-                            </div>
-                          )}
-                        </div>
+                    <Text style={{
+                      fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
+                      opacity: isUser ? 0.5 : 0.4, display: 'block', marginBottom: 8,
+                      textAlign: isUser ? 'right' : 'left',
+                    }}>
+                      {isUser
+                        ? '你'
+                        : (models.find((m) => m.id === turn.model)?.name
+                           ?? turn.model
+                           ?? active?.name ?? active?.id ?? 'ASSISTANT').toUpperCase()}
+                    </Text>
 
-                        <Space size={4} style={{ marginTop: 4 }} wrap>
-                          <Tooltip title="複製">
-                            <Button type="text" size="small" icon={<CopyOutlined />}
-                                    onClick={() => copy(turn.content)} />
-                          </Tooltip>
-                          {!isUser && isLast && !streaming && (
-                            <Tooltip title="重新生成">
-                              <Button type="text" size="small" icon={<RedoOutlined />}
-                                      onClick={regenerate} />
-                            </Tooltip>
-                          )}
-                          {!isUser && <TurnStats turn={turn} />}
-                        </Space>
-                      </div>
+                    {turn.images?.length ? (
+                      <Space wrap size={6} style={{
+                        marginBottom: 10,
+                        justifyContent: isUser ? 'flex-end' : 'flex-start',
+                        width: '100%',
+                      }}>
+                        {turn.images.map((src, i) => (
+                          <Image key={i} src={src} width={128} style={{ borderRadius: 4 }} />
+                        ))}
+                      </Space>
+                    ) : null}
+
+                    {turn.reasoning ? (
+                      <ThinkingTrace
+                        reasoning={turn.reasoning}
+                        live={isLast && streaming && !turn.content}
+                        ms={turn.thinking_ms}
+                      />
+                    ) : null}
+
+                    {isUser ? (
+                      <Text style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>{turn.content}</Text>
+                    ) : (
+                      <Markdown>{turn.content}</Markdown>
+                    )}
+
+                    {isLast && streaming && !turn.content && !turn.reasoning && (
+                      <Space size={8}>
+                        <Text style={{ fontSize: 12, opacity: 0.4 }}>思考中…</Text>
+                        <Elapsed since={streamStartedAt} />
+                      </Space>
+                    )}
+
+                    {turn.finish_reason === 'length' && (
+                      <Tooltip title={`回覆在 ${params.max_tokens} tokens 處被切斷。調高右側的 max tokens 後重新生成即可取得完整內容。`}>
+                        <Tag color="warning" style={{ marginTop: 10 }}>
+                          已達 max tokens 上限，內容被截斷
+                        </Tag>
+                      </Tooltip>
+                    )}
+
+                    <Space size={2} wrap style={{
+                      marginTop: 10, width: '100%',
+                      justifyContent: isUser ? 'flex-end' : 'flex-start',
+                    }}>
+                      <Tooltip title="複製">
+                        <Button type="text" size="small" icon={<CopyOutlined />}
+                                onClick={() => copy(turn.content)} />
+                      </Tooltip>
+                      {!isUser && isLast && !streaming && (
+                        <Tooltip title="重新生成">
+                          <Button type="text" size="small" icon={<RedoOutlined />}
+                                  onClick={regenerate} />
+                        </Tooltip>
+                      )}
+                      {!isUser && <TurnStats turn={turn} />}
+                    </Space>
                     </div>
-                  );
-                })}
-              </Space>
+                  </div>
+                );
+              })
             )}
           </div>
-        </Card>
 
-        {!atBottom && (
-          <Button
-            shape="circle"
-            icon={<DownOutlined />}
-            style={{ position: 'absolute', right: 24, bottom: 16 }}
-            onClick={() => {
-              setAtBottom(true);
-              if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-            }}
+          {!atBottom && (
+            <Button
+              shape="circle" icon={<DownOutlined />}
+              style={{ position: 'absolute', right: 24, bottom: 12 }}
+              onClick={() => {
+                setAtBottom(true);
+                if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+              }}
+            />
+          )}
+        </div>
+
+        <div style={{ paddingTop: 12 }}>
+          <Composer
+            value={draft}
+            onChange={setDraft}
+            onSend={() => send()}
+            onStop={stop}
+            streaming={streaming}
+            disabled={!model}
+            capabilities={active?.capabilities}
+            images={images}
+            onImagesChange={setImages}
+            models={models}
+            model={model}
+            onModelChange={setModel}
+            onClear={newConversation}
+            canClear={turns.length > 0 && !streaming}
+            onToggleSettings={() => setShowSettings((v) => !v)}
+            settingsOpen={showSettings}
+            onToggleHistory={() => setShowHistory((v) => !v)}
+            historyOpen={showHistory}
           />
-        )}
+        </div>
       </div>
 
-      <Card size="small">
-        <Composer
-          value={draft}
-          onChange={setDraft}
-          onSend={() => send()}
-          onStop={() => abort.current?.abort()}
-          streaming={streaming}
-          disabled={!model}
-          capabilities={active?.capabilities}
-          images={images}
-          onImagesChange={setImages}
-        />
-      </Card>
-    </Space>
+      {roomForSettings && (
+        <div style={{
+          width: showSettings ? SETTINGS_WIDTH + SETTINGS_GUTTER : 0,
+          flexShrink: 0, overflow: 'hidden',
+          opacity: showSettings ? 1 : 0,
+          borderInlineStart: `1px solid ${showSettings ? LINE.faint : 'transparent'}`,
+          paddingInlineStart: showSettings ? SETTINGS_GUTTER : 0,
+          marginInlineStart: showSettings ? PANEL_MARGIN : 0,
+          transition: PANEL_TRANSITION,
+        }}>
+          <div style={{
+            width: SETTINGS_WIDTH, height: '100%',
+            display: 'flex', flexDirection: 'column',
+          }}>
+            <Space size={8} style={{ marginBottom: 10, paddingInlineStart: 2 }}>
+              <SlidersOutlined style={{ opacity: 0.4, fontSize: 12 }} />
+              <Text style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 1, opacity: 0.45 }}>
+                PARAMETERS
+              </Text>
+            </Space>
+            {/* The rows scroll, the heading does not: the panel is taller than
+                the viewport on a short window. */}
+            <div style={{ flex: 1, overflowY: 'auto', paddingInlineEnd: 8 }}>
+              {settings}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!roomForPanel && (
+        <Drawer
+          title="對話紀錄"
+          placement="left"
+          width={280}
+          open={showHistory}
+          onClose={() => setShowHistory(false)}
+          styles={{ body: { padding: 12 } }}
+        >
+          {history}
+        </Drawer>
+      )}
+
+      {!roomForSettings && (
+        // Too narrow to dock a 300px column beside the conversation, so the
+        // same panel arrives from the same edge instead.
+        <Drawer
+          title={
+            <Space size={8}>
+              <SlidersOutlined style={{ opacity: 0.5 }} />
+              <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: 1 }}>PARAMETERS</span>
+            </Space>
+          }
+          placement="right"
+          width={340}
+          open={showSettings}
+          onClose={() => setShowSettings(false)}
+          styles={{ body: { padding: 12 } }}
+        >
+          {settings}
+        </Drawer>
+      )}
+    </div>
   );
 }

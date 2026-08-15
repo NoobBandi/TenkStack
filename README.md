@@ -1,4 +1,4 @@
-# AI Console
+# Tenks Console
 
 A self-hosted control panel for a single-GPU home AI box. Built for an **Intel
 Arc Pro B70** (Battlemage, 32 GB) running Linux with the `xe` driver, where the

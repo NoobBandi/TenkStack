@@ -181,18 +181,18 @@ def _save_done(state_path: Path, done: set[int]) -> None:
     tmp.replace(state_path)
 
 
-def _seed_from_prefix(partial: Path, segment_count: int) -> set[int]:
-    """Treat an existing sequentially-downloaded file as completed segments.
+def _materialised(path: Path) -> int:
+    """Bytes actually written, not the size the file claims.
 
-    Earlier downloads wrote a contiguous prefix with no state file. Every
-    segment that fits entirely inside that prefix is known-good, so a switch to
-    segmented downloading resumes instead of discarding gigabytes. The last,
-    partially-filled segment is deliberately not claimed.
+    The download preallocates with ftruncate, so `st_size` is the final size
+    from the first moment and says nothing about progress. Only the allocated
+    blocks distinguish a finished file from a sparse one full of holes.
     """
-    if not partial.exists():
-        return set()
-    prefix = partial.stat().st_size
-    return {i for i in range(segment_count) if (i + 1) * SEGMENT_SIZE <= prefix}
+    try:
+        stat = path.stat()
+    except OSError:
+        return 0
+    return stat.st_blocks * 512
 
 
 async def _fetch_segment(
@@ -247,7 +247,12 @@ async def _download(entry: Download) -> None:
             entry.total_bytes = total
 
             segment_count = (total + SEGMENT_SIZE - 1) // SEGMENT_SIZE
-            done = _load_done(state_path, segment_count) or _seed_from_prefix(partial, segment_count)
+            # Only the state file is trusted. Guessing from the file's length
+            # used to seed this set, but preallocation makes an interrupted
+            # download indistinguishable from a finished one by length alone --
+            # so every resume claimed every segment, wrote nothing, and renamed
+            # a file full of holes into place.
+            done = _load_done(state_path, segment_count)
             if done:
                 logger.info("resuming %s with %d/%d segments already present",
                             entry.filename, len(done), segment_count)
@@ -295,9 +300,18 @@ async def _download(entry: Download) -> None:
             finally:
                 os.close(fd)
 
-        written = partial.stat().st_size
-        if written != total:
-            raise RuntimeError(f"size mismatch: {written} bytes on disk, expected {total}")
+        # Two independent checks, because each catches what the other cannot:
+        # the segment ledger proves every range was fetched, and the allocated
+        # size proves those writes reached the disk. Comparing st_size to the
+        # total proved nothing at all -- ftruncate had already set it.
+        missing = segment_count - len(done)
+        if missing:
+            raise RuntimeError(f"{missing}/{segment_count} 個段落未完成")
+        actual = _materialised(partial)
+        if actual < total * 0.99:
+            raise RuntimeError(
+                f"檔案不完整：實際寫入 {actual / 1024**3:.2f} GiB，應為 {total / 1024**3:.2f} GiB"
+            )
 
         partial.replace(target)
         state_path.unlink(missing_ok=True)
@@ -339,4 +353,7 @@ def status() -> list[dict]:
 
 
 def active_count() -> int:
-    return sum(1 for d in _downloads.values() if d.state == "downloading")
+    # queued counts too: a job accepted but not yet started is still something
+    # the UI is waiting on, and skipping it would leave the list unpushed until
+    # the first byte arrives.
+    return sum(1 for d in _downloads.values() if d.state in ("queued", "downloading"))

@@ -7,6 +7,10 @@ export interface GpuSample {
   memory_util_percent: number | null;
   frequency_mhz: number | null;
   temperature_c: number | null;
+  /** Limits the card reports for itself; null when the kernel exposes none. */
+  power_cap_w: number | null;
+  frequency_max_mhz: number | null;
+  temperature_crit_c: number | null;
   busy: boolean;
 }
 
@@ -56,6 +60,24 @@ export interface InflightRequest {
   remote_ip: string;
   resp_bytes: number;
   elapsed_ms: number;
+  /** When this entry last changed, in browser time. llama-swap never deletes a
+   *  finished request, so staleness is the only signal that it ended. */
+  updated_at: number;
+}
+
+export interface LogLine {
+  text: string;
+  source: 'proxy' | 'upstream';
+  level: 'info' | 'warn' | 'error';
+}
+
+/** llama-server prefixes with a single letter (I/W/E); llama-swap's own lines
+ *  use bracketed words. Both are matched so colour means the same thing
+ *  regardless of which process emitted the line. */
+export function logLevel(text: string): LogLine['level'] {
+  if (/\[ERROR\]|\bE \w|error|failed|panic/i.test(text)) return 'error';
+  if (/\[WARN\]|\bW \w|warn/i.test(text)) return 'warn';
+  return 'info';
 }
 
 /**
@@ -71,7 +93,7 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const fetchGpu = () => get<GpuSample>('/gpu');
+export const fetchGpu = () => get<GpuSample[]>('/gpu');
 export const fetchModels = () => get<ModelInfo[]>('/models');
 export const fetchComfy = () => get<ComfyStatus>('/comfyui');
 
@@ -81,7 +103,8 @@ export async function unloadAll(): Promise<boolean> {
 }
 
 export type StreamEvent =
-  | { type: 'gpu'; data: GpuSample }
+  | { type: 'gpu'; data: GpuSample[] }
+  | { type: 'journal'; data: JournalLine }
   | { type: 'modelStatus'; data: ModelInfo[] }
   | { type: 'throughput'; data: Throughput }
   | { type: 'inflight'; data: { operation: string; request?: InflightRequest } }
@@ -320,13 +343,47 @@ export interface ChatMessage {
   images?: string[];
 }
 
+/** Sampling controls, named as llama.cpp's server accepts them. */
+export interface ChatParams {
+  temperature: number;
+  max_tokens: number;
+  top_p: number;
+  top_k: number;
+  min_p: number;
+  repeat_penalty: number;
+  presence_penalty: number;
+  frequency_penalty: number;
+  /** -1 lets the server's own seed apply; anything else is reproducible. */
+  seed: number;
+  /** Template-level: whether a <think> block is opened at all. */
+  thinking: boolean;
+  /** Sampling-level cap on thinking tokens. -1 defers to the server default,
+   *  0 ends thinking immediately, N>0 allows that many. */
+  reasoning_budget_tokens: number;
+  system: string;
+}
+
+export const DEFAULT_PARAMS: ChatParams = {
+  temperature: 0.6,
+  max_tokens: 8192,
+  // Qwen's own generation_config; llama.cpp picks these up from the GGUF, and
+  // repeating them here keeps the panel honest about what is in effect.
+  top_p: 0.95,
+  top_k: 20,
+  min_p: 0.05,
+  repeat_penalty: 1.0,
+  presence_penalty: 0,
+  frequency_penalty: 0,
+  seed: -1,
+  thinking: true,
+  reasoning_budget_tokens: -1,
+  system: '',
+};
+
 export interface ChatOptions {
   model: string;
   messages: ChatMessage[];
-  temperature?: number;
-  maxTokens?: number;
-  /** Qwen3 burns the whole budget on thinking unless this is off. */
-  thinking?: boolean;
+  params: ChatParams;
   signal?: AbortSignal;
 }
 
@@ -377,10 +434,24 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
     signal: options.signal,
     body: JSON.stringify({
       model: options.model,
+      ...(({ thinking, reasoning_budget_tokens, system, max_tokens, ...rest }) => ({
+        ...rest,
+        max_tokens,
+        // Only sent when set: a -1 budget means "use whatever the server was
+        // started with", and passing it explicitly would say the same thing
+        // more confusingly.
+        ...(reasoning_budget_tokens >= 0 ? { reasoning_budget_tokens } : {}),
+        chat_template_kwargs: { enable_thinking: thinking },
+      }))(options.params),
       // A message with images has to use the content-parts form; plain text
       // stays a plain string, because some servers reject the array form when
       // no mmproj is loaded.
-      messages: options.messages.map(({ role, content, images }) =>
+      messages: ([
+        ...(options.params.system.trim()
+          ? [{ role: 'system' as const, content: options.params.system.trim() }]
+          : []),
+        ...options.messages,
+      ] as ChatMessage[]).map(({ role, content, images }) =>
         images?.length
           ? {
               role,
@@ -391,13 +462,10 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
             }
           : { role, content },
       ),
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 2048,
       stream: true,
       stream_options: { include_usage: true },
       // Makes llama-server attach its own timings to the final chunk.
       timings_per_token: true,
-      chat_template_kwargs: { enable_thinking: options.thinking ?? false },
     }),
   });
 
@@ -495,8 +563,165 @@ export interface SystemSample {
   };
   memory: { total_bytes: number; available_bytes: number; used_bytes: number; percent: number };
   swap: { total_bytes: number; used_bytes: number; percent: number };
-  disks: { path: string; total_bytes: number; used_bytes: number; free_bytes: number; percent: number }[];
+  disks: {
+    path: string;
+    total_bytes: number;
+    used_bytes: number;
+    /** What an ordinary process may write. */
+    free_bytes: number;
+    /** Root-reserved blocks. used + free + reserved === total. */
+    reserved_bytes: number;
+    percent: number;
+  }[];
   uptime_seconds: number | null;
 }
 
 export const fetchSystem = () => get<SystemSample>('/system');
+
+// ---------------------------------------------------------------------------
+// GPU history and devices
+// ---------------------------------------------------------------------------
+
+export interface GpuPoint {
+  /** Unix seconds. Absolute, not "seconds since page load", so the chart can
+   *  show history collected before this browser connected. */
+  t: number;
+  power: number | null;
+  vram: number | null;
+  freq: number | null;
+  temp: number | null;
+  util: number | null;
+}
+
+export interface GpuDeviceGroup {
+  title: string;
+  rows: { key: string; label: string; value: string }[];
+}
+
+export interface GpuDevice {
+  index: number;
+  name: string;
+  drm_device: string;
+  pci_bdf_address: string;
+  state: string;
+  groups: GpuDeviceGroup[];
+  live: GpuSample | null;
+}
+
+/** Series keyed by device index. JSON object keys arrive as strings. */
+export const fetchGpuHistory = (seconds = 900, points = 600) =>
+  get<{ interval: number; devices: Record<string, GpuPoint[]> }>(
+    `/gpu/history?seconds=${seconds}&points=${points}`);
+export const fetchGpuDevices = () => get<GpuDevice[]>('/gpu/devices');
+
+export interface Channel {
+  key: string;
+  label: string;
+  port: number;
+  encrypted: boolean;
+  note: string;
+  enabled: boolean;
+  /** False when the .caddy file is missing altogether. */
+  present: boolean;
+  /** Networks allowed to reach it. 'wan' means every interface. */
+  scopes: string[];
+}
+
+export interface ChannelState {
+  channels: Channel[];
+  addresses: { lan: string | null; tailscale: string | null; wan: string };
+}
+
+export const fetchChannels = () => get<ChannelState>('/channels');
+
+export interface JournalLine {
+  /** Unix seconds, from the journal's own clock. */
+  t: number;
+  unit: string;
+  /** Human name for the unit, resolved by the backend. */
+  label: string;
+  level: 'info' | 'warn' | 'error';
+  /** The readable part: a structured line's message, or the whole line. */
+  text: string;
+  /** Key/value pairs behind an expander, for lines that carried structure.
+   *  Null when there is nothing more than the text itself. */
+  fields: [string, string][] | null;
+}
+
+export const fetchLogs = (limit = 400) =>
+  get<{ lines: JournalLine[]; units: Record<string, string> }>(`/logs?limit=${limit}`);
+
+/**
+ * Open or close one channel.
+ *
+ * The failure detail is unwrapped rather than swallowed: when the backend rolls
+ * a change back it explains why in `detail`, and that sentence is the only
+ * account the user gets of what happened to their proxy.
+ */
+export async function setChannel(key: string, enabled: boolean) {
+  const res = await fetch(`${BASE}/channels/${key}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.detail ?? `切換失敗（${res.status}）`);
+  return body as { changed: boolean } & ChannelState;
+}
+
+/** Which networks may reach a channel. Same rollback semantics as above. */
+export async function setChannelScopes(key: string, scopes: string[]) {
+  const res = await fetch(`${BASE}/channels/${key}/scopes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ scopes }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.detail ?? `套用失敗（${res.status}）`);
+  return body as { changed: boolean } & ChannelState;
+}
+
+export interface VersionGroup {
+  title: string;
+  rows: { label: string; value: string }[];
+}
+
+export const fetchVersions = () => get<VersionGroup[]>('/versions');
+
+export const fetchModelSpec = (id: string) =>
+  get<ModelSpec>(`/models/${encodeURIComponent(id)}/spec`);
+export const unloadModel = (id: string) =>
+  send<{ ok: boolean }>(`/models/${encodeURIComponent(id)}/unload`, 'POST');
+
+// ---------------------------------------------------------------------------
+// Conversation history
+// ---------------------------------------------------------------------------
+
+export interface ChatSummary {
+  id: number;
+  title: string;
+  model: string;
+  pinned: number;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+}
+
+export interface StoredChat {
+  id: number;
+  title: string;
+  model: string;
+  params: Partial<ChatParams>;
+  messages: (ChatMessage & Record<string, unknown>)[];
+}
+
+export const fetchChats = (q = '') =>
+  get<ChatSummary[]>(`/chats${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+export const fetchChat = (id: number) => get<StoredChat>(`/chats/${id}`);
+export const saveChat = (payload: {
+  id: number | null; model: string; params: ChatParams;
+  messages: unknown[]; title?: string;
+}) => send<{ id: number }>('/chats', 'POST', payload);
+export const patchChat = (id: number, patch: { title?: string; pinned?: boolean }) =>
+  send<{ ok: boolean }>(`/chats/${id}`, 'PATCH', patch);
+export const deleteChat = (id: number) => send<{ ok: boolean }>(`/chats/${id}`, 'DELETE');

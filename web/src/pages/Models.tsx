@@ -4,11 +4,13 @@ import {
   InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
-  DeleteOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined,
+  DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined, PoweroffOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
+import { useStream } from '../stream';
 import {
-  deleteFile, deleteModel, deletePartial, fetchModelFiles, fetchModels, fetchPartials,
-  loadModel, modelFileRefs, saveModel, subscribe, unloadAll,
+  deleteFile, deleteModel, deletePartial, fetchModelFiles, fetchModelSpec, fetchPartials,
+  loadModel, modelFileRefs, saveModel, unloadAll, unloadModel,
   type ModelFile, type ModelFileRef, type ModelInfo, type ModelSpec, type PartialFile,
 } from '../api';
 
@@ -27,10 +29,13 @@ const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
 export default function Models() {
   const { message } = AntApp.useApp();
-  const [models, setModels] = useState<ModelInfo[]>([]);
+  const { models, refreshModels } = useStream();
   const [files, setFiles] = useState<ModelFile[]>([]);
   const [partials, setPartials] = useState<PartialFile[]>([]);
   const [open, setOpen] = useState(false);
+  // Non-null while editing an existing model; its id must stay fixed, because
+  // changing it would create a second entry rather than rename the first.
+  const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [form] = Form.useForm<ModelSpec>();
 
@@ -41,19 +46,12 @@ export default function Models() {
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(() => {
-    fetchModels().then(setModels).catch(() => undefined);
+    refreshModels();
     fetchModelFiles().then(setFiles).catch(() => undefined);
     fetchPartials().then(setPartials).catch(() => undefined);
-  }, []);
+  }, [refreshModels]);
 
   useEffect(() => { refresh(); }, [refresh]);
-
-  useEffect(() => subscribe((event) => {
-    if (event.type === 'modelStatus') {
-      const next = event.data as ModelInfo[];
-      setModels(next.map((m) => ({ ...m, running: m.state === 'ready' || m.state === 'starting' })));
-    }
-  }), []);
 
   const onSave = async () => {
     const values = await form.validateFields();
@@ -61,10 +59,35 @@ export default function Models() {
       await saveModel({ ...values, name: values.name || values.id });
       message.success('已寫入設定，llama-swap 會自動重載');
       setOpen(false);
+      setEditing(null);
       form.resetFields();
       window.setTimeout(refresh, 2500);
     } catch (error) {
       message.error((error as Error).message);
+    }
+  };
+
+  const openEdit = async (id: string) => {
+    try {
+      const spec = await fetchModelSpec(id);
+      form.setFieldsValue(spec);
+      setEditing(id);
+      setOpen(true);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const onUnload = async (id: string) => {
+    setBusy(id);
+    try {
+      await unloadModel(id);
+      message.success(`已卸載 ${id}`);
+      refresh();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -143,7 +166,7 @@ export default function Models() {
               全部卸載
             </Button>
             <Button size="small" type="primary" icon={<PlusOutlined />}
-                    onClick={() => { form.setFieldsValue(EMPTY); setOpen(true); }}>
+                    onClick={() => { form.setFieldsValue(EMPTY); setEditing(null); setOpen(true); }}>
               新增模型
             </Button>
           </Space>
@@ -182,7 +205,7 @@ export default function Models() {
               render: (ttl: number | null | undefined) => (ttl ? `${Math.round(ttl / 60)} 分` : '—'),
             },
             {
-              title: '操作', width: 170,
+              title: '操作', width: 230,
               render: (_, row) => (
                 <Space size="small">
                   <Tooltip title="送一個極小的請求把模型載入顯存">
@@ -191,6 +214,15 @@ export default function Models() {
                             onClick={() => onLoad(row.id)}>
                       載入
                     </Button>
+                  </Tooltip>
+                  <Tooltip title="卸載，釋放顯存">
+                    <Button size="small" icon={<PoweroffOutlined />}
+                            loading={busy === row.id} disabled={!row.running}
+                            onClick={() => onUnload(row.id)} />
+                  </Tooltip>
+                  <Tooltip title="修改設定">
+                    <Button size="small" icon={<EditOutlined />}
+                            onClick={() => openEdit(row.id)} />
                   </Tooltip>
                   <Button size="small" danger onClick={() => openDelete(row)}>移除</Button>
                 </Space>
@@ -351,10 +383,10 @@ export default function Models() {
       </Modal>
 
       <Drawer
-        title="新增 / 修改模型"
+        title={editing ? `修改 ${editing}` : '新增模型'}
         width={560}
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => { setOpen(false); setEditing(null); }}
         extra={<Button type="primary" onClick={onSave}>儲存</Button>}
       >
         <Paragraph type="secondary" style={{ fontSize: 12 }}>
@@ -363,8 +395,10 @@ export default function Models() {
         </Paragraph>
         <Form form={form} layout="vertical" initialValues={EMPTY}>
           <Form.Item name="id" label="模型 ID" rules={[{ required: true }]}
-                     extra="API 請求時使用的名稱，例如 hermes-35b-apex">
-            <Input placeholder="my-model" />
+                     extra={editing
+                       ? '既有模型的 ID 不可更改——改了會另外建立一筆，而不是改名。'
+                       : 'API 請求時使用的名稱，例如 hermes-35b-apex'}>
+            <Input placeholder="my-model" disabled={!!editing} />
           </Form.Item>
           <Form.Item name="name" label="顯示名稱"><Input /></Form.Item>
           <Form.Item name="description" label="說明"><Input.TextArea rows={2} /></Form.Item>

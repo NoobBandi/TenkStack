@@ -1,0 +1,170 @@
+import { Layout, Menu, Tooltip, Typography } from 'antd';
+import {
+  ApiOutlined, AppstoreOutlined, CloudDownloadOutlined, DashboardOutlined,
+  FileTextOutlined, MessageOutlined,
+  PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
+} from '@ant-design/icons';
+import { Link, useLocation } from 'react-router-dom';
+import type { GpuSample, ModelInfo } from '../api';
+import { LINE, MONO } from '../theme';
+
+const { Sider } = Layout;
+const { Text } = Typography;
+
+export const SIDEBAR_WIDTH = 208;
+export const SIDEBAR_COLLAPSED = 64;
+
+/** Grouped by what the user is doing, not by which service implements it. */
+export const NAV_GROUPS = [
+  {
+    label: '使用',
+    items: [
+      { key: '/', icon: <DashboardOutlined />, label: '總覽' },
+      { key: '/chat', icon: <MessageOutlined />, label: '對話' },
+      { key: '/comfyui', icon: <PictureOutlined />, label: '圖像生成' },
+    ],
+  },
+  {
+    label: '管理',
+    items: [
+      { key: '/models', icon: <AppstoreOutlined />, label: '模型' },
+      { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
+      { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
+      { key: '/connections', icon: <ApiOutlined />, label: '連線' },
+      { key: '/logs', icon: <FileTextOutlined />, label: '日誌' },
+      { key: '/users', icon: <TeamOutlined />, label: '使用者' },
+      { key: '/settings', icon: <SettingOutlined />, label: '設定' },
+    ],
+  },
+];
+
+interface Props {
+  collapsed: boolean;
+  onCollapse: (collapsed: boolean) => void;
+  gpus: GpuSample[];
+  models: ModelInfo[];
+}
+
+/** A one-line bar, drawn rather than componentised, so the footer stays dense. */
+function Meter({ label, value, percent, warn }: {
+  label: string; value: string; percent: number; warn?: boolean;
+}) {
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+        <Text style={{ fontSize: 10, opacity: 0.5, letterSpacing: 0.4 }}>{label}</Text>
+        <Text style={{ fontSize: 10, fontFamily: MONO, opacity: 0.8 }}>{value}</Text>
+      </div>
+      <div style={{ height: 2, background: LINE.faint, borderRadius: 1 }}>
+        <div style={{
+          height: '100%', width: `${Math.min(100, percent)}%`, borderRadius: 1,
+          background: warn ? '#e0a83c' : 'rgba(255,255,255,0.7)',
+          transition: 'width 400ms ease',
+        }} />
+      </div>
+    </div>
+  );
+}
+
+export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) {
+  const location = useLocation();
+  const loaded = models.filter((m) => m.running);
+  // 250 W is roughly this card's ceiling under load; the bar is a sense of
+  // proportion, not a calibrated instrument.
+  const totalPower = gpus.reduce((sum, g) => sum + (g.power_w ?? 0), 0);
+  const powerPercent = (totalPower / (250 * Math.max(1, gpus.length))) * 100;
+  const busy = gpus.some((g) => g.busy);
+
+  return (
+    <Sider
+      collapsible
+      collapsed={collapsed}
+      onCollapse={onCollapse}
+      width={SIDEBAR_WIDTH}
+      collapsedWidth={SIDEBAR_COLLAPSED}
+      // Fixed, not sticky: the nav is a frame around the page, and scrolling a
+      // long model list should never move it.
+      style={{
+        position: 'fixed', insetInlineStart: 0, top: 0, bottom: 0,
+        height: '100vh', overflow: 'hidden',
+        borderInlineEnd: `1px solid ${LINE.faint}`,
+        display: 'flex', flexDirection: 'column',
+      }}
+    >
+      <Link
+        to="/"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 10, height: 56,
+          padding: collapsed ? '0 0 0 21px' : '0 16px', color: 'inherit',
+          borderBottom: `1px solid ${LINE.faint}`, flexShrink: 0,
+        }}
+      >
+        <Tooltip title={busy ? 'GPU 運算中' : 'GPU 閒置'} placement="right">
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+            background: busy ? '#5ccf8f' : LINE.strong,
+            boxShadow: busy ? '0 0 8px rgba(92,207,143,0.8)' : 'none',
+            transition: 'background 300ms, box-shadow 300ms',
+          }} />
+        </Tooltip>
+        {!collapsed && (
+          <Text style={{ fontSize: 13, letterSpacing: 1.6, fontFamily: MONO, whiteSpace: 'nowrap' }}>
+            TENKS CONSOLE
+          </Text>
+        )}
+      </Link>
+
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 8 }}>
+        <Menu
+          mode="inline"
+          selectedKeys={[location.pathname]}
+          style={{ borderInlineEnd: 0, background: 'transparent' }}
+          items={NAV_GROUPS.map((group) => ({
+            key: group.label,
+            type: 'group' as const,
+            label: collapsed ? undefined : (
+              <span style={{ fontSize: 10, letterSpacing: 1.2, opacity: 0.4 }}>
+                {group.label.toUpperCase()}
+              </span>
+            ),
+            children: group.items.map((item) => ({
+              key: item.key,
+              icon: item.icon,
+              label: <Link to={item.key}>{item.label}</Link>,
+            })),
+          }))}
+        />
+      </div>
+
+      {!collapsed && (
+        <div style={{
+          padding: '12px 16px 56px', borderTop: `1px solid ${LINE.faint}`, flexShrink: 0,
+        }}>
+          {/* One bar per card: this strip answers "is anything full?", and a
+              combined bar cannot say which card it means. */}
+          {gpus.map((g) => {
+            const pc = g.memory_total_mib
+              ? ((g.memory_used_mib ?? 0) / g.memory_total_mib) * 100 : 0;
+            return (
+              <Meter
+                key={g.index}
+                label={gpus.length > 1 ? `VRAM ${g.index}` : 'VRAM'}
+                value={`${((g.memory_used_mib ?? 0) / 1024).toFixed(1)}G`}
+                percent={pc}
+                warn={pc > 92}
+              />
+            );
+          })}
+          <Meter
+            label="POWER"
+            value={`${totalPower.toFixed(0)}W`}
+            percent={powerPercent}
+          />
+          <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
+            {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
+          </Text>
+        </div>
+      )}
+    </Sider>
+  );
+}

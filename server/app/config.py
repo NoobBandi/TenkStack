@@ -406,3 +406,69 @@ def delete_partial(filename: str) -> dict:
     except OSError as exc:
         return {"ok": False, "reason": str(exc)}
     return {"ok": True, "filename": name, "size_bytes": size}
+
+
+_ARG_PATTERNS = {
+    "model_file": re.compile(r"--model\s+\S*?([^/\s]+\.gguf)"),
+    "mmproj": re.compile(r"--mmproj\s+\S*?([^/\s]+\.gguf)"),
+    "ctx_size": re.compile(r"--ctx-size\s+(\d+)"),
+    "n_gpu_layers": re.compile(r"--n-gpu-layers\s+(\d+)"),
+}
+
+# Flags the editor owns. Anything else in cmd is the user's own and is handed
+# back as free text rather than silently dropped on the next save.
+_MANAGED = ("--model", "--mmproj", "--ctx-size", "--n-gpu-layers",
+            "--host", "--port", "--jinja")
+
+
+def read_model_spec(model_id: str) -> dict | None:
+    """Parse a model's cmd back into the fields the editor shows.
+
+    Editing has to start from what is actually configured, and the config
+    stores a command line rather than a form. Unmanaged flags are preserved
+    verbatim in `extra`, so a hand-written option survives a round trip through
+    the UI instead of being quietly lost.
+    """
+    try:
+        data = _load()
+    except Exception:
+        logger.exception("could not read the config while loading a model spec")
+        return None
+
+    spec = (data.get("models") or {}).get(model_id)
+    if spec is None:
+        return None
+
+    cmd = str(spec.get("cmd") or "")
+    values = {}
+    for field, pattern in _ARG_PATTERNS.items():
+        match = pattern.search(cmd)
+        values[field] = match.group(1) if match else None
+
+    extra = []
+    for line in cmd.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("${") or stripped.startswith("#"):
+            continue
+        if any(stripped.startswith(flag) for flag in _MANAGED):
+            continue
+        extra.append(stripped)
+
+    group = next(
+        (name for name, g in (data.get("groups") or {}).items()
+         if model_id in (g.get("members") or [])),
+        None,
+    )
+
+    return {
+        "id": model_id,
+        "name": spec.get("name") or model_id,
+        "description": spec.get("description") or "",
+        "model_file": values["model_file"] or "",
+        "mmproj": values["mmproj"],
+        "ctx_size": int(values["ctx_size"]) if values["ctx_size"] else 16384,
+        "n_gpu_layers": int(values["n_gpu_layers"]) if values["n_gpu_layers"] else 0,
+        "ttl": int(spec.get("ttl") or 0),
+        "group": group,
+        "extra": "\n".join(extra),
+    }

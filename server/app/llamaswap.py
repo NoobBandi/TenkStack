@@ -84,6 +84,22 @@ async def unload_all() -> bool:
             return False
 
 
+async def unload_model(model_id: str) -> bool:
+    """Unload one model, leaving any others resident.
+
+    Verified against llama-swap v247: POST /api/models/unload/{id} frees only
+    the named model, while the bare /unload frees everything. Sharing one card
+    between an LLM and ComfyUI makes that distinction worth having.
+    """
+    async with httpx.AsyncClient(base_url=BASE_URL, timeout=60) as client:
+        try:
+            resp = await client.post(f"/api/models/unload/{model_id}")
+            return resp.status_code == 200
+        except httpx.HTTPError as exc:
+            logger.warning("llama-swap unload of %s failed: %s", model_id, exc)
+            return False
+
+
 def _parse_frame(payload: str) -> dict | None:
     """Unwrap one SSE frame.
 

@@ -59,11 +59,9 @@ export default function SystemStats({ sample }: { sample: SystemSample | null })
               showInfo={false}
               status={statusOf(cpu?.percent ?? 0)}
             />
-            <Tooltip title={cpu?.model ?? ''}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {cpu?.cores ?? '—'} 執行緒 ・ 負載 {cpu?.load?.join(' / ') ?? '—'}
-              </Text>
-            </Tooltip>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {cpu?.cores ?? '—'} 執行緒 ・ 負載 {cpu?.load?.join(' / ') ?? '—'}
+            </Text>
           </Space>
         </Col>
 
@@ -96,8 +94,10 @@ export default function SystemStats({ sample }: { sample: SystemSample | null })
                   <Text strong style={{ fontSize: 13 }}>
                     <HddOutlined /> {disk.path}
                   </Text>
+                  {/* Available, not total-minus-used: this is the number that
+                      decides whether the next model fits. */}
                   <Text style={{ fontSize: 13 }}>
-                    {gib(disk.used_bytes).toFixed(0)} / {gib(disk.total_bytes).toFixed(0)} GiB
+                    可用 {gib(disk.free_bytes).toFixed(0)} GiB
                   </Text>
                 </Space>
                 <Progress
@@ -106,9 +106,20 @@ export default function SystemStats({ sample }: { sample: SystemSample | null })
                   showInfo={false}
                   status={statusOf(disk.percent)}
                 />
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  剩餘 {gib(disk.free_bytes).toFixed(0)} GiB
-                </Text>
+                {/* The three parts are shown together because they must add up
+                    to the total; listing only "used" and "available" makes the
+                    arithmetic look wrong, since the reserve is missing from it. */}
+                <Tooltip title={
+                  `已用 ${gib(disk.used_bytes).toFixed(1)} + 可用 ${gib(disk.free_bytes).toFixed(1)}`
+                  + ` + 系統保留 ${gib(disk.reserved_bytes).toFixed(1)} = ${gib(disk.total_bytes).toFixed(1)} GiB。`
+                  + ' 保留區是檔案系統留給 root 的空間（ext4 預設 5%），一般程序寫不進去。'
+                }>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    已用 {gib(disk.used_bytes).toFixed(0)} ・ 保留{' '}
+                    {gib(disk.reserved_bytes).toFixed(0)} ・ 共{' '}
+                    {gib(disk.total_bytes).toFixed(0)} GiB
+                  </Text>
+                </Tooltip>
               </Space>
             ))}
             {!sample?.disks?.length && <Text type="secondary" style={{ fontSize: 12 }}>—</Text>}
