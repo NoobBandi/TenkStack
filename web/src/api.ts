@@ -51,6 +51,13 @@ export interface ComfyDevice {
  * instance uses is fixed at launch -- so more than one card means more than one
  * instance, and picking a card means picking which one to open.
  */
+/** ComfyUI-Manager's task queue, or null when the node is not installed. */
+export interface ComfyManagerState {
+  processing: boolean;
+  done: number;
+  total: number;
+}
+
 export interface ComfyInstance {
   port: number;
   /** Where Caddy republishes it behind the console's login, or null when no
@@ -62,6 +69,7 @@ export interface ComfyInstance {
   device: ComfyDevice | null;
   queue_running: number;
   queue_pending: number;
+  manager: ComfyManagerState | null;
 }
 
 export interface Throughput {
@@ -291,6 +299,18 @@ export const fetchComfyHistory = (port: number) =>
   get<ComfyHistoryItem[]>(`/comfyui/history?port=${port}&limit=12`);
 export const interruptComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/interrupt?port=${port}`, 'POST');
+
+// The image track (PyTorch, oneAPI, Python) is not here: replacing it means
+// replacing the container this would be running inside, so it stays a shell
+// operation. These drive the other track -- ComfyUI and its custom nodes, which
+// are git checkouts in the instance's own storage and are untouched by an image
+// change.
+export const checkComfyUpdates = (port: number) =>
+  send<{ available: boolean }>(`/comfyui/update/check?port=${port}`, 'POST');
+export const updateComfy = (port: number) =>
+  send<{ ok: boolean }>(`/comfyui/update?port=${port}`, 'POST');
+export const restartComfy = (port: number) =>
+  send<{ ok: boolean }>(`/comfyui/restart?port=${port}`, 'POST');
 // Proxied through the console so the images stay on one origin -- and so the
 // port travels with them, because with more than one instance the filename
 // alone no longer says which machine-side queue produced it.

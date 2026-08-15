@@ -432,6 +432,23 @@ async def _probe_comfyui(port: int) -> dict | None:
         except httpx.HTTPError:
             return None
 
+        # ComfyUI-Manager is a custom node, so its absence is an ordinary state
+        # rather than a failure: an instance without it simply has no update
+        # controls. Asked on every poll instead of only while an update is
+        # running, so progress survives a page reload and shows up even when
+        # the update was started from ComfyUI's own interface.
+        try:
+            mgr = await client.get("/api/manager/queue/status")
+            mgr.raise_for_status()
+            m = mgr.json()
+            manager = {
+                "processing": bool(m.get("is_processing")),
+                "done": m.get("done_count") or 0,
+                "total": m.get("total_count") or 0,
+            }
+        except (httpx.HTTPError, ValueError):
+            manager = None
+
     s, q = stats.json(), queue.json()
     system = s.get("system") or {}
     devices = s.get("devices") or []
@@ -450,6 +467,7 @@ async def _probe_comfyui(port: int) -> dict | None:
         "device": devices[0] if devices else None,
         "queue_running": len(q.get("queue_running") or []),
         "queue_pending": len(q.get("queue_pending") or []),
+        "manager": manager,
     }
 
 
@@ -458,6 +476,112 @@ async def read_comfyui_instances():
     """Every ComfyUI on this machine, in port order."""
     found = await asyncio.gather(*(_probe_comfyui(p) for p in COMFYUI_PORTS))
     return [i for i in found if i is not None]
+
+
+# Which catalogue of known nodes Manager consults: 'remote', 'local' or 'cache'.
+#
+# 'local' rather than the 'cache' its own interface defaults to, because on this
+# install the other two cannot work. They send Manager to the channel URL from
+# its config, which it then checks against `valid_channels` -- a set populated
+# lazily by get_channel_dict(), which normalize_channel() skips entirely for a
+# channel that is already an https:// URL. The configured default is such a URL,
+# so the set never gains it and the call fails with InvalidChannel. 'local'
+# resolves to the channel named 'local', which is in that set from the start,
+# and reads the catalogue that ships with Manager instead of fetching one.
+#
+# Little is given up: the catalogue is for discovering nodes that are not
+# installed, and neither call below installs anything. Whether the installed
+# trees are behind is settled by the git fetch against each of them, which runs
+# the same way under every mode.
+MANAGER_MODE = "local"
+
+# Updating ComfyUI is two independent tracks, and only one of them is here.
+#
+# The image carries PyTorch, oneAPI and Python, and is replaced by pulling a new
+# one and re-running run-comfyui.sh. It cannot be done from a process running
+# inside the container it would be replacing, so it stays a shell operation.
+#
+# ComfyUI itself and its custom nodes are git checkouts in the instance's own
+# storage, unaffected by an image change -- the entrypoint only seeds them when
+# main.py is absent. That track is what these endpoints drive, through
+# ComfyUI-Manager, which is already the thing that knows how to update a tree it
+# installed. The console adds one thing Manager cannot: doing it to every
+# instance at once, which is what keeps this track cheap as cards are added.
+
+
+@app.post("/api/comfyui/update/check")
+async def comfyui_update_check(port: int = COMFYUI_PORTS[0]):
+    """Whether anything is out of date, without changing anything.
+
+    Slow -- it is a git fetch against every installed node, forty of them here,
+    each a network round trip. Measured at just under three minutes on this
+    machine, hence the timeout: it is sized to a slow run, not a typical one,
+    because giving up early would report "unreachable" for a call that was
+    working. Worth the wait because the alternative is updating blind.
+    """
+    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=600) as client:
+        try:
+            resp = await client.post(
+                "/api/customnode/fetch_updates", json={"mode": MANAGER_MODE})
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if resp.status_code not in (200, 201):
+        raise HTTPException(status_code=502, detail=f"manager returned {resp.status_code}")
+    # 201 is Manager's way of saying "something moved"; 200 means up to date.
+    return {"available": resp.status_code == 201}
+
+
+@app.post("/api/comfyui/update")
+async def comfyui_update(port: int = COMFYUI_PORTS[0], core: bool = True, nodes: bool = True):
+    """Queue an update and start the worker.
+
+    Core and nodes go together by default: updating one without the other is
+    the most common way to break a ComfyUI, because nodes track the core API.
+    """
+    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=300) as client:
+        try:
+            # Core first, then nodes, matching the order Manager's own interface
+            # queues them in.
+            if core:
+                resp = await client.post("/api/manager/queue/update_comfyui", json={})
+                resp.raise_for_status()
+            if nodes:
+                # Manager saves a snapshot before queueing these, which is the
+                # rollback point if an update goes wrong.
+                resp = await client.post(
+                    "/api/manager/queue/update_all", json={"mode": MANAGER_MODE})
+                if resp.status_code == 401:
+                    raise HTTPException(status_code=409, detail="更新已在進行中")
+                if resp.status_code == 403:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="ComfyUI-Manager 的 security_level 不允許更新",
+                    )
+                resp.raise_for_status()
+            # 201 means a worker was already running, which is not an error --
+            # whatever was just queued will be picked up by it.
+            resp = await client.post("/api/manager/queue/start", json={})
+            if resp.status_code not in (200, 201):
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/comfyui/restart")
+async def comfyui_restart(port: int = COMFYUI_PORTS[0]):
+    """Restart ComfyUI so an update takes effect.
+
+    Manager restarts by execv'ing over its own process, so the reply is never
+    written -- the connection dies mid-response. A dropped connection here is
+    the success case, not a failure to report.
+    """
+    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=10) as client:
+        try:
+            await client.post("/api/manager/reboot", json={})
+        except httpx.HTTPError:
+            pass
+    return {"ok": True}
 
 
 @app.get("/api/comfyui/history")

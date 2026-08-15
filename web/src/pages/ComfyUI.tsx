@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Empty, Image, Space, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Empty, Image, Space, Tag, Tooltip, Typography,
 } from 'antd';
-import { ExportOutlined, StopOutlined } from '@ant-design/icons';
 import {
-  comfyImageUrl, fetchComfyHistory, fetchComfyInstances, interruptComfy,
+  CloudDownloadOutlined, DownOutlined, ExportOutlined, ReloadOutlined,
+  SearchOutlined, StopOutlined, SyncOutlined,
+} from '@ant-design/icons';
+import {
+  checkComfyUpdates, comfyImageUrl, fetchComfyHistory, fetchComfyInstances,
+  interruptComfy, restartComfy, updateComfy,
   type ComfyHistoryItem, type ComfyInstance,
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -53,29 +57,77 @@ function deviceLabel(instance: ComfyInstance): [string, string] | null {
   return [slot, card || instance.device.type];
 }
 
-function Instance({ instance, onChanged }: {
+function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
   instance: ComfyInstance;
   onChanged: () => void;
+  /** True once an update has finished here but the process still runs the old
+   *  code, so the row can say what is left to do. */
+  staleAfterUpdate: boolean;
+  onRestarted: () => void;
 }) {
   const { message } = AntApp.useApp();
   const [stopping, setStopping] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [starting, setStarting] = useState(false);
   const url = instanceUrl(instance);
   const device = deviceLabel(instance);
   const busy = instance.queue_running > 0;
   const queued = instance.queue_pending;
+  const manager = instance.manager;
+  const updating = manager?.processing ?? false;
 
-  const onInterrupt = async () => {
-    setStopping(true);
+  /** `done` is optional: an action that reports its own result says it once. */
+  const run = async (
+    label: string,
+    setBusy: (v: boolean) => void,
+    action: () => Promise<unknown>,
+    done?: string,
+  ) => {
+    setBusy(true);
     try {
-      await interruptComfy(instance.port);
-      message.success('已送出中斷');
+      await action();
+      if (done) message.success(done);
       onChanged();
     } catch (error) {
-      message.error((error as Error).message);
+      message.error(`${label}失敗：${(error as Error).message}`);
     } finally {
-      setStopping(false);
+      setBusy(false);
     }
   };
+
+  const onInterrupt = () =>
+    run('中斷', setStopping, () => interruptComfy(instance.port), '已送出中斷');
+
+  const onCheck = () =>
+    run('檢查更新', setChecking, async () => {
+      // A git fetch against every installed node, so minutes rather than
+      // seconds. Said up front, because a button that just spins reads as hung.
+      message.loading({ content: '檢查中，四十個節點各要連一次 GitHub…', key: 'check', duration: 0 });
+      try {
+        const { available } = await checkComfyUpdates(instance.port);
+        // The same channel either way: "nothing to do" is the answer people are
+        // hoping for, not a failure.
+        message.open({
+          type: available ? 'info' : 'success',
+          content: available ? '有可更新的項目' : '已是最新',
+          key: 'check',
+        });
+      } catch (error) {
+        // The loading toast has duration 0, so it has to be taken down by hand
+        // or a failed check leaves it spinning forever.
+        message.destroy('check');
+        throw error;
+      }
+    });
+
+  const onUpdate = () =>
+    run('更新', setStarting, () => updateComfy(instance.port), '已開始更新');
+
+  const onRestart = () =>
+    run('重啟', setStarting, async () => {
+      await restartComfy(instance.port);
+      onRestarted();
+    }, '已送出重啟');
 
   return (
     <Card size="small">
@@ -110,11 +162,61 @@ function Instance({ instance, onChanged }: {
           <Tag style={{ fontFamily: MONO, fontSize: 11 }}>v{instance.version}</Tag>
         </Tooltip>
 
+        {updating && (
+          <Space size={6}>
+            <SyncOutlined spin style={{ fontSize: 12, opacity: 0.7 }} />
+            <Text style={{ fontSize: 12, fontFamily: MONO }}>
+              更新中 {manager!.done}/{manager!.total}
+            </Text>
+          </Space>
+        )}
+        {!updating && staleAfterUpdate && (
+          // The files on disk changed; the running process did not. Saying so
+          // is the point -- an update that silently needs a restart looks like
+          // an update that did nothing.
+          <Tag color="gold" style={{ fontSize: 11 }}>更新完成，待重啟</Tag>
+        )}
+
         <Space size={8} style={{ marginLeft: 'auto' }}>
           <Button size="small" danger icon={<StopOutlined />}
                   disabled={!busy} loading={stopping} onClick={onInterrupt}>
             中斷
           </Button>
+
+          {manager && (
+            <Dropdown
+              disabled={updating}
+              menu={{
+                items: [
+                  {
+                    key: 'check',
+                    label: '檢查更新',
+                    icon: <SearchOutlined />,
+                    onClick: () => void onCheck(),
+                  },
+                  {
+                    key: 'update',
+                    label: '更新 ComfyUI 與節點',
+                    icon: <CloudDownloadOutlined />,
+                    onClick: () => void onUpdate(),
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'restart',
+                    label: '重啟',
+                    icon: <ReloadOutlined />,
+                    danger: busy,
+                    onClick: () => void onRestart(),
+                  },
+                ],
+              }}
+            >
+              <Button size="small" loading={checking || starting || updating}>
+                維護 <DownOutlined style={{ fontSize: 9 }} />
+              </Button>
+            </Dropdown>
+          )}
+
           {url ? (
             <Button size="small" type="primary" ghost icon={<ExportOutlined />}
                     href={url} target="_blank" rel="noreferrer">
@@ -135,8 +237,15 @@ function Instance({ instance, onChanged }: {
 }
 
 export default function ComfyUI() {
+  const { message } = AntApp.useApp();
   const [instances, setInstances] = useState<ComfyInstance[] | null>(null);
   const [history, setHistory] = useState<{ port: number; item: ComfyHistoryItem }[]>([]);
+  const [updatingAll, setUpdatingAll] = useState(false);
+  /** Ports whose update queue was running and then stopped. Derived from the
+   *  poll rather than from the click, so it survives a page reload and catches
+   *  an update started from ComfyUI's own interface. */
+  const [stale, setStale] = useState<Set<number>>(new Set());
+  const wasUpdating = useRef<Set<number>>(new Set());
 
   const refresh = useCallback(async () => {
     let found: ComfyInstance[] = [];
@@ -148,6 +257,19 @@ export default function ComfyUI() {
       return;
     }
     setInstances(found);
+
+    const now = new Set(found.filter((i) => i.manager?.processing).map((i) => i.port));
+    const finished = [...wasUpdating.current].filter((p) => !now.has(p));
+    wasUpdating.current = now;
+    if (finished.length) {
+      setStale((prev) => new Set([...prev, ...finished]));
+    }
+    // An instance that restarted comes back with a fresh queue, so the version
+    // on screen is the running one again and the flag has done its job.
+    setStale((prev) => {
+      const kept = [...prev].filter((p) => found.some((i) => i.port === p));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
 
     // Fetched per instance and tagged, because a wall of thumbnails from an
     // unnamed source stops being an answer as soon as there is more than one.
@@ -170,9 +292,37 @@ export default function ComfyUI() {
   }, [refresh]);
 
   const many = (instances?.length ?? 0) > 1;
+  // The whole point of the shared button: updating N instances is one action,
+  // so per-instance state staying separate costs nothing in effort.
+  const updatable = (instances ?? []).filter((i) => i.manager && !i.manager.processing);
+
+  const onUpdateAll = async () => {
+    setUpdatingAll(true);
+    const failed: number[] = [];
+    await Promise.all(updatable.map((i) =>
+      updateComfy(i.port).catch(() => { failed.push(i.port); })));
+    setUpdatingAll(false);
+    // Named rather than counted: with two cards, "1 個失敗" does not say which
+    // one still needs attention.
+    if (failed.length) message.error(`這些沒能開始：${failed.map((p) => `:${p}`).join('、')}`);
+    else message.success(`已對 ${updatable.length} 個實例開始更新`);
+    void refresh();
+  };
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {many && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <Button
+            size="small" icon={<CloudDownloadOutlined />}
+            loading={updatingAll} disabled={!updatable.length}
+            onClick={() => void onUpdateAll()}
+          >
+            全部更新（{updatable.length}）
+          </Button>
+        </div>
+      )}
+
       {instances !== null && instances.length === 0 && (
         <Alert
           type="warning"
@@ -191,7 +341,17 @@ export default function ComfyUI() {
       )}
 
       {instances?.map((i) => (
-        <Instance key={i.port} instance={i} onChanged={() => void refresh()} />
+        <Instance
+          key={i.port}
+          instance={i}
+          onChanged={() => void refresh()}
+          staleAfterUpdate={stale.has(i.port)}
+          onRestarted={() => setStale((prev) => {
+            const next = new Set(prev);
+            next.delete(i.port);
+            return next;
+          })}
+        />
       ))}
 
       <Card
