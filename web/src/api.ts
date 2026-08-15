@@ -36,13 +36,32 @@ export interface ModelCapabilities {
   source: 'live' | 'config';
 }
 
-export interface ComfyStatus {
-  reachable: boolean;
-  version?: string;
-  python?: string;
-  devices?: { name?: string; type?: string; vram_total?: number; vram_free?: number }[];
-  queue_running?: number;
-  queue_pending?: number;
+export interface ComfyDevice {
+  name: string;
+  type: string;
+  index: number;
+  vram_total: number;
+  vram_free: number;
+}
+
+/**
+ * One running ComfyUI.
+ *
+ * There is a list of these rather than a single status because the card an
+ * instance uses is fixed at launch -- so more than one card means more than one
+ * instance, and picking a card means picking which one to open.
+ */
+export interface ComfyInstance {
+  port: number;
+  /** Where Caddy republishes it behind the console's login, or null when no
+   *  site block has been written for it yet. */
+  public_port: number | null;
+  version: string | null;
+  python: string;
+  torch: string | null;
+  device: ComfyDevice | null;
+  queue_running: number;
+  queue_pending: number;
 }
 
 export interface Throughput {
@@ -95,7 +114,6 @@ async function get<T>(path: string): Promise<T> {
 
 export const fetchGpu = () => get<GpuSample[]>('/gpu');
 export const fetchModels = () => get<ModelInfo[]>('/models');
-export const fetchComfy = () => get<ComfyStatus>('/comfyui');
 
 export async function unloadAll(): Promise<boolean> {
   const res = await fetch(`${BASE}/models/unload`, { method: 'POST' });
@@ -268,10 +286,19 @@ export interface ComfyHistoryItem {
   images: { filename: string; subfolder: string; type: string }[];
 }
 
-export const fetchComfyHistory = () => get<ComfyHistoryItem[]>('/comfyui/history?limit=12');
-export const interruptComfy = () => send<{ ok: boolean }>('/comfyui/interrupt', 'POST');
-export const comfyImageUrl = (img: { filename: string; subfolder: string; type: string }) =>
-  `${BASE}/comfyui/image?filename=${encodeURIComponent(img.filename)}` +
+export const fetchComfyInstances = () => get<ComfyInstance[]>('/comfyui/instances');
+export const fetchComfyHistory = (port: number) =>
+  get<ComfyHistoryItem[]>(`/comfyui/history?port=${port}&limit=12`);
+export const interruptComfy = (port: number) =>
+  send<{ ok: boolean }>(`/comfyui/interrupt?port=${port}`, 'POST');
+// Proxied through the console so the images stay on one origin -- and so the
+// port travels with them, because with more than one instance the filename
+// alone no longer says which machine-side queue produced it.
+export const comfyImageUrl = (
+  port: number,
+  img: { filename: string; subfolder: string; type: string },
+) =>
+  `${BASE}/comfyui/image?port=${port}&filename=${encodeURIComponent(img.filename)}` +
   `&subfolder=${encodeURIComponent(img.subfolder)}&type=${encodeURIComponent(img.type)}`;
 
 // ---------------------------------------------------------------------------

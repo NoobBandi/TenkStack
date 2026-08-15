@@ -32,7 +32,23 @@ from . import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-COMFYUI_URL = "http://127.0.0.1:8188"
+# ComfyUI instances are discovered, not configured.
+#
+# Which GPU an instance uses is fixed when it starts: --oneapi-device-selector,
+# --cuda-device and --default-device are all launch flags, so a running instance
+# cannot be moved to another card. The arrangement that lets two cards work at
+# once is therefore one instance per card, each on its own port with its own
+# queue -- and choosing a card means choosing which instance to open, not
+# setting anything.
+#
+# Given that, a config file listing the instances would be a second copy of a
+# truth the running processes already hold, and would be wrong in both
+# directions: an instance listed but not running, or running but not listed. So
+# the ports are probed, and each instance self-describes -- /system_stats
+# reports the device it was launched against.
+COMFYUI_PORTS = tuple(range(8188, 8192))
+# Caddy republishes each one behind the console's login: 8188 on 8444, and so on.
+COMFYUI_PUBLIC_OFFSET = 8444 - 8188
 GPU_POLL_SECONDS = 2.0
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
@@ -387,14 +403,26 @@ async def catalog_downloads():
 # ComfyUI
 # --------------------------------------------------------------------------
 
-@app.get("/api/comfyui")
-async def read_comfyui():
-    """ComfyUI liveness and queue depth.
+def _comfyui_base(port: int) -> str:
+    """Loopback base URL for one instance.
 
-    Reported as unreachable rather than raising: ComfyUI being down is a normal
-    state for this console to display, not an error of its own.
+    The port is checked against the discovery range rather than trusted: the
+    three endpoints below fetch on the caller's behalf, and an unchecked port
+    would turn the console into a relay to everything else listening on this
+    machine -- llama-swap and its own API included.
     """
-    async with httpx.AsyncClient(base_url=COMFYUI_URL, timeout=3) as client:
+    if port not in COMFYUI_PORTS:
+        raise HTTPException(status_code=400, detail="not a ComfyUI port")
+    return f"http://127.0.0.1:{port}"
+
+
+async def _probe_comfyui(port: int) -> dict | None:
+    """One instance, or None if nothing there answers as ComfyUI.
+
+    Absence is returned rather than raised: a port with nothing on it is the
+    normal case for three of the four probed, not an error to report.
+    """
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=3) as client:
         try:
             stats, queue = await asyncio.gather(
                 client.get("/system_stats"), client.get("/queue")
@@ -402,22 +430,39 @@ async def read_comfyui():
             stats.raise_for_status()
             queue.raise_for_status()
         except httpx.HTTPError:
-            return {"reachable": False}
+            return None
 
-    q, s = queue.json(), stats.json()
+    s, q = stats.json(), queue.json()
+    system = s.get("system") or {}
+    devices = s.get("devices") or []
+    public = port + COMFYUI_PUBLIC_OFFSET
     return {
-        "reachable": True,
-        "version": s.get("system", {}).get("comfyui_version"),
-        "python": s.get("system", {}).get("python_version", "").split()[0],
-        "devices": s.get("devices", []),
-        "queue_running": len(q.get("queue_running", [])),
-        "queue_pending": len(q.get("queue_pending", [])),
+        "port": port,
+        # A second instance needs its own Caddy site block, and until it has
+        # one there is no authenticated way in. Saying so beats handing out a
+        # link that cannot connect.
+        "public_port": public if _port_open(public) else None,
+        "version": system.get("comfyui_version"),
+        "python": (system.get("python_version") or "").split()[0],
+        "torch": system.get("pytorch_version"),
+        # The card this instance holds, which is also the VRAM policy: a card
+        # running ComfyUI is a card an LLM has to fit alongside.
+        "device": devices[0] if devices else None,
+        "queue_running": len(q.get("queue_running") or []),
+        "queue_pending": len(q.get("queue_pending") or []),
     }
 
 
+@app.get("/api/comfyui/instances")
+async def read_comfyui_instances():
+    """Every ComfyUI on this machine, in port order."""
+    found = await asyncio.gather(*(_probe_comfyui(p) for p in COMFYUI_PORTS))
+    return [i for i in found if i is not None]
+
+
 @app.get("/api/comfyui/history")
-async def comfyui_history(limit: int = 12):
-    async with httpx.AsyncClient(base_url=COMFYUI_URL, timeout=5) as client:
+async def comfyui_history(port: int = COMFYUI_PORTS[0], limit: int = 12):
+    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=5) as client:
         try:
             resp = await client.get("/history", params={"max_items": limit})
             resp.raise_for_status()
@@ -440,8 +485,8 @@ async def comfyui_history(limit: int = 12):
 
 
 @app.post("/api/comfyui/interrupt")
-async def comfyui_interrupt():
-    async with httpx.AsyncClient(base_url=COMFYUI_URL, timeout=5) as client:
+async def comfyui_interrupt(port: int = COMFYUI_PORTS[0]):
+    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=5) as client:
         try:
             resp = await client.post("/interrupt")
             return {"ok": resp.status_code in (200, 204)}
@@ -450,9 +495,12 @@ async def comfyui_interrupt():
 
 
 @app.get("/api/comfyui/image")
-async def comfyui_image(filename: str, subfolder: str = "", type: str = "output"):
+async def comfyui_image(
+    filename: str, subfolder: str = "", type: str = "output",
+    port: int = COMFYUI_PORTS[0],
+):
     """Proxy a generated image so the UI stays on one origin."""
-    async with httpx.AsyncClient(base_url=COMFYUI_URL, timeout=15) as client:
+    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=15) as client:
         try:
             resp = await client.get(
                 "/view", params={"filename": filename, "subfolder": subfolder, "type": type}

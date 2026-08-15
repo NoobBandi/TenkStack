@@ -7,7 +7,7 @@ import SystemStats from '../components/SystemStats';
 import Versions from '../components/Versions';
 import { useStream } from '../stream';
 import {
-  fetchComfy, unloadAll, type ComfyStatus, type GpuSample, type ModelInfo,
+  fetchComfyInstances, unloadAll, type ComfyInstance, type GpuSample, type ModelInfo,
 } from '../api';
 import { MONO } from '../theme';
 import { clockCeiling, powerCeiling, tempCeiling } from '../hardware';
@@ -119,13 +119,13 @@ function GpuLabel({ gpu }: { gpu: GpuSample }) {
 export default function Dashboard() {
   const { gpus, system, models, throughput, connected, refreshModels } =
     useStream();
-  const [comfy, setComfy] = useState<ComfyStatus | null>(null);
+  const [comfy, setComfy] = useState<ComfyInstance[] | null>(null);
   const [unloading, setUnloading] = useState(false);
 
   // ComfyUI publishes no event stream to the console, so its queue depth is
   // the one thing here that genuinely has to be polled.
   useEffect(() => {
-    const load = () => fetchComfy().then(setComfy).catch(() => undefined);
+    const load = () => fetchComfyInstances().then(setComfy).catch(() => undefined);
     load();
     const timer = window.setInterval(load, 5000);
     return () => window.clearInterval(timer);
@@ -259,12 +259,28 @@ export default function Dashboard() {
             size="small"
             style={{ height: '100%' }}
           >
-            {comfy?.reachable ? (
+            {/* Summed across instances. The breakdown by card belongs on the
+                ComfyUI page; what the dashboard is asked is only whether the
+                GPUs are already busy with something other than an LLM. */}
+            {comfy?.length ? (
               <Row gutter={16}>
-                <Col span={12}><Statistic title="佇列中" value={comfy.queue_pending ?? 0} /></Col>
-                <Col span={12}><Statistic title="執行中" value={comfy.queue_running ?? 0} /></Col>
+                <Col span={12}>
+                  <Statistic
+                    title="佇列中"
+                    value={comfy.reduce((n, i) => n + i.queue_pending, 0)}
+                  />
+                </Col>
+                <Col span={12}>
+                  <Statistic
+                    title="執行中"
+                    value={comfy.reduce((n, i) => n + i.queue_running, 0)}
+                  />
+                </Col>
                 <Col span={24} style={{ marginTop: 10 }}>
-                  <Text type="secondary" style={{ fontSize: 11 }}>版本 {comfy.version}</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {comfy.length > 1 && `${comfy.length} 個實例 ・ `}
+                    版本 {comfy[0].version}
+                  </Text>
                 </Col>
               </Row>
             ) : (
