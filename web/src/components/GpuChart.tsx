@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Card, Empty, Segmented, Space, Typography } from 'antd';
 import {
-  Area, AreaChart, CartesianGrid, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  type MouseHandlerDataParam,
 } from 'recharts';
 import { fetchGpuHistory, type GpuPoint, type GpuSample } from '../api';
 import { DEVICE_SERIES, LINE, MONO, SERIES } from '../theme';
@@ -42,6 +43,47 @@ type Metric = (typeof METRICS)[number]['value'];
  *  one", which on a single-card machine is the only one. */
 const DASHES = ['0', '4 3', '1 3', '6 3 1 3'];
 
+/**
+ * Plot geometry, needed because the highlight below works out which trace the
+ * cursor is nearest and recharts does not hand out its own layout.
+ *
+ * The XAxis height is pinned rather than left at its default so these three
+ * numbers fully describe the drawing area: change one and the hit-testing
+ * follows, instead of drifting silently out of step.
+ */
+const CHART_H = 240;
+const PLOT_TOP = 6;
+const AXIS_H = 24;
+const PLOT_H = CHART_H - PLOT_TOP - AXIS_H;
+
+/** How close the cursor must come, as a fraction of plot height, before a trace
+ *  is picked up. Without a limit the nearest trace is always "hovered", and the
+ *  chart flickers between series as the pointer crosses empty space. */
+const REACH = 0.12;
+
+/**
+ * One drawn series.
+ *
+ * The single-card and multi-card layouts used to be two separate blocks of JSX
+ * with a third, separate block building the legend from the same facts. They
+ * are one list now because the highlight needs a single answer to "what is
+ * drawn, in what colour, against which ceiling" -- the ceiling being what turns
+ * a reading into a height on screen.
+ */
+interface Trace {
+  key: string;
+  name: string;
+  colour: string;
+  axis: 'vram' | 'power' | 'temp';
+  /** Top of this trace's own axis; value / max is its height in the plot. */
+  max: number;
+  dash?: string;
+  /** VRAM is filled even at rest; the hairlines only fill when highlighted. */
+  filled?: boolean;
+  /** How this trace's reading is written out in the tooltip, units included. */
+  format: (v: number) => string;
+}
+
 interface Props {
   /** Live samples for every device, appended so the trace keeps moving
    *  between refetches. */
@@ -64,6 +106,12 @@ export default function GpuChart({ latest }: Props) {
   const [metric, setMetric] = useState<Metric>('power');
   const [series, setSeries] = useState<Record<string, GpuPoint[]>>({});
   const [loading, setLoading] = useState(true);
+  /** dataKey of the trace under the cursor, or null. */
+  const [hover, setHover] = useState<string | null>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
+  // Gradient ids have to be unique per instance: they are document-wide, and
+  // two charts on one page sharing an id would both take the first one's fill.
+  const gid = useId().replace(/:/g, '');
 
   const load = useCallback(async (window: number) => {
     try {
@@ -173,21 +221,76 @@ export default function GpuChart({ latest }: Props) {
     };
   }, [rows, indices]);
 
-  const legend = multi
-    ? indices.map((i, n) => {
-      const colour = DEVICE_SERIES[n % DEVICE_SERIES.length];
-      return {
+  const traces = useMemo<Trace[]>(() => {
+    if (!indices.length) return [];
+    if (multi) {
+      // Every device is showing the same quantity here, so they share a format.
+      const fmt = active.value === 'vram'
+        ? (v: number) => `${(v / 1024).toFixed(2)} GiB`
+        : (v: number) => `${v.toFixed(0)} ${active.unit}`;
+      return indices.map((i, n) => ({
+        key: `${metric}${i}`,
         name: `xpu:${i}`,
-        style: n === 0
-          ? { height: 2, background: colour }
-          : { height: 0, borderTop: `2px dashed ${colour}` },
-      };
-    })
-    : [
-      { name: '顯存', style: { height: 6, background: `${SERIES.vram}55` } },
-      { name: '功耗', style: { height: 2, background: SERIES.power } },
-      { name: '溫度', style: { height: 0, borderTop: `2px dashed ${SERIES.temp}` } },
+        colour: DEVICE_SERIES[n % DEVICE_SERIES.length],
+        axis: 'vram' as const,
+        max: activeMax,
+        dash: DASHES[n % DASHES.length],
+        format: fmt,
+      }));
+    }
+    const i = indices[0];
+    return [
+      { key: `vram${i}`, name: '顯存', colour: SERIES.vram, axis: 'vram', max: vramMax, filled: true,
+        format: (v) => `${(v / 1024).toFixed(2)} GiB` },
+      { key: `power${i}`, name: '功耗', colour: SERIES.power, axis: 'power', max: powerMax,
+        format: (v) => `${v.toFixed(0)} W` },
+      { key: `temp${i}`, name: '溫度', colour: SERIES.temp, axis: 'temp', max: tempMax, dash: '3 3',
+        format: (v) => `${v.toFixed(0)} °C` },
     ];
+  }, [indices, multi, metric, active, activeMax, vramMax, powerMax, tempMax]);
+
+  const byKey = useMemo(() => new Map(traces.map((t) => [t.key, t])), [traces]);
+
+  /**
+   * Pick the trace nearest the pointer.
+   *
+   * Hovering the path itself is the obvious implementation and a poor one: a
+   * 1.25px hairline is close to unhittable, and a trace that only lights up
+   * when you land on it exactly reads as broken rather than as precise. So the
+   * cursor's height in the plot is compared against every trace's height at the
+   * column it is over, and the closest within REACH wins -- being near the line
+   * is enough.
+   *
+   * Comparing value/max rather than pixels is what lets three traces on three
+   * different axes be measured against each other at all: each axis runs 0 to
+   * its own ceiling over the same plot height, so the fractions are already in
+   * the same units the eye is using.
+   */
+  const handleMove = useCallback((state: MouseHandlerDataParam, e: { clientY?: number }) => {
+    // Typed `number | TooltipIndex | undefined`, and TooltipIndex is a *string*
+    // -- recharts hands the index over as "17", not 17. A `typeof === 'number'`
+    // guard here silently rejected every event.
+    // (Number(null) is 0, so the empty case has to be caught before the cast or
+    // it would read as "hovering the first sample".)
+    const raw = state.activeTooltipIndex;
+    const idx = raw === null || raw === undefined ? NaN : Number(raw);
+    const box = plotRef.current?.getBoundingClientRect();
+    const row = Number.isFinite(idx) ? rows[idx] : undefined;
+    if (!row || !box || typeof e?.clientY !== 'number') { setHover(null); return; }
+
+    const frac = (PLOT_H - (e.clientY - box.top - PLOT_TOP)) / PLOT_H;
+    let best: string | null = null;
+    let gap = REACH;
+    for (const t of traces) {
+      const v = row[t.key];
+      if (typeof v !== 'number' || !t.max) continue;
+      const d = Math.abs(v / t.max - frac);
+      if (d < gap) { gap = d; best = t.key; }
+    }
+    setHover(best);
+  }, [rows, traces]);
+
+  const clearHover = useCallback(() => setHover(null), []);
 
   return (
     <Card
@@ -230,119 +333,177 @@ export default function GpuChart({ latest }: Props) {
           />
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={240}>
-          <AreaChart data={rows} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id="vramFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={SERIES.vram} stopOpacity={0.28} />
-                <stop offset="100%" stopColor={SERIES.vram} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
+        <div ref={plotRef}>
+          <ResponsiveContainer width="100%" height={CHART_H}>
+            <AreaChart
+              data={rows}
+              margin={{ top: PLOT_TOP, right: 4, left: 0, bottom: 0 }}
+              onMouseMove={handleMove}
+              onMouseLeave={clearHover}
+            >
+              {/* One gradient per trace, all reaching zero at the baseline: the
+                  fill is there to give the line a body that fades out, not to
+                  shade an area, so it must not read as a second quantity. */}
+              <defs>
+                {traces.map((t) => (
+                  <linearGradient key={t.key} id={`${gid}-${t.key}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={t.colour} stopOpacity={0.38} />
+                    <stop offset="100%" stopColor={t.colour} stopOpacity={0} />
+                  </linearGradient>
+                ))}
+              </defs>
 
-            <CartesianGrid stroke={LINE.faint} vertical={false} />
-            <XAxis
-              dataKey="t"
-              tickFormatter={clock}
-              stroke={LINE.soft}
-              tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: MONO }}
-              minTickGap={56}
-            />
-            {/* Fixed domains, never fitted to the data.
-             *
-             * An axis that rescales makes a quiet hour and a full card look
-             * identical -- the trace fills the panel either way and only the
-             * numbers down the side, which move, say otherwise. Pinned to the
-             * card's capacity, height alone carries the reading.
-             *
-             * Each quantity also gets its own axis rather than sharing one.
-             * Watts and degrees on a single scale would let whichever carried
-             * the larger numbers set the range, leaving the other flat along
-             * the bottom. */}
-            <YAxis
-              yAxisId="vram"
-              stroke={LINE.soft}
-              tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: MONO }}
-              tickFormatter={multi ? active.axis : (v: number) => `${(v / 1024).toFixed(0)}G`}
-              domain={multi ? [0, activeMax] : [0, vramMax]}
-              ticks={multi && active.value !== 'vram' ? undefined : vramTicks}
-              allowDataOverflow
-              width={44}
-            />
-            {/* Parked on the right even though they are hidden: an unplaced
-                axis defaults to the left, where these two silently took the
-                space the visible VRAM scale needed and pushed it out of the
-                panel entirely. */}
-            <YAxis yAxisId="power" orientation="right" domain={[0, powerMax]}
-                   allowDataOverflow hide />
-            <YAxis yAxisId="temp" orientation="right" domain={[0, tempMax]}
-                   allowDataOverflow hide />
-            <Tooltip
-              contentStyle={{
-                background: '#141414', border: `1px solid ${LINE.soft}`,
-                borderRadius: 4, fontSize: 11, fontFamily: MONO,
-              }}
-              labelFormatter={(label) => (typeof label === 'number' ? clock(label) : String(label))}
-              formatter={(value, name) => {
-                if (typeof value !== 'number') return [String(value), name];
-                if (multi) {
-                  return [
-                    active.value === 'vram'
-                      ? `${(value / 1024).toFixed(2)} GiB`
-                      : `${value.toFixed(0)} ${active.unit}`,
-                    name,
-                  ];
-                }
-                if (name === '顯存') return [`${(value / 1024).toFixed(2)} GiB`, name];
-                if (name === '功耗') return [`${value.toFixed(0)} W`, name];
-                return [`${value.toFixed(0)} °C`, name];
-              }}
-            />
+              <CartesianGrid stroke={LINE.faint} vertical={false} />
+              <XAxis
+                dataKey="t"
+                tickFormatter={clock}
+                stroke={LINE.soft}
+                tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: MONO }}
+                minTickGap={56}
+                height={AXIS_H}
+              />
+              {/* Fixed domains, never fitted to the data.
+               *
+               * An axis that rescales makes a quiet hour and a full card look
+               * identical -- the trace fills the panel either way and only the
+               * numbers down the side, which move, say otherwise. Pinned to the
+               * card's capacity, height alone carries the reading.
+               *
+               * Each quantity also gets its own axis rather than sharing one.
+               * Watts and degrees on a single scale would let whichever carried
+               * the larger numbers set the range, leaving the other flat along
+               * the bottom. */}
+              <YAxis
+                yAxisId="vram"
+                stroke={LINE.soft}
+                tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: MONO }}
+                tickFormatter={multi ? active.axis : (v: number) => `${(v / 1024).toFixed(0)}G`}
+                domain={multi ? [0, activeMax] : [0, vramMax]}
+                ticks={multi && active.value !== 'vram' ? undefined : vramTicks}
+                allowDataOverflow
+                width={44}
+              />
+              {/* Parked on the right even though they are hidden: an unplaced
+                  axis defaults to the left, where these two silently took the
+                  space the visible VRAM scale needed and pushed it out of the
+                  panel entirely. */}
+              <YAxis yAxisId="power" orientation="right" domain={[0, powerMax]}
+                     allowDataOverflow hide />
+              <YAxis yAxisId="temp" orientation="right" domain={[0, tempMax]}
+                     allowDataOverflow hide />
+              {/* Written out rather than left to `formatter`, because the
+                  tooltip has to narrow to the highlighted trace and recharts
+                  gives no way to drop rows from the default one -- a formatter
+                  can only restyle the rows it is handed.
 
-            {multi ? (
-              indices.map((i, n) => (
-                <Line
-                  key={i}
-                  yAxisId="vram" type="monotone"
-                  dataKey={`${metric}${i}`} name={`xpu:${i}`}
-                  stroke={DEVICE_SERIES[n % DEVICE_SERIES.length]}
-                  strokeWidth={1.25}
-                  strokeDasharray={DASHES[n % DASHES.length]}
-                  dot={false} isAnimationActive={false}
-                  connectNulls
-                />
-              ))
-            ) : (
-              <>
-                {/* Filled area for the slow-moving quantity, hairlines for the
-                    fast ones: shape distinguishes the series, not colour. */}
-                <Area
-                  yAxisId="vram" type="monotone" dataKey={`vram${indices[0]}`} name="顯存"
-                  stroke={SERIES.vram} strokeWidth={1.5}
-                  fill="url(#vramFill)" isAnimationActive={false} dot={false}
-                />
-                <Line
-                  yAxisId="power" type="monotone" dataKey={`power${indices[0]}`} name="功耗"
-                  stroke={SERIES.power} strokeWidth={1.25} dot={false}
-                  isAnimationActive={false}
-                />
-                <Line
-                  yAxisId="temp" type="monotone" dataKey={`temp${indices[0]}`} name="溫度"
-                  stroke={SERIES.temp} strokeWidth={1.25} strokeDasharray="3 3"
-                  dot={false} isAnimationActive={false}
-                />
-              </>
-            )}
-          </AreaChart>
-        </ResponsiveContainer>
+                  Narrowing is the point: once a trace is picked out, three
+                  readings answer a question that was asked about one of them.
+                  With nothing highlighted all of them are still listed, which
+                  is what the tooltip is for at rest. */}
+              <Tooltip
+                content={({ active: on, label, payload }) => {
+                  if (!on || !payload?.length) return null;
+                  const shown = hover
+                    ? payload.filter((p) => p.dataKey === hover)
+                    : payload;
+                  if (!shown.length) return null;
+                  return (
+                    <div style={{
+                      background: '#141414', border: `1px solid ${LINE.soft}`,
+                      borderRadius: 4, fontSize: 11, fontFamily: MONO,
+                      padding: '6px 9px', minWidth: 132,
+                    }}>
+                      <div style={{ opacity: 0.45, marginBottom: 4 }}>
+                        {typeof label === 'number' ? clock(label) : ''}
+                      </div>
+                      {shown.map((p) => {
+                        const t = byKey.get(String(p.dataKey));
+                        return (
+                          <div
+                            key={String(p.dataKey)}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, lineHeight: 1.7 }}
+                          >
+                            <span style={{
+                              width: 7, height: 7, borderRadius: '50%',
+                              background: t?.colour ?? String(p.color), flex: 'none',
+                            }} />
+                            <span style={{ opacity: 0.6 }}>{t?.name ?? String(p.name)}</span>
+                            <span style={{ marginLeft: 'auto' }}>
+                              {t && typeof p.value === 'number' ? t.format(p.value) : String(p.value)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                }}
+              />
+
+              {/* Every trace is an Area, including the ones that read as
+                  hairlines: the fill is what the highlight turns on, and a Line
+                  has none to turn on. At rest the unfilled ones are drawn exactly
+                  as before. */}
+              {traces.map((t) => {
+                const lit = hover === t.key;
+                const dim = hover !== null && !lit;
+                return (
+                  <Area
+                    key={t.key}
+                    yAxisId={t.axis} type="monotone"
+                    dataKey={t.key} name={t.name}
+                    stroke={t.colour}
+                    strokeWidth={lit ? 2.4 : t.filled ? 1.5 : 1.25}
+                    strokeDasharray={t.dash}
+                    strokeOpacity={dim ? 0.22 : 1}
+                    fill={`url(#${gid}-${t.key})`}
+                    fillOpacity={lit ? 1 : t.filled ? (dim ? 0.18 : 0.72) : 0}
+                    // A marker on every trace at once is three answers to a
+                    // question with one subject. It belongs to whichever trace
+                    // is highlighted, and there is only ever one of those.
+                    //
+                    // Hollow rather than solid: filled in the trace's own colour
+                    // it sat on a line of that same colour and read as a slight
+                    // thickening. Punched out against the panel it is a ring
+                    // with a hole in it, which nothing else on the chart is.
+                    dot={false}
+                    activeDot={lit && { r: 4, fill: '#141414', stroke: t.colour, strokeWidth: 2 }}
+                    isAnimationActive={false}
+                    connectNulls={multi}
+                  />
+                );
+              })}
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
       )}
 
+      {/* The legend highlights too. Reaching for a name is easier than finding
+          a trace, and it is the only way to light up a series that is currently
+          flat against the floor with the others. */}
       <Space size={16} style={{ marginTop: 8 }} wrap>
-        {legend.map((s) => (
-          <Space key={s.name} size={6}>
-            <span style={{ display: 'inline-block', width: 16, ...s.style }} />
-            <Text style={{ fontSize: 10, opacity: 0.5, fontFamily: MONO }}>{s.name}</Text>
-          </Space>
-        ))}
+        {traces.map((t) => {
+          const lit = hover === t.key;
+          return (
+            <Space
+              key={t.key} size={6}
+              style={{ cursor: 'default', opacity: hover !== null && !lit ? 0.35 : 1 }}
+              onMouseEnter={() => setHover(t.key)}
+              onMouseLeave={clearHover}
+            >
+              <span
+                style={{
+                  display: 'inline-block', width: 16,
+                  ...(t.dash && t.dash !== '0'
+                    ? { height: 0, borderTop: `2px dashed ${t.colour}` }
+                    : { height: t.filled ? 6 : 2, background: t.filled ? `${t.colour}55` : t.colour }),
+                }}
+              />
+              <Text style={{ fontSize: 10, opacity: lit ? 0.9 : 0.5, fontFamily: MONO }}>
+                {t.name}
+              </Text>
+            </Space>
+          );
+        })}
       </Space>
     </Card>
   );

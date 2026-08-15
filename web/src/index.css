@@ -48,3 +48,14 @@ body {
 @media (max-width: 1100px) {
   .composer-hint { display: none; }
 }
+
+/* Recharts turns its accessibilityLayer on by default, which puts tabIndex=0 on
+ * the chart's root <svg>. That is worth keeping -- the chart is reachable and
+ * arrow-navigable from the keyboard -- but it also means a plain click focuses
+ * it and the browser draws its focus ring around the whole panel, which reads
+ * as "you selected something" when nothing was selected.
+ *
+ * :focus-visible is exactly this distinction: the ring is dropped for pointer
+ * focus and kept for keyboard focus. Suppressing :focus outright would have
+ * taken the keyboard user's only indicator with it. */
+.recharts-surface:focus:not(:focus-visible) { outline: none; }
