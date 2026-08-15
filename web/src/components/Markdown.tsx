@@ -3,8 +3,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { App as AntApp, Button, Tooltip } from 'antd';
-import { CheckOutlined, CopyOutlined } from '@ant-design/icons';
+import {
+  CheckOutlined, CopyOutlined, PlayCircleOutlined, ReloadOutlined, StopOutlined,
+} from '@ant-design/icons';
+import HtmlPreview from './HtmlPreview';
 import './markdown.css';
+
+/** Languages the preview frame can render. */
+const RUNNABLE = new Set(['html', 'svg']);
 
 /**
  * Renders assistant output as GitHub-flavoured Markdown.
@@ -39,8 +45,13 @@ function toText(node: React.ReactNode): string {
 function CodeBlock({ className, children }: { className?: string; children?: React.ReactNode }) {
   const { message } = AntApp.useApp();
   const [copied, setCopied] = useState(false);
+  // 0 means "not running". Any other value is both the on-switch and the frame's
+  // key, so pressing run again reloads the document from scratch rather than
+  // leaving whatever state the last run got itself into.
+  const [runId, setRunId] = useState(0);
   const language = /language-(\w+)/.exec(className ?? '')?.[1];
   const source = toText(children).replace(/\n$/, '');
+  const runnable = RUNNABLE.has(language ?? '');
 
   const copy = async () => {
     try {
@@ -57,18 +68,46 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
     <div className="md-code">
       <div className="md-code-bar">
         <span className="md-code-lang">{language ?? 'text'}</span>
-        <Tooltip title={copied ? '已複製' : '複製'}>
-          <Button
-            type="text"
-            size="small"
-            icon={copied ? <CheckOutlined /> : <CopyOutlined />}
-            onClick={copy}
-          />
-        </Tooltip>
+        <span className="md-code-actions">
+          {runnable && (
+            <Tooltip title={runId ? '重新執行' : '在隔離的框架中執行'}>
+              <Button
+                type="text"
+                size="small"
+                icon={runId ? <ReloadOutlined /> : <PlayCircleOutlined />}
+                onClick={() => setRunId((n) => n + 1)}
+              />
+            </Tooltip>
+          )}
+          {runnable && runId > 0 && (
+            <Tooltip title="停止並關閉預覽">
+              <Button
+                type="text"
+                size="small"
+                icon={<StopOutlined />}
+                onClick={() => setRunId(0)}
+              />
+            </Tooltip>
+          )}
+          <Tooltip title={copied ? '已複製' : '複製'}>
+            <Button
+              type="text"
+              size="small"
+              icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+              onClick={copy}
+            />
+          </Tooltip>
+        </span>
       </div>
       <pre>
         <code className={className}>{children}</code>
       </pre>
+      {/* Nothing runs until the button is pressed. Rendering a reply must never
+          execute what is in it -- the code arrives token by token from a model,
+          and auto-running would mean running half-written documents too. */}
+      {runnable && runId > 0 && (
+        <HtmlPreview source={source} language={language ?? 'html'} runId={runId} />
+      )}
     </div>
   );
 }
