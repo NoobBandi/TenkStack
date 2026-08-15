@@ -70,6 +70,10 @@ export interface ComfyInstance {
   queue_running: number;
   queue_pending: number;
   manager: ComfyManagerState | null;
+  /** The instance stopped answering and these numbers are the last ones it
+   *  gave. ComfyUI serves nothing while a sampling step runs, so this is the
+   *  normal state during a generation rather than a fault. */
+  stale: boolean;
 }
 
 export interface Throughput {
@@ -804,15 +808,32 @@ export interface ComfyFile {
   partial: boolean;
 }
 
+export interface ComfyLocation {
+  folders: ComfyFolder[];
+  files: ComfyFile[];
+  /** Whether this exact directory takes writes, which is not the same as the
+   *  root taking them -- ComfyUI creates subdirectories as root. */
+  writable: boolean;
+  free: number;
+}
+
 export const fetchComfyFileRoots = () => get<{ roots: ComfyFileRoot[] }>('/comfyui/files/roots');
-export const fetchComfyFolders = (root: string) =>
-  get<{ folders: ComfyFolder[]; free: number }>(`/comfyui/files/folders?root=${encodeURIComponent(root)}`);
-export const fetchComfyFiles = (root: string, folder: string) =>
-  get<{ files: ComfyFile[] }>(
-    `/comfyui/files?root=${encodeURIComponent(root)}&folder=${encodeURIComponent(folder)}`);
-export const deleteComfyFile = (root: string, folder: string, name: string, partial = false) =>
+
+/** One location answers with its folders, its files and whether it is writable:
+ *  the page needs all three to draw a row, and three round trips per navigation
+ *  step would show the list, then the files, then belatedly grey out buttons. */
+export const fetchComfyLocation = (root: string, path: string) =>
+  get<ComfyLocation>(
+    `/comfyui/files?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+
+export const createComfyFolder = (root: string, path: string, name: string) =>
+  send<{ ok: boolean }>(
+    `/comfyui/files/folder?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
+    + `&name=${encodeURIComponent(name)}`, 'POST');
+
+export const deleteComfyFile = (root: string, path: string, name: string, partial = false) =>
   send<{ ok: boolean; freed: number }>(
-    `/comfyui/files?root=${encodeURIComponent(root)}&folder=${encodeURIComponent(folder)}`
+    `/comfyui/files?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
     + `&name=${encodeURIComponent(name)}&partial=${partial}`, 'DELETE');
 
 /**
@@ -834,13 +855,13 @@ const UPLOAD_CHUNK = 16 * 1024 * 1024;
  */
 export async function uploadComfyFile(
   root: string,
-  folder: string,
+  path: string,
   file: File,
   onProgress: (sent: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const base = `${BASE}/comfyui/files`;
-  const query = `root=${encodeURIComponent(root)}&folder=${encodeURIComponent(folder)}`
+  const query = `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
     + `&name=${encodeURIComponent(file.name)}`;
 
   const head = await get<{ offset: number; exists: boolean }>(

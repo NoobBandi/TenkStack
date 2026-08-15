@@ -159,6 +159,16 @@ function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
           {instance.queue_running} 執行 / {queued} 排隊
         </Text>
 
+        {instance.stale && (
+          // ComfyUI is aiohttp over synchronous torch, so it answers nothing
+          // while a sampling step runs. Saying the numbers are old beats either
+          // of the alternatives: presenting them as current, or dropping the
+          // row and claiming the instance is not running.
+          <Tooltip title="ComfyUI 正忙著算，暫時沒有回應。顯示的是最後一次拿到的數字。">
+            <Tag color="blue" style={{ fontSize: 11 }}>忙碌中・數字為舊值</Tag>
+          </Tooltip>
+        )}
+
         <Tooltip title={`PyTorch ${instance.torch ?? '?'} ・ Python ${instance.python}`}>
           <Tag style={{ fontFamily: MONO, fontSize: 11 }}>v{instance.version}</Tag>
         </Tooltip>

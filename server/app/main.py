@@ -416,21 +416,45 @@ def _comfyui_base(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+# The last good answer from each port.
+#
+# ComfyUI is aiohttp with a synchronous torch underneath, so while a sampling
+# step runs nothing is served -- the event loop is simply not reached. Probes
+# during a video generation therefore time out, and treating that as "no
+# instance" made the dashboard blink to "ComfyUI 未執行" and back every few
+# seconds during exactly the job someone is watching. A timeout means busy, not
+# gone; the last known record is reported instead, flagged stale.
+_comfyui_seen: dict[int, dict] = {}
+
+# Short connect, long read. Three of the four ports have nothing on them and
+# must be dismissed instantly, while the one that answers may be mid-step.
+_COMFYUI_PROBE_TIMEOUT = httpx.Timeout(connect=0.5, read=10.0, write=5.0, pool=5.0)
+
+
 async def _probe_comfyui(port: int) -> dict | None:
     """One instance, or None if nothing there answers as ComfyUI.
 
     Absence is returned rather than raised: a port with nothing on it is the
     normal case for three of the four probed, not an error to report.
     """
-    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=3) as client:
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{port}", timeout=_COMFYUI_PROBE_TIMEOUT,
+    ) as client:
         try:
             stats, queue = await asyncio.gather(
                 client.get("/system_stats"), client.get("/queue")
             )
             stats.raise_for_status()
             queue.raise_for_status()
-        except httpx.HTTPError:
+        except httpx.ConnectError:
+            # Refused, so there is genuinely nothing listening. This is the one
+            # failure that means the instance is gone.
+            _comfyui_seen.pop(port, None)
             return None
+        except httpx.HTTPError:
+            # Timed out or dropped mid-answer: busy, not absent.
+            stale = _comfyui_seen.get(port)
+            return {**stale, "stale": True} if stale else None
 
         # ComfyUI-Manager is a custom node, so its absence is an ordinary state
         # rather than a failure: an instance without it simply has no update
@@ -447,13 +471,15 @@ async def _probe_comfyui(port: int) -> dict | None:
                 "total": m.get("total_count") or 0,
             }
         except (httpx.HTTPError, ValueError):
-            manager = None
+            # Same reasoning: a busy instance should not lose its update
+            # controls, so the last known queue state stands in.
+            manager = (_comfyui_seen.get(port) or {}).get("manager")
 
     s, q = stats.json(), queue.json()
     system = s.get("system") or {}
     devices = s.get("devices") or []
     public = port + COMFYUI_PUBLIC_OFFSET
-    return {
+    record = {
         "port": port,
         # A second instance needs its own Caddy site block, and until it has
         # one there is no authenticated way in. Saying so beats handing out a
@@ -468,7 +494,10 @@ async def _probe_comfyui(port: int) -> dict | None:
         "queue_running": len(q.get("queue_running") or []),
         "queue_pending": len(q.get("queue_pending") or []),
         "manager": manager,
+        "stale": False,
     }
+    _comfyui_seen[port] = record
+    return record
 
 
 @app.get("/api/comfyui/instances")
@@ -653,34 +682,50 @@ async def comfy_file_roots():
     return {"roots": comfyfiles.roots()}
 
 
-@app.get("/api/comfyui/files/folders")
-async def comfy_file_folders(root: str):
-    try:
-        return {"folders": comfyfiles.folders(root), "free": comfyfiles.free_bytes(root)}
-    except comfyfiles.BadPath as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @app.get("/api/comfyui/files")
-async def comfy_files(root: str, folder: str):
+async def comfy_files(root: str, path: str = ""):
+    """One location: its subdirectories, its files, and whether it takes writes.
+
+    Answered in a single call because the page needs all three to draw a row --
+    three round trips per navigation step would show the folder list, then the
+    files, then belatedly grey out the buttons.
+    """
     try:
-        return {"files": comfyfiles.listing(root, folder)}
+        listing = comfyfiles.listing(root, path)
+        return {
+            "folders": comfyfiles.folders(root, path),
+            "files": listing["files"],
+            "writable": listing["writable"],
+            "free": comfyfiles.free_bytes(root),
+        }
     except comfyfiles.BadPath as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/comfyui/files/folder")
+async def comfy_file_mkdir(root: str, path: str = "", name: str = ""):
+    try:
+        return comfyfiles.mkdir(root, path, name)
+    except comfyfiles.BadPath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="同名項目已存在")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=f"{exc} 不可寫入")
 
 
 @app.get("/api/comfyui/files/offset")
-async def comfy_file_offset(root: str, folder: str, name: str):
+async def comfy_file_offset(root: str, name: str, path: str = ""):
     """What the server already holds, so an interrupted upload resumes."""
     try:
-        return comfyfiles.upload_offset(root, folder, name)
+        return comfyfiles.upload_offset(root, path, name)
     except comfyfiles.BadPath as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.put("/api/comfyui/files/upload")
 async def comfy_file_upload(
-    request: Request, root: str, folder: str, name: str, offset: int, total: int,
+    request: Request, root: str, name: str, offset: int, total: int, path: str = "",
 ):
     """One chunk of a file, as a raw body.
 
@@ -689,7 +734,7 @@ async def comfy_file_upload(
     """
     try:
         result = await comfyfiles.receive(
-            root, folder, name, offset, total, request.stream(),
+            root, path, name, offset, total, request.stream(),
         )
     except comfyfiles.BadPath as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -711,13 +756,15 @@ async def comfy_file_upload(
 
 
 @app.delete("/api/comfyui/files")
-async def comfy_file_delete(root: str, folder: str, name: str, partial: bool = False):
+async def comfy_file_delete(root: str, name: str, path: str = "", partial: bool = False):
     try:
-        return comfyfiles.delete(root, folder, name, partial)
+        return comfyfiles.delete(root, path, name, partial)
     except comfyfiles.BadPath as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="檔案不存在")
+    except IsADirectoryError:
+        raise HTTPException(status_code=409, detail="資料夾不是空的")
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 

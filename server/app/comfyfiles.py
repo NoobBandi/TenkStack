@@ -1,9 +1,17 @@
-"""Browsing and filling ComfyUI's model and input folders.
+"""Browsing and filling ComfyUI's model, input and output folders.
 
 ComfyUI has no API for this. It can list what it found (`/models/{folder}`) and
 accept an input image under 100 MB (`/upload/image`), but there is no way to put
 a 20 GB checkpoint where it belongs except reaching the filesystem -- which so
 far has meant a shell on this machine. That is the gap this fills.
+
+PATHS, NOT A FLAT FOLDER LIST
+
+An earlier version allowed one level, on the reasoning that ComfyUI's layout is
+flat by convention. It is not: SaveVideo's default prefix is `video/MiniMax_H3`,
+so outputs nest on their own, and model folders take subdirectories too. So a
+location here is a relative path, each segment validated separately, and the
+interface navigates it.
 
 UPLOADS ARE RAW BODIES, NOT MULTIPART
 
@@ -48,30 +56,50 @@ class Root:
     note: str
 
 
-# Only the two trees worth filling by hand. Outputs are not here: they are the
-# gallery's subject, they are written by ComfyUI rather than by anyone, and they
-# are per instance while these two are shared by all of them.
-ROOTS: dict[str, Root] = {
-    root.key: root
-    for root in (
-        Root(
-            "models", "模型",
-            COMFY_DIR / "storage-models/models",
-            "checkpoints、loras、vae 等等。所有 ComfyUI 實例共用這一份。",
-        ),
-        Root(
-            "input", "輸入",
-            COMFY_DIR / "storage-user/input",
-            "工作流讀得到的圖片與素材。",
-        ),
-    )
-}
+_FIXED = (
+    Root(
+        "models", "模型",
+        COMFY_DIR / "storage-models/models",
+        "checkpoints、loras、vae 等等。所有 ComfyUI 實例共用這一份。",
+    ),
+    Root(
+        "input", "輸入",
+        COMFY_DIR / "storage-user/input",
+        "工作流讀得到的圖片與素材，所有實例共用。",
+    ),
+)
 
-# A name has to survive being joined to a directory and nothing more. Rejecting
-# separators and dots outright is stricter than checking the resolved path stays
-# inside the root, and both are applied -- the first gives a comprehensible
-# error, the second is the one that actually holds.
-_SAFE_NAME = re.compile(r"^[^/\\\x00]{1,255}$")
+
+def _output_roots() -> list[Root]:
+    """One per instance, found rather than configured.
+
+    Outputs are the one tree that is not shared: ComfyUI picks the next filename
+    by scanning the directory for the highest counter, so two instances sharing
+    one would collide by construction. run-comfyui.sh gives each its own
+    `output-<name>`, and the names it used are the only record of what exists.
+    """
+    parent = COMFY_DIR / "storage-user"
+    found = sorted(p for p in parent.glob("output-*") if p.is_dir())
+    return [
+        Root(
+            f"output-{p.name[len('output-'):]}",
+            f"輸出（{p.name[len('output-'):]}）" if len(found) > 1 else "輸出",
+            p,
+            "ComfyUI 寫出來的成品。每個實例一份，不共用。",
+        )
+        for p in found
+    ]
+
+
+def _roots() -> dict[str, Root]:
+    return {r.key: r for r in (*_FIXED, *_output_roots())}
+
+
+# A segment has to survive being joined to a directory and nothing more.
+# Rejecting separators and dotfiles is stricter than checking the resolved path
+# stays inside the root, and both are applied -- the first gives a
+# comprehensible error, the second is the one that actually holds.
+_SAFE_SEGMENT = re.compile(r"^[^/\\\x00]{1,255}$")
 
 PART_SUFFIX = ".part"
 
@@ -81,34 +109,37 @@ class BadPath(ValueError):
 
 
 def _root(key: str) -> Root:
-    root = ROOTS.get(key)
+    root = _roots().get(key)
     if root is None:
         raise BadPath(f"unknown root: {key}")
     return root
 
 
-def _check_name(name: str) -> str:
-    if not _SAFE_NAME.match(name) or name in (".", "..") or name.startswith("."):
-        raise BadPath(f"bad name: {name!r}")
-    return name
+def _check_segment(segment: str) -> str:
+    if not _SAFE_SEGMENT.match(segment) or segment in (".", "..") or segment.startswith("."):
+        raise BadPath(f"bad name: {segment!r}")
+    return segment
 
 
-def resolve(root_key: str, folder: str, name: str | None = None) -> Path:
-    """Absolute path for a folder, or a file inside it.
+def resolve(root_key: str, path: str, name: str | None = None) -> Path:
+    """Absolute path for a directory, or a file inside it.
 
-    The containment check is done on the resolved path rather than on the
-    input, because that is the only form that accounts for symlinks -- a link
-    inside the tree pointing out of it would pass every check on the string.
+    `path` is relative to the root and may be empty, meaning the root itself.
+
+    The containment check is done on the resolved path rather than on the input,
+    because that is the only form that accounts for symlinks -- a link inside
+    the tree pointing out of it would pass every check on the string.
     """
     root = _root(root_key)
-    path = root.path
-    if folder:
-        path = path / _check_name(folder)
+    target = root.path
+    for segment in (path or "").split("/"):
+        if segment:
+            target = target / _check_segment(segment)
     if name is not None:
-        path = path / _check_name(name)
+        target = target / _check_segment(name)
 
     base = root.path.resolve()
-    final = path.resolve()
+    final = target.resolve()
     if final != base and base not in final.parents:
         raise BadPath("path escapes its root")
     return final
@@ -127,7 +158,7 @@ def roots() -> list[dict]:
     that explains itself.
     """
     out = []
-    for root in ROOTS.values():
+    for root in _roots().values():
         exists = root.path.is_dir()
         out.append({
             "key": root.key,
@@ -140,27 +171,26 @@ def roots() -> list[dict]:
     return out
 
 
-def folders(root_key: str) -> list[dict]:
-    """Immediate subdirectories, with what is in each.
+def _tree_size(path: Path) -> tuple[int, int]:
+    count = size = 0
+    for child in path.rglob("*"):
+        if child.is_file():
+            count += 1
+            size += child.stat().st_size
+    return count, size
 
-    One level only. ComfyUI's own folder set is flat by convention and a tree
-    view here would be a second navigation model for no gain -- everything that
-    matters is `checkpoints`, `loras`, `vae` and their siblings.
-    """
-    root = _root(root_key)
-    if not root.path.is_dir():
+
+def folders(root_key: str, path: str = "") -> list[dict]:
+    """Immediate subdirectories of one location, with what is under each."""
+    here = resolve(root_key, path)
+    if not here.is_dir():
         return []
 
     out: list[dict] = []
-    for entry in sorted(root.path.iterdir(), key=lambda p: p.name.lower()):
-        if not entry.is_dir():
+    for entry in sorted(here.iterdir(), key=lambda p: p.name.lower()):
+        if not entry.is_dir() or entry.name.startswith("."):
             continue
-        count = 0
-        size = 0
-        for child in entry.rglob("*"):
-            if child.is_file():
-                count += 1
-                size += child.stat().st_size
+        count, size = _tree_size(entry)
         out.append({
             "name": entry.name,
             "files": count,
@@ -170,40 +200,50 @@ def folders(root_key: str) -> list[dict]:
     return out
 
 
-def listing(root_key: str, folder: str) -> list[dict]:
-    """Files in one folder, uploads in progress included.
+def listing(root_key: str, path: str = "") -> dict:
+    """Files at one location, uploads in progress included.
 
     A `.part` is listed as the file it will become, marked incomplete. Hiding it
     would leave an upload invisible between the browser closing and the transfer
     finishing, and the half-written bytes are exactly what someone coming back
     to a failed upload needs to see.
     """
-    path = resolve(root_key, folder)
-    if not path.is_dir():
-        return []
+    here = resolve(root_key, path)
+    if not here.is_dir():
+        return {"files": [], "writable": False}
 
-    out: list[dict] = []
-    for entry in sorted(path.iterdir(), key=lambda p: p.name.lower()):
-        if not entry.is_file():
+    files: list[dict] = []
+    for entry in sorted(here.iterdir(), key=lambda p: p.name.lower()):
+        if not entry.is_file() or entry.name.startswith("."):
             continue
         stat = entry.stat()
         partial = entry.name.endswith(PART_SUFFIX)
-        out.append({
+        files.append({
             "name": entry.name[: -len(PART_SUFFIX)] if partial else entry.name,
             "size": stat.st_size,
             "modified": stat.st_mtime,
             "partial": partial,
         })
-    return out
+    return {"files": files, "writable": _writable(here)}
 
 
-def upload_offset(root_key: str, folder: str, name: str) -> dict:
+def mkdir(root_key: str, path: str, name: str) -> dict:
+    target = resolve(root_key, path, name)
+    if target.exists():
+        raise FileExistsError(name)
+    if not _writable(target.parent):
+        raise PermissionError(str(target.parent))
+    target.mkdir()
+    return {"ok": True, "name": name}
+
+
+def upload_offset(root_key: str, path: str, name: str) -> dict:
     """How much of this file the server already holds.
 
     Three answers, and they are different: nothing yet, a part-file of some
     length to resume from, or a finished file that would be overwritten.
     """
-    target = resolve(root_key, folder, name)
+    target = resolve(root_key, path, name)
     part = target.with_name(target.name + PART_SUFFIX)
     if target.exists():
         return {"offset": 0, "exists": True, "size": target.stat().st_size}
@@ -212,7 +252,7 @@ def upload_offset(root_key: str, folder: str, name: str) -> dict:
 
 async def receive(
     root_key: str,
-    folder: str,
+    path: str,
     name: str,
     offset: int,
     total: int,
@@ -224,7 +264,7 @@ async def receive(
     model in place is not something to do by accident: a workflow referring to
     it by name would silently start producing different pictures.
     """
-    target = resolve(root_key, folder, name)
+    target = resolve(root_key, path, name)
     if target.exists():
         raise FileExistsError(name)
     if not _writable(target.parent):
@@ -256,10 +296,18 @@ async def receive(
     return {"ok": True, "offset": written, "done": True}
 
 
-def delete(root_key: str, folder: str, name: str, partial: bool = False) -> dict:
-    target = resolve(root_key, folder, name)
+def delete(root_key: str, path: str, name: str, partial: bool = False) -> dict:
+    target = resolve(root_key, path, name)
     if partial:
         target = target.with_name(target.name + PART_SUFFIX)
+    if target.is_dir():
+        # Only when nothing is inside. Recursively deleting a directory of
+        # models from a web page is a bigger promise than this makes.
+        try:
+            target.rmdir()
+        except OSError:
+            raise IsADirectoryError(name)
+        return {"ok": True, "freed": 0}
     if not target.is_file():
         raise FileNotFoundError(name)
     size = target.stat().st_size
