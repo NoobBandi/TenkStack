@@ -25,8 +25,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
-    auth, catalog, channels, chats, config, gpu, gpu_history, llamaswap, logs as journal,
-    system, users, versions,
+    auth, catalog, channels, chats, comfyfiles, config, gpu, gpu_history, llamaswap,
+    logs as journal, system, users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -636,6 +636,90 @@ async def comfyui_image(
         iter([resp.content]),
         media_type=resp.headers.get("content-type", "image/png"),
     )
+
+
+# --------------------------------------------------------------------------
+# ComfyUI's model and input folders
+#
+# ComfyUI can say what it found but has no way to be given anything: /upload
+# takes input images under 100 MB and nothing else, so a checkpoint has always
+# meant a shell on this machine. These reach the filesystem directly, which is
+# also why every one of them goes through comfyfiles.resolve() -- a name from a
+# browser must never decide which directory is written to.
+# --------------------------------------------------------------------------
+
+@app.get("/api/comfyui/files/roots")
+async def comfy_file_roots():
+    return {"roots": comfyfiles.roots()}
+
+
+@app.get("/api/comfyui/files/folders")
+async def comfy_file_folders(root: str):
+    try:
+        return {"folders": comfyfiles.folders(root), "free": comfyfiles.free_bytes(root)}
+    except comfyfiles.BadPath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/comfyui/files")
+async def comfy_files(root: str, folder: str):
+    try:
+        return {"files": comfyfiles.listing(root, folder)}
+    except comfyfiles.BadPath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/comfyui/files/offset")
+async def comfy_file_offset(root: str, folder: str, name: str):
+    """What the server already holds, so an interrupted upload resumes."""
+    try:
+        return comfyfiles.upload_offset(root, folder, name)
+    except comfyfiles.BadPath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/comfyui/files/upload")
+async def comfy_file_upload(
+    request: Request, root: str, folder: str, name: str, offset: int, total: int,
+):
+    """One chunk of a file, as a raw body.
+
+    Deliberately not a multipart form: the whole point is that the bytes go from
+    the socket to the disk without being assembled anywhere in between.
+    """
+    try:
+        result = await comfyfiles.receive(
+            root, folder, name, offset, total, request.stream(),
+        )
+    except comfyfiles.BadPath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail="同名檔案已存在")
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{exc} 不可寫入。容器以 root 建立了這些目錄，主控台不是。",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not result.get("ok"):
+        # 409 with the length actually held: the client re-syncs and carries on
+        # rather than starting the file again.
+        return JSONResponse(result, status_code=409)
+    return result
+
+
+@app.delete("/api/comfyui/files")
+async def comfy_file_delete(root: str, folder: str, name: str, partial: bool = False):
+    try:
+        return comfyfiles.delete(root, folder, name, partial)
+    except comfyfiles.BadPath as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="檔案不存在")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 # --------------------------------------------------------------------------

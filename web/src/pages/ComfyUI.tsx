@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Alert, App as AntApp, Button, Card, Dropdown, Empty, Image, Space, Tag, Tooltip, Typography,
 } from 'antd';
 import {
-  CloudDownloadOutlined, DownOutlined, ExportOutlined, ReloadOutlined,
-  SearchOutlined, StopOutlined, SyncOutlined,
+  CloudDownloadOutlined, DownOutlined, ExportOutlined, FolderOpenOutlined,
+  ReloadOutlined, SearchOutlined, StopOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import {
   checkComfyUpdates, comfyImageUrl, fetchComfyHistory, fetchComfyInstances,
@@ -357,7 +358,16 @@ export default function ComfyUI() {
       <Card
         title={<span style={{ fontSize: 12, opacity: 0.75 }}>最近的產出</span>}
         size="small"
-        extra={<Button size="small" onClick={() => void refresh()}>重新整理</Button>}
+        extra={
+          <Space size={8}>
+            {/* The one place someone standing here is likely to want next: the
+                gallery says what came out, this says what can go in. */}
+            <Link to="/comfyui/files">
+              <Button size="small" icon={<FolderOpenOutlined />}>檔案</Button>
+            </Link>
+            <Button size="small" onClick={() => void refresh()}>重新整理</Button>
+          </Space>
+        }
       >
         {history.length === 0 ? (
           <Empty

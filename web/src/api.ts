@@ -772,3 +772,109 @@ export const saveChat = (payload: {
 export const patchChat = (id: number, patch: { title?: string; pinned?: boolean }) =>
   send<{ ok: boolean }>(`/chats/${id}`, 'PATCH', patch);
 export const deleteChat = (id: number) => send<{ ok: boolean }>(`/chats/${id}`, 'DELETE');
+
+// ---------------------------------------------------------------------------
+// ComfyUI's model and input folders
+// ---------------------------------------------------------------------------
+
+export interface ComfyFileRoot {
+  key: string;
+  label: string;
+  note: string;
+  path: string;
+  exists: boolean;
+  /** These directories are created by the container, which runs as root, while
+   *  the console does not. Reported so the UI can explain rather than fail. */
+  writable: boolean;
+}
+
+export interface ComfyFolder {
+  name: string;
+  files: number;
+  size: number;
+  writable: boolean;
+}
+
+export interface ComfyFile {
+  name: string;
+  size: number;
+  modified: number;
+  /** An upload that has not finished. Listed rather than hidden, so a transfer
+   *  interrupted yesterday is visible today. */
+  partial: boolean;
+}
+
+export const fetchComfyFileRoots = () => get<{ roots: ComfyFileRoot[] }>('/comfyui/files/roots');
+export const fetchComfyFolders = (root: string) =>
+  get<{ folders: ComfyFolder[]; free: number }>(`/comfyui/files/folders?root=${encodeURIComponent(root)}`);
+export const fetchComfyFiles = (root: string, folder: string) =>
+  get<{ files: ComfyFile[] }>(
+    `/comfyui/files?root=${encodeURIComponent(root)}&folder=${encodeURIComponent(folder)}`);
+export const deleteComfyFile = (root: string, folder: string, name: string, partial = false) =>
+  send<{ ok: boolean; freed: number }>(
+    `/comfyui/files?root=${encodeURIComponent(root)}&folder=${encodeURIComponent(folder)}`
+    + `&name=${encodeURIComponent(name)}&partial=${partial}`, 'DELETE');
+
+/**
+ * Chunk size. Large enough that a 20 GB model is ~1250 requests rather than
+ * 20000, small enough that a dropped connection costs a second of transfer
+ * rather than a minute.
+ */
+const UPLOAD_CHUNK = 16 * 1024 * 1024;
+
+/**
+ * Send one file, resuming whatever the server already holds.
+ *
+ * Chunked rather than one long PUT for two reasons, and progress is only the
+ * second of them. A single streamed body gives no way back from a dropped
+ * connection: an upload that dies at 19 GB starts again at zero. Here the
+ * server owns the count -- every chunk carries the offset it believes it is
+ * writing at, and a mismatch comes back as a 409 carrying the true length, so
+ * recovery is an ordinary request rather than a special case.
+ */
+export async function uploadComfyFile(
+  root: string,
+  folder: string,
+  file: File,
+  onProgress: (sent: number) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const base = `${BASE}/comfyui/files`;
+  const query = `root=${encodeURIComponent(root)}&folder=${encodeURIComponent(folder)}`
+    + `&name=${encodeURIComponent(file.name)}`;
+
+  const head = await get<{ offset: number; exists: boolean }>(
+    `/comfyui/files/offset?${query}`);
+  if (head.exists) throw new Error('同名檔案已存在');
+
+  let offset = head.offset;
+  onProgress(offset);
+
+  while (offset < file.size) {
+    const end = Math.min(offset + UPLOAD_CHUNK, file.size);
+    const res = await fetch(
+      `${base}/upload?${query}&offset=${offset}&total=${file.size}`,
+      { method: 'PUT', body: file.slice(offset, end), signal },
+    );
+
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      // The server disagrees about how much it has. Its number is the true
+      // one; adopting it is the whole recovery path.
+      if (typeof body.expected === 'number') {
+        offset = body.expected;
+        onProgress(offset);
+        continue;
+      }
+      throw new Error(body.detail ?? '同名檔案已存在');
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(body.detail ?? `上傳失敗（${res.status}）`);
+    }
+
+    const body = await res.json();
+    offset = typeof body.offset === 'number' ? body.offset : end;
+    onProgress(offset);
+  }
+}

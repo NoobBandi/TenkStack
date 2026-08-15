@@ -11,6 +11,7 @@ import Chat from './pages/Chat';
 import Models from './pages/Models';
 import Catalog from './pages/Catalog';
 import ComfyUI from './pages/ComfyUI';
+import ComfyFiles from './pages/ComfyFiles';
 import Users from './pages/Users';
 import Settings from './pages/Settings';
 import Gpu from './pages/Gpu';
@@ -31,6 +32,7 @@ const ROUTES = [
   { path: '/models', element: <Models /> },
   { path: '/catalog', element: <Catalog /> },
   { path: '/comfyui', element: <ComfyUI /> },
+  { path: '/comfyui/files', element: <ComfyFiles /> },
   { path: '/users', element: <Users /> },
   { path: '/gpu', element: <Gpu /> },
   { path: '/connections', element: <Connections /> },
