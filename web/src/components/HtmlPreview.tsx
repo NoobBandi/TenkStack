@@ -87,18 +87,16 @@ export default function HtmlPreview({ source, language, runId }: Props) {
   const doc = useMemo(() => buildDocument(source, language), [source, language]);
 
   return (
-    <div className="md-preview">
-      <iframe
-        key={runId}
-        className="md-preview-frame"
-        srcDoc={doc}
-        // allow-scripts runs the code; allow-modals lets alert/confirm work,
-        // which a lot of generated demos rely on. allow-same-origin is absent by
-        // design -- see the note at the top of this file.
-        sandbox="allow-scripts allow-modals"
-        referrerPolicy="no-referrer"
-        title="預覽"
-      />
-    </div>
+    <iframe
+      key={runId}
+      className="md-preview-frame"
+      srcDoc={doc}
+      // allow-scripts runs the code; allow-modals lets alert/confirm work,
+      // which a lot of generated demos rely on. allow-same-origin is absent by
+      // design -- see the note at the top of this file.
+      sandbox="allow-scripts allow-modals"
+      referrerPolicy="no-referrer"
+      title="預覽"
+    />
   );
 }

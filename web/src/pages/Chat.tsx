@@ -3,9 +3,13 @@ import {
   Alert, App as AntApp, Button, Drawer, Empty, Grid, Image, Space, Tag,
   Tooltip, Typography,
 } from 'antd';
-import { CopyOutlined, DownOutlined, RedoOutlined, SlidersOutlined } from '@ant-design/icons';
+import {
+  CopyOutlined, DownOutlined, RedoOutlined, ReloadOutlined, SlidersOutlined,
+} from '@ant-design/icons';
 import Composer from '../components/Composer';
 import ChatSettings from '../components/ChatSettings';
+import PreviewPanel from '../components/PreviewPanel';
+import { PreviewProvider, usePreview } from '../components/preview';
 import ChatHistory from '../components/ChatHistory';
 import Markdown from '../components/Markdown';
 import ThinkingTrace from '../components/ThinkingTrace';
@@ -23,6 +27,14 @@ const HISTORY_GUTTER = 16;
 // first docked.
 const SETTINGS_WIDTH = 300;
 const SETTINGS_GUTTER = 16;
+/**
+ * The preview is wider than the settings column and resizable, because unlike a
+ * list of sliders its right width is a property of the content: a colour swatch
+ * wants 300px and a dashboard wants everything going.
+ */
+const PREVIEW_DEFAULT = 460;
+const PREVIEW_MIN = 280;
+const PREVIEW_GUTTER = 16;
 /** Space outside each panel's rule. Carried by the panel, not by a flex gap on
  *  the row, so a closed panel collapses to nothing instead of leaving a gap. */
 const PANEL_MARGIN = 20;
@@ -76,7 +88,7 @@ function TurnStats({ turn }: { turn: Turn }) {
   );
 }
 
-export default function Chat() {
+function ChatInner() {
   const { message: toast } = AntApp.useApp();
   const { models } = useStream();
   const {
@@ -95,6 +107,9 @@ export default function Chat() {
   // 150px; xl is the first width where both fit and the reply still reads.
   const roomForSettings = screens.xl ?? false;
 
+  // Non-null: ChatInner is always rendered inside the provider below.
+  const preview = usePreview()!;
+
   const [atBottom, setAtBottom] = useState(true);
   // Both panels are remembered: whether they sit beside the conversation is a
   // lasting preference rather than a per-visit one. This was not true while
@@ -106,6 +121,10 @@ export default function Chat() {
   const [showHistory, setShowHistory] = useState(
     () => localStorage.getItem('chat.history') === 'on',
   );
+  const [previewWidth, setPreviewWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('chat.previewWidth'));
+    return Number.isFinite(saved) && saved >= PREVIEW_MIN ? saved : PREVIEW_DEFAULT;
+  });
   const scroller = useRef<HTMLDivElement>(null);
 
   // Pick a loaded model once the list arrives; a stopped one would make the
@@ -129,6 +148,48 @@ export default function Chat() {
   useEffect(() => {
     localStorage.setItem('chat.settings', showSettings ? 'on' : 'off');
   }, [showSettings]);
+
+  useEffect(() => {
+    localStorage.setItem('chat.previewWidth', String(previewWidth));
+  }, [previewWidth]);
+
+  // Settings and the preview both dock to the right edge, and both open at once
+  // would leave the conversation narrower than the composer's own controls. The
+  // newer request wins.
+  useEffect(() => {
+    if (preview.target) setShowSettings(false);
+  }, [preview.target]);
+
+  /**
+   * Drag the panel's leading edge to resize.
+   *
+   * Pointer capture rather than window listeners: the pointer crosses the
+   * iframe while dragging, and a frame from another origin swallows the events
+   * that would otherwise reach a listener on window -- the drag would stick.
+   */
+  const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = previewWidth;
+
+    const move = (e: PointerEvent) => {
+      // Dragging left widens: the panel is on the right, so its leading edge
+      // moving towards the start of the line grows it.
+      const next = startWidth + (startX - e.clientX);
+      setPreviewWidth(Math.max(PREVIEW_MIN, Math.min(next, window.innerWidth - 360)));
+    };
+    const stop = () => {
+      handle.releasePointerCapture(event.pointerId);
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', stop);
+      handle.removeEventListener('pointercancel', stop);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', stop);
+    handle.addEventListener('pointercancel', stop);
+  }, [previewWidth]);
 
   const active = models.find((m) => m.id === model);
 
@@ -417,6 +478,60 @@ export default function Chat() {
         </div>
       )}
 
+      {roomForPanel && preview.target && (
+        <div style={{
+          width: previewWidth + PREVIEW_GUTTER,
+          flexShrink: 0, overflow: 'hidden',
+          paddingInlineStart: PREVIEW_GUTTER,
+          marginInlineStart: PANEL_MARGIN,
+          display: 'flex',
+        }}>
+          {/* The grab strip sits outside the panel's own border so the cursor
+              changes over empty space rather than over the preview itself. */}
+          <div
+            onPointerDown={startResize}
+            style={{
+              width: 5, marginInlineStart: -PREVIEW_GUTTER, marginInlineEnd: PREVIEW_GUTTER - 5,
+              cursor: 'col-resize', flexShrink: 0, alignSelf: 'stretch',
+              borderInlineStart: `1px solid ${LINE.faint}`,
+              touchAction: 'none',
+            }}
+          />
+          <div style={{ width: previewWidth, height: '100%' }}>
+            <PreviewPanel
+              target={preview.target}
+              onRerun={preview.rerun}
+              onClose={preview.close}
+            />
+          </div>
+        </div>
+      )}
+
+      {!roomForPanel && (
+        <Drawer
+          title={`${preview.target?.language.toUpperCase() ?? ''} 預覽`}
+          placement="right"
+          width="92%"
+          open={preview.target !== null}
+          onClose={preview.close}
+          styles={{ body: { padding: 12 } }}
+          extra={
+            <Button size="small" icon={<ReloadOutlined />} onClick={preview.rerun}>
+              重新執行
+            </Button>
+          }
+        >
+          {preview.target && (
+            <PreviewPanel
+              target={preview.target}
+              onRerun={preview.rerun}
+              onClose={preview.close}
+              showClose={false}
+            />
+          )}
+        </Drawer>
+      )}
+
       {!roomForPanel && (
         <Drawer
           title="對話紀錄"
@@ -450,5 +565,17 @@ export default function Chat() {
         </Drawer>
       )}
     </div>
+  );
+}
+
+/**
+ * The preview panel is opened from a button inside a reply and rendered at the
+ * page edge, so the state joining them has to sit above both.
+ */
+export default function Chat() {
+  return (
+    <PreviewProvider>
+      <ChatInner />
+    </PreviewProvider>
   );
 }

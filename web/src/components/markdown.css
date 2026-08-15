@@ -107,16 +107,14 @@
   gap: 2px;
 }
 
-/* The preview sits below the source rather than replacing it: seeing what ran
-   next to what it produced is the point, and a toggle would hide one of them. */
+/* The preview lives in the right-hand panel, not under the code block: the
+   reply stays readable while its output runs beside it, which is what the
+   inline version cost -- a tall preview pushed the rest of the answer off
+   screen. Height comes from the panel; width is dragged on its edge. */
 .md-preview {
-  border-top: 1px solid rgba(128, 128, 128, 0.22);
-  /* Vertical resize because a preview's natural height is unknowable -- a
-     colour swatch needs 80px and a dashboard needs 600. */
-  resize: vertical;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  border-radius: 6px;
   overflow: hidden;
-  height: 360px;
-  min-height: 80px;
 }
 
 .md-preview-frame {
