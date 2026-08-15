@@ -330,6 +330,7 @@ async def load_model(model_id: str):
     llama-swap has no explicit load endpoint -- loading is a side effect of
     routing a request -- so this is the supported way to warm a model up.
     """
+    await make_room_for(model_id)
     async with httpx.AsyncClient(base_url=llamaswap.BASE_URL, timeout=900) as client:
         try:
             resp = await client.post(
@@ -665,6 +666,116 @@ async def comfyui_image(
         iter([resp.content]),
         media_type=resp.headers.get("content-type", "image/png"),
     )
+
+
+# --------------------------------------------------------------------------
+# Sharing the card between llama-swap and ComfyUI
+#
+# One 32 GB card, a 24 GB language model and a 25 GB video model: they cannot
+# both be resident, and nothing arbitrates between them. llama-swap's
+# `exclusive` groups only govern its own models -- it has no idea ComfyUI
+# exists -- so the failure was ordinary and silent. ComfyUI holds the card after
+# a generation, a chat request arrives, llama-server cannot allocate, and the
+# only clue is an allocation error in a log nobody is reading.
+#
+# The console is the one process that sees both, and every /v1 request already
+# passes through it, so this is where the two are made to take turns.
+# --------------------------------------------------------------------------
+
+# Below this ComfyUI is not in anyone's way -- an idle instance still holds a
+# few hundred MB of context and buffers.
+COMFYUI_IDLE_VRAM = 1 * 1024**3
+
+# Added to a model's file size to decide whether it needs the card cleared.
+# Generous on purpose: KV cache and compute buffers are not in the file size,
+# and the two ways of being wrong are not equal. Freeing when it was not needed
+# costs a reload; not freeing when it was needed is a failed request.
+VRAM_MARGIN = 4 * 1024**3
+
+# One eviction at a time. Two chat requests arriving together would otherwise
+# both decide to clear the card and both wait for it.
+_vram_lock = asyncio.Lock()
+
+
+async def _comfyui_held_vram() -> list[tuple[dict, int]]:
+    """Instances holding more than an idle amount, with how much."""
+    found = await asyncio.gather(*(_probe_comfyui(p) for p in COMFYUI_PORTS))
+    out = []
+    for instance in found:
+        if instance is None:
+            continue
+        held = (instance.get("device") or {}).get("torch_vram_total") or 0
+        if held >= COMFYUI_IDLE_VRAM:
+            out.append((instance, held))
+    return out
+
+
+async def make_room_for(model_id: str) -> None:
+    """Clear ComfyUI off the card if this model is about to need it.
+
+    Does nothing in the common case -- the model is already resident, or there
+    is room as things stand -- so the cost on a normal chat request is one local
+    call to llama-swap.
+
+    Raises rather than waiting when ComfyUI is mid-generation. /free is a flag
+    ComfyUI consumes between prompts, so the memory would come back only after
+    the current job finishes; a chat request that hangs for the three minutes a
+    video takes is worse than one that says what is in the way.
+    """
+    if not model_id:
+        return
+
+    running = await llamaswap.get_running()
+    if any(entry.get("model") == model_id for entry in running):
+        return
+
+    async with _vram_lock:
+        held = await _comfyui_held_vram()
+        if not held:
+            return
+
+        # Only now is it worth asking how big the model is.
+        need = sum(f["size_bytes"] for f in config.files_for_model(model_id)) + VRAM_MARGIN
+        sample = await gpu.sample_dict(0) or {}
+        total = (sample.get("memory_total_mib") or 0) * 1024**2
+        used = (sample.get("memory_used_mib") or 0) * 1024**2
+        if total and (total - used) >= need:
+            return
+
+        busy = [i for i, _ in held if i["queue_running"] or i["queue_pending"]]
+        if busy:
+            ports = "、".join(f":{i['port']}" for i in busy)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"ComfyUI（{ports}）正在算圖，佔著顯示卡。"
+                    "等它跑完，或先在 ComfyUI 介面中斷，再送這個請求。"
+                ),
+            )
+
+        for instance, bytes_held in held:
+            logger.info(
+                "freeing %.1f GiB from ComfyUI :%d to make room for %s",
+                bytes_held / 1024**3, instance["port"], model_id,
+            )
+            base = f"http://127.0.0.1:{instance['port']}"
+            async with httpx.AsyncClient(base_url=base, timeout=10) as client:
+                try:
+                    await client.post(
+                        "/free", json={"unload_models": True, "free_memory": True})
+                except httpx.HTTPError as exc:
+                    logger.warning("could not ask ComfyUI :%d to free: %s",
+                                   instance["port"], exc)
+
+        # Waited for rather than assumed: /free returns as soon as the flag is
+        # set, and llama-server would start allocating against memory ComfyUI
+        # has not released yet.
+        for _ in range(60):
+            await asyncio.sleep(0.5)
+            if not await _comfyui_held_vram():
+                logger.info("ComfyUI released the card")
+                return
+        logger.warning("ComfyUI still holds VRAM after 30s; loading %s anyway", model_id)
 
 
 # --------------------------------------------------------------------------
@@ -1228,6 +1339,17 @@ async def openai_proxy(path: str, request: Request):
     """
     body = await request.body()
     _log_request_shape(path, body, request)
+
+    # Only requests that name a model can cause one to be loaded; /v1/models and
+    # the like are just reads and must not stall behind an eviction.
+    if request.method == "POST" and body:
+        try:
+            wanted = json.loads(body).get("model")
+        except (ValueError, AttributeError):
+            wanted = None
+        if isinstance(wanted, str):
+            await make_room_for(wanted)
+
     headers = {
         key: value for key, value in request.headers.items()
         # Hop-by-hop and identity headers are dropped: Host would be wrong for
