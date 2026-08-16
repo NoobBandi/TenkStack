@@ -9,10 +9,6 @@ import type { GpuSample, ModelInfo } from '../api';
 import { LINE, MONO } from '../theme';
 
 const { Sider } = Layout;
-
-/** antd fixes the collapse trigger over the bottom of the Sider rather than
- *  laying it out, so anything meant to sit above it has to leave the room. */
-const TRIGGER_HEIGHT = 48;
 const { Text } = Typography;
 
 export const SIDEBAR_WIDTH = 208;
@@ -177,16 +173,15 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
         </div>
       )}
 
-      {/* Pinned to the floor rather than trailing the meters: it is a property
-          of the whole panel, not another reading in that stack.
-          Padding is kept off it and lineHeight pinned to 1: the only gap that
-          belongs under the readings is the room the collapse trigger needs, and
-          antd fixes that trigger over the bottom of the Sider rather than
-          laying it out here, so the room has to be left by margin. Anything
-          added on top of that reads as the panel not reaching the floor. */}
+      {/* Nothing is reserved under this. The trigger is fixed over the bottom
+          of the Sider, but antd already leaves the room for it -- its
+          `-has-trigger` class puts `padding-bottom: triggerHeight` on the Sider
+          itself, so the children box ends exactly where the trigger begins.
+          Adding a margin here reserved the same 48px a second time, which is
+          the gap that kept this from reaching the floor. */}
       <Tooltip title={`建置 ${__BUILD__}`} placement="right">
         <div style={{
-          flexShrink: 0, marginBottom: TRIGGER_HEIGHT, paddingBottom: 2,
+          flexShrink: 0, paddingBottom: 4,
           textAlign: 'center', cursor: 'default', lineHeight: 1,
         }}>
           <Text style={{
