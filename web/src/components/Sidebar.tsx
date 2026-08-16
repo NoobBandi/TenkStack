@@ -122,7 +122,7 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
              The alt text is the fallback, so a missing file leaves a name
              rather than a gap. */
           <img
-            src="/logo.png"
+            src="/logo.webp"
             alt="TenkStack"
             style={{ height: 24, width: 'auto', display: 'block' }}
           />
