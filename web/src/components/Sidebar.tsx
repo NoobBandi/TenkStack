@@ -149,7 +149,7 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
 
       {!collapsed && (
         <div style={{
-          padding: '12px 16px 6px', borderTop: `1px solid ${LINE.faint}`, flexShrink: 0,
+          padding: '12px 16px 2px', borderTop: `1px solid ${LINE.faint}`, flexShrink: 0,
         }}>
           {/* One bar per card: this strip answers "is anything full?", and a
               combined bar cannot say which card it means. */}
@@ -186,7 +186,7 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
           added on top of that reads as the panel not reaching the floor. */}
       <Tooltip title={`建置 ${__BUILD__}`} placement="right">
         <div style={{
-          flexShrink: 0, marginBottom: TRIGGER_HEIGHT, paddingBottom: 6,
+          flexShrink: 0, marginBottom: TRIGGER_HEIGHT, paddingBottom: 2,
           textAlign: 'center', cursor: 'default', lineHeight: 1,
         }}>
           <Text style={{
