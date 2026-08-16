@@ -21,11 +21,12 @@ from typing import Any
 
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import LiteralScalarString
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path("/home/tenk/ai/llama-swap/config.yaml")
-MODELS_DIR = Path("/home/tenk/ai/models")
+CONFIG_PATH = paths.LLAMA_SWAP_CONFIG
+MODELS_DIR = paths.MODELS_DIR
 WRAPPER = "${llama-sycl}"
 
 _yaml = YAML()

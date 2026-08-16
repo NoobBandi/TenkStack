@@ -16,11 +16,11 @@ import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("/home/tenk/ai/ai-console/console.sqlite")
+DB_PATH = paths.DB_PATH
 TITLE_LENGTH = 48
 
 

@@ -19,11 +19,11 @@ import os
 import secrets
 import sqlite3
 import time
-from pathlib import Path
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path("/home/tenk/ai/ai-console/console.sqlite")
+DB_PATH = paths.DB_PATH
 SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**14, 8, 1
 KEY_PREFIX = "sk-console-"
 

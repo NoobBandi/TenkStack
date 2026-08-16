@@ -35,10 +35,11 @@ import shutil
 import socket
 import subprocess
 from pathlib import Path
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-CADDY_DIR = Path("/home/tenk/ai/caddy")
+CADDY_DIR = paths.CADDY_DIR
 CADDYFILE = CADDY_DIR / "Caddyfile"
 CHANNELS = CADDY_DIR / "channels"
 DISABLED = CHANNELS / "disabled"

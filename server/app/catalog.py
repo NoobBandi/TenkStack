@@ -30,11 +30,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
+from . import paths
 
 logger = logging.getLogger(__name__)
 
 HF_API = "https://huggingface.co/api"
-MODELS_DIR = Path("/home/tenk/ai/models")
+MODELS_DIR = paths.MODELS_DIR
 
 # Streamed block size within one segment. Only affects how often progress and
 # the write syscall happen, not concurrency.

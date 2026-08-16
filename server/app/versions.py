@@ -13,18 +13,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from pathlib import Path
 
 import httpx
 
 from . import gpu, llamaswap
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-LLAMA_SWAP_BIN = Path("/home/tenk/ai/llama-swap/llama-swap")
-CADDY_BIN = Path("/home/tenk/.local/bin/caddy")
-LLAMA_CPP_DIR = Path("/home/tenk/ai/llama.cpp")
-ONEAPI_DIR = Path("/opt/intel/oneapi")
+LLAMA_SWAP_BIN = paths.LLAMA_SWAP_BIN
+CADDY_BIN = paths.CADDY_BIN
+LLAMA_CPP_DIR = paths.LLAMA_CPP_DIR
+ONEAPI_DIR = paths.ONEAPI_DIR
 COMFYUI_URL = "http://127.0.0.1:8188"
 
 

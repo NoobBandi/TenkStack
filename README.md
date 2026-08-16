@@ -97,9 +97,31 @@ npm run build      # served by the backend from web/dist
 npm run dev        # or a dev server on :5173, proxying /api to :8070
 ```
 
-Paths to the models directory, llama-swap config and state are currently
-constants at the top of `server/app/*.py`. They assume `~/ai/...` and would need
-changing for another host.
+### Where things live
+
+Every path the backend touches is an environment variable with a default, all
+gathered in `server/app/paths.py`. The defaults describe one arrangement —
+llama-swap, the models, llama.cpp, ComfyUI and Caddy side by side under `~/ai`
+— and expand against whoever is running, so an unmodified checkout works for
+any user with that layout.
+
+| Variable | Default | What it is |
+|---|---|---|
+| `CONSOLE_AI_DIR` | `~/ai` | Everything below is derived from this |
+| `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | Session key and SQLite; the only thing the console writes |
+| `CONSOLE_MODELS_DIR` | `$CONSOLE_AI_DIR/models` | GGUF weights |
+| `CONSOLE_LLAMA_SWAP_DIR` | `$CONSOLE_AI_DIR/llama-swap` | |
+| `CONSOLE_LLAMA_SWAP_CONFIG` | `$CONSOLE_LLAMA_SWAP_DIR/config.yaml` | |
+| `CONSOLE_LLAMA_SWAP_BIN` | `$CONSOLE_LLAMA_SWAP_DIR/llama-swap` | Read for its version |
+| `CONSOLE_LLAMA_CPP_DIR` | `$CONSOLE_AI_DIR/llama.cpp` | Read for its commit |
+| `CONSOLE_COMFYUI_DIR` | `$CONSOLE_AI_DIR/comfyui` | Holds `storage-models/`, `storage-user/` |
+| `CONSOLE_CADDY_DIR` | `$CONSOLE_AI_DIR/caddy` | Channel files the console switches |
+| `CONSOLE_CADDY_BIN` | `~/.local/bin/caddy` | Installed per-user, so not under the root above |
+| `CONSOLE_ONEAPI_DIR` | `/opt/intel/oneapi` | Version panel only; absent is fine |
+
+Only a layout that differs from that one needs any of them set. Nothing is
+created — a missing directory is reported as missing, because turning "not set
+up" into "set up and empty" hides the difference.
 
 Authentication switches itself on once the first account exists — requiring a
 login before any account is created would lock the owner out with no way back

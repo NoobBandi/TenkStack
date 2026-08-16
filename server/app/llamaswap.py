@@ -19,11 +19,12 @@ from typing import AsyncIterator
 
 import httpx
 from httpx_sse import aconnect_sse
+from . import paths
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "http://127.0.0.1:8080"
-CONFIG_PATH = "/home/tenk/ai/llama-swap/config.yaml"
+CONFIG_PATH = str(paths.LLAMA_SWAP_CONFIG)
 
 # llama-server prints its own timings to stderr, which llama-swap forwards as
 # logData. This is the only place real throughput is reported, so it is parsed

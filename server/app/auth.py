@@ -21,15 +21,15 @@ import logging
 import os
 import time
 from hashlib import sha256
-from pathlib import Path
 
 from fastapi import Request
 
 from . import users
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-SECRET_PATH = Path("/home/tenk/ai/ai-console/session.key")
+SECRET_PATH = paths.SESSION_KEY
 COOKIE_NAME = "ai_console_session"
 SESSION_TTL = 30 * 24 * 3600  # 30 days; this is a household, not a bank.
 

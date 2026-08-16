@@ -11,10 +11,11 @@ import logging
 import os
 import time
 from pathlib import Path
+from . import paths
 
 logger = logging.getLogger(__name__)
 
-MODELS_DIR = Path("/home/tenk/ai/models")
+MODELS_DIR = paths.MODELS_DIR
 
 # CPU utilisation is a rate, so it only exists between two readings of the
 # cumulative counters. The previous sample lives here.

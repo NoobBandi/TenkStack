@@ -44,8 +44,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator
+from . import paths
 
-COMFY_DIR = Path("/home/tenk/ai/comfyui")
+COMFY_DIR = paths.COMFY_DIR
 
 
 @dataclass(frozen=True)
