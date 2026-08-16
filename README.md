@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="https://cdn.quantdense.com/tenkstack/tenkstack-banner.png"
+       alt="TenkStack" width="820">
+</p>
+
 # Tenks Console
 
 A self-hosted control panel for a single-GPU home AI box. Built for an **Intel
@@ -16,12 +21,25 @@ not have.
   probes for `nvidia-smi` and `rocm-smi` and reports nothing on Intel.
 - **Chat** — streaming, with server-measured throughput, context-window usage,
   collapsible reasoning, image attachments and a composer that shades ``` code
-  fences as you type.
+  fences as you type. Sampling settings are seeded from the model's own
+  llama-swap entry, so the config and the panel cannot disagree.
+- **Runnable code** — HTML, SVG, React and Python blocks run in a panel beside
+  the reply. React is transpiled in the frame rather than posted to a compiler
+  service; Python is CPython on WebAssembly. Neither can reach the host, which
+  is what the button is allowed to promise. Long blocks can be downloaded, named
+  from the path the code declares for itself.
 - **Models** — add, edit and remove models; optionally delete their weights from
   disk; spot orphaned files and interrupted downloads.
 - **Catalog** — search Hugging Face and download GGUFs, segmented and resumable.
-- **Image generation** — ComfyUI queue, recent output and native UI, behind the
-  console's login.
+  Split uploads are listed as one model rather than as the fragments they
+  arrive in, since no fragment is usable alone.
+- **Image generation** — one row per ComfyUI instance, each with the GPU it was
+  launched against, because that is fixed at start and therefore decides which
+  card is free. Updates run through ComfyUI-Manager across every instance at
+  once.
+- **Files** — browse and fill ComfyUI's model, input and output folders.
+  Uploads are chunked and resumable, streamed to disk rather than buffered, so a
+  20 GB checkpoint is a transfer rather than a memory problem.
 - **Users** — accounts, roles and API keys for an OpenAI-compatible endpoint.
 
 ## Architecture
@@ -75,7 +93,12 @@ that is the thing the user actually waits for.
 ## Requirements
 
 - Intel GPU with the `xe` or `i915` driver, and `xpu-smi`
-- `llama.cpp` built with the SYCL backend
+- `llama.cpp` built with the SYCL backend, and **oneDNN** — `GGML_SYCL_DNN`
+  defaults to ON but silently compiles itself out when `find_package(DNNL)`
+  fails, and a build without it loses the XMX attention path: measured here at
+  254 t/s prefill against 291 at 32k context, generation unchanged. Two apt
+  packages, not one: `intel-oneapi-dnnl` carries only the shared library, while
+  the headers and `dnnl-config.cmake` are in `intel-oneapi-dnnl-devel`.
 - [llama-swap](https://github.com/mostlygeek/llama-swap)
 - [Caddy](https://caddyserver.com/) for TLS and the single entry point
 - ComfyUI via [`yanwk/comfyui-boot:xpu`](https://github.com/YanWenKun/ComfyUI-Docker)
