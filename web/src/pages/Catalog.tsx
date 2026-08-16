@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Empty, Input, List, Progress, Space, Table, Tag, Typography,
+  App as AntApp, Button, Card, Empty, Input, List, Progress, Space, Table, Tag, Typography,
 } from 'antd';
-import { CloseOutlined, CloudDownloadOutlined, StopOutlined } from '@ant-design/icons';
+import {
+  CloseOutlined, CloudDownloadOutlined, InfoCircleOutlined, StopOutlined,
+} from '@ant-design/icons';
 import { MONO } from '../theme';
 import {
   cancelDownload, catalogFiles, fetchDownloads, searchCatalog, startDownload, subscribe,
@@ -236,7 +238,7 @@ export default function Catalog() {
       {repos.length > 0 && (
         <Card
           style={{ flex: '1 1 420px', minWidth: 0 }}
-          styles={{ body: { maxHeight: 620, overflowY: 'auto' } }}
+          styles={{ body: { maxHeight: 'calc(100vh - 300px)', minHeight: 420, overflowY: 'auto' } }}
           title={<span style={{ fontSize: 13 }}>搜尋結果</span>}
           size="small"
           extra={
@@ -326,7 +328,7 @@ export default function Catalog() {
               rowKey="filename"
               size="small"
               // The rows scroll, the header and the paginator do not.
-              scroll={{ y: 420 }}
+              scroll={{ y: 'calc(100vh - 420px)' }}
               pagination={files.length > 10 ? {
                 pageSize: filePageSize,
                 onChange: (_, size) => setFilePageSize(size),
@@ -377,19 +379,13 @@ export default function Catalog() {
               explains a workaround, and a workaround with nothing to work
               around is just a paragraph in the way. */}
           {files.some((f) => f.size_gib >= VRAM_GIB * 0.9) && (
-            <Alert
-              style={{ marginTop: 12 }}
-              type="info"
-              showIcon
-              message="超出顯存的模型仍然可以跑"
-              description={
-                <span>
-                  MoE 模型可用 <code>--n-cpu-moe N</code> 把專家層放到主記憶體，
-                  只有注意力層留在 GPU。速度會下降，但每個 token 只啟用少數專家，
-                  代價比整個模型搬到 CPU 小得多。在「模型」頁的額外參數欄位設定。
-                </span>
-              }
-            />
+            <Text type="secondary" style={{
+              display: 'block', marginTop: 10, fontSize: 11, lineHeight: 1.6, opacity: 0.6,
+            }}>
+              <InfoCircleOutlined style={{ marginInlineEnd: 6 }} />
+              超出顯存仍可執行：MoE 模型用 <code>--n-cpu-moe N</code> 把專家層放到主記憶體，
+              只留注意力層在 GPU，在「模型」頁的額外參數設定。
+            </Text>
           )}
           </>
         )}
