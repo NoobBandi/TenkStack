@@ -260,10 +260,16 @@ export interface CatalogRepo {
 }
 
 export interface CatalogFile {
+  /** The first part. A model entry pointing at any other one fails to load. */
   filename: string;
+  /** Every file this model is made of. One unless it was uploaded split. */
+  parts: string[];
+  part_count: number;
+  /** Across all parts, which is what has to fit on disk and on the card. */
   size_bytes: number;
   size_gib: number;
   is_mmproj: boolean;
+  /** True only when every part is present. Two of three is not a model. */
   on_disk: boolean;
 }
 

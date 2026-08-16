@@ -140,11 +140,22 @@ export default function Catalog() {
     }
   };
 
-  const onDownload = async (filename: string) => {
+  /**
+   * Every part, not just the first.
+   *
+   * A split model is only a model once all of it is here -- llama.cpp is
+   * pointed at the first part and looks for the rest beside it, so fetching one
+   * produces a file that loads as nothing. They are started together and appear
+   * as separate rows below, which is honest: each is its own transfer and can
+   * fail or be cancelled on its own.
+   */
+  const onDownload = async (file: CatalogFile) => {
     if (!selected) return;
     try {
-      await startDownload(selected, filename);
-      message.success('已開始下載');
+      for (const part of file.parts) await startDownload(selected, part);
+      message.success(file.part_count > 1
+        ? `已開始下載 ${file.part_count} 個分片`
+        : '已開始下載');
       setDownloads(await fetchDownloads());
     } catch (error) {
       message.error((error as Error).message);
@@ -346,6 +357,9 @@ export default function Catalog() {
                       <Slide style={{ fontSize: 12, fontFamily: MONO, flex: 1, minWidth: 0 }}>
                         {name}
                       </Slide>
+                      {row.part_count > 1 && (
+                        <Tag style={{ flex: 'none' }}>{row.part_count} 分片</Tag>
+                      )}
                       {row.is_mmproj && <Tag color="purple" style={{ flex: 'none' }}>視覺投影</Tag>}
                       {row.on_disk && <Tag color="green" style={{ flex: 'none' }}>已在磁碟</Tag>}
                     </div>
@@ -367,7 +381,7 @@ export default function Catalog() {
                   render: (_, row) => (
                     <Button size="small" icon={<CloudDownloadOutlined />}
                             disabled={row.on_disk}
-                            onClick={() => onDownload(row.filename)}>
+                            onClick={() => onDownload(row)}>
                       下載
                     </Button>
                   ),

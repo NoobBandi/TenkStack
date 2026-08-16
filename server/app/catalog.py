@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import os
 import time
 from dataclasses import dataclass, field
@@ -145,20 +146,66 @@ async def list_files(repo_id: str) -> list[dict]:
             return []
 
     data = resp.json()
-    files = []
+    raw = []
     for sibling in data.get("siblings") or []:
         name = sibling.get("rfilename", "")
         if not name.lower().endswith(".gguf"):
             continue
-        size = sibling.get("size") or 0
-        files.append({
-            "filename": name,
-            "size_bytes": size,
-            "size_gib": round(size / 1024**3, 2),
-            "is_mmproj": name.lower().startswith("mmproj"),
-            "on_disk": (MODELS_DIR / Path(name).name).exists(),
+        raw.append((name, sibling.get("size") or 0))
+    return _group_splits(raw)
+
+
+# A model too large for one file is uploaded as `…-00001-of-00003.gguf`.
+_SPLIT = re.compile(r"^(?P<stem>.+)-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$", re.I)
+
+
+def _group_splits(raw: list[tuple[str, int]]) -> list[dict]:
+    """One entry per model, not per file.
+
+    Large models arrive split across several files, and every part is needed:
+    llama.cpp is pointed at the first and finds the rest beside it. Listed
+    individually they were indistinguishable from whole models -- sorted by
+    size, so a 1.6 GiB row could be the third part of a 60 GiB quant, and
+    downloading it produced a file that loads as nothing. One repo lists
+    seventy-six such files and not one of them is usable alone.
+
+    A group reports the first part as its filename, because that is what a model
+    entry points at, and the total size, because that is what has to fit.
+    """
+    groups: dict[str, dict] = {}
+    order: list[str] = []
+
+    for name, size in raw:
+        match = _SPLIT.match(name)
+        key = match.group("stem") if match else name
+        if key not in groups:
+            groups[key] = {
+                "parts": [],
+                "size_bytes": 0,
+                "is_mmproj": Path(name).name.lower().startswith("mmproj"),
+                "part_count": int(match.group("count")) if match else 1,
+            }
+            order.append(key)
+        groups[key]["parts"].append(name)
+        groups[key]["size_bytes"] += size
+
+    out = []
+    for key in order:
+        group = groups[key]
+        parts = sorted(group["parts"])
+        out.append({
+            # The first part: pointing a model entry at any other one fails.
+            "filename": parts[0],
+            "parts": parts,
+            "part_count": len(parts),
+            "size_bytes": group["size_bytes"],
+            "size_gib": round(group["size_bytes"] / 1024**3, 2),
+            "is_mmproj": group["is_mmproj"],
+            # Every part, not just the first: two of three on disk is not a
+            # model, and calling it one would hide the missing third.
+            "on_disk": all((MODELS_DIR / Path(p).name).exists() for p in parts),
         })
-    return sorted(files, key=lambda f: f["size_bytes"])
+    return sorted(out, key=lambda f: f["size_bytes"])
 
 
 async def _total_size(client: httpx.AsyncClient, url: str) -> int:
