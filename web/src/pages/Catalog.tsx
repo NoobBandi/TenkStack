@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  App as AntApp, Button, Card, Empty, Input, List, Progress, Space, Table, Tag, Typography,
+  App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Space, Table,
+  Tag, Typography,
 } from 'antd';
 import {
   CloseOutlined, CloudDownloadOutlined, InfoCircleOutlined, StopOutlined,
 } from '@ant-design/icons';
-import { MONO } from '../theme';
+import { LINE, MONO } from '../theme';
 import {
   cancelDownload, catalogFiles, fetchDownloads, searchCatalog, startDownload, subscribe,
   type CatalogFile, type CatalogRepo, type DownloadStatus,
@@ -304,7 +305,12 @@ export default function Catalog() {
       {repos.length > 0 && (
         <Card
           style={{ flex: '1 1 420px', minWidth: 0 }}
-          styles={{ body: { maxHeight: columnHeight - CARD_HEAD, overflowY: 'auto' } }}
+          // A definite height rather than a cap, so the rows can be given the
+          // slack and the paginator can hold the floor of the card.
+          styles={{ body: {
+            height: columnHeight - CARD_HEAD, padding: 0,
+            display: 'flex', flexDirection: 'column',
+          } }}
           title={<span style={{ fontSize: 13 }}>搜尋結果</span>}
           size="small"
           extra={
@@ -313,19 +319,14 @@ export default function Catalog() {
             </Text>
           }
         >
+          {/* The paginator is a control on this list, not the last thing in
+              it. Left to antd it renders after the items and scrolls away with
+              them, so "第 41-50 筆" -- which is the answer to where you are --
+              is only readable once you have already got to the bottom. The
+              rows scroll inside their own box and it stays put beneath them. */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
           <List
-            dataSource={repos}
-            pagination={{
-              current: page,
-              pageSize,
-              total: repos.length,
-              onChange: (p, size) => { setPage(p); setPageSize(size); },
-              showSizeChanger: { options: sizeOptions(repos.length) },
-              showTotal: pageTotal,
-              size: 'small',
-              align: 'center',
-              hideOnSinglePage: false,
-            }}
+            dataSource={repos.slice((page - 1) * pageSize, page * pageSize)}
             renderItem={(repo) => {
               const picked = selected === repo.repo_id;
               return (
@@ -369,6 +370,22 @@ export default function Catalog() {
               );
             }}
           />
+          </div>
+
+          <div style={{
+            flexShrink: 0, borderTop: `1px solid ${LINE.faint}`,
+            padding: '8px 12px', display: 'flex', justifyContent: 'center',
+          }}>
+            <Pagination
+              current={page}
+              pageSize={pageSize}
+              total={repos.length}
+              onChange={(p, size) => { setPage(p); setPageSize(size); }}
+              showSizeChanger={{ options: sizeOptions(repos.length) }}
+              showTotal={pageTotal}
+              size="small"
+            />
+          </div>
         </Card>
       )}
 
