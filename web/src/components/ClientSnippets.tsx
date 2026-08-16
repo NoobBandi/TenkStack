@@ -71,7 +71,7 @@ export default function ClientSnippets() {
   "provider": {
     "local": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Tenks Console",
+      "name": "TenkStack",
       "options": {
         "baseURL": "${base}",
         "apiKey": "{env:AI_CONSOLE_KEY}"

@@ -28,7 +28,7 @@ export default function Login({ onSuccess }: { onSuccess: () => void }) {
       justifyContent: 'center', padding: 24,
     }}>
       <Card style={{ width: 380 }}>
-        <Title level={4} style={{ marginTop: 0 }}>Tenks Console</Title>
+        <Title level={4} style={{ marginTop: 0 }}>TenkStack</Title>
         <Text type="secondary" style={{ fontSize: 12 }}>請登入以繼續</Text>
         {error && (
           <Alert type="error" showIcon message={error} style={{ margin: '12px 0' }} />

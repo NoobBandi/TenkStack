@@ -52,7 +52,7 @@ COMFYUI_PUBLIC_OFFSET = 8444 - 8188
 GPU_POLL_SECONDS = 2.0
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
-app = FastAPI(title="Tenks Console", version="0.2.0")
+app = FastAPI(title="TenkStack", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,

@@ -56,7 +56,7 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
   // The browser tab is often one of many; naming the page makes it findable.
   useEffect(() => {
     const title = TITLES[location.pathname];
-    document.title = title ? `${title} ・ Tenks Console` : 'Tenks Console';
+    document.title = title ? `${title} ・ TenkStack` : 'TenkStack';
   }, [location.pathname]);
 
   return (
@@ -78,7 +78,7 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
               <Title level={5} style={{
                 margin: 0, fontFamily: MONO, letterSpacing: 1, fontWeight: 400,
               }}>
-                {TITLES[location.pathname] ?? 'Tenks Console'}
+                {TITLES[location.pathname] ?? 'TenkStack'}
               </Title>
               <Space size={16}>
                 {auth.identity ? (
