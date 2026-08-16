@@ -263,6 +263,118 @@ function buildReactDocument(source: string): string {
 }
 
 /**
+ * Python, run as CPython compiled to WebAssembly.
+ *
+ * The alternative was a container on the host, which this machine already has
+ * the pieces for and which would be faster and less limited. It was not chosen
+ * on security grounds -- a container with no network, no writable filesystem and
+ * no privileges is a sound sandbox -- but on what the button means.
+ *
+ * The run button currently promises one thing: this executes in an isolated
+ * frame and cannot reach your machine. HTML and React both keep that promise.
+ * Wiring Python to a host container would leave the same button meaning two
+ * different things with nothing on screen to say which, and being unable to
+ * predict what pressing it does is worse than the risk it would carry. If
+ * running something against real files is ever wanted, it should be a different
+ * control with a different name.
+ *
+ * The cost is ~12 MB on the first Python run and no real filesystem or sockets.
+ * For "does this snippet work" and "plot this", which is what Python in a chat
+ * window is, neither is in the way.
+ */
+const PYODIDE_VERSION = '314.0.4';
+const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
+/**
+ * Output is a stream, not a page, so this is a console rather than a document.
+ *
+ * Packages are resolved from the code's own imports: `loadPackagesFromImports`
+ * reads the source and fetches numpy, pandas, matplotlib and the rest before
+ * anything runs, which is the difference between a snippet working and a
+ * ModuleNotFoundError for the one line nobody was asked about.
+ *
+ * There is no stop button and does not need to be one. The run button replaces
+ * the frame, and a frame that is gone is a Python that has stopped -- which is
+ * also the only way out of an infinite loop here, since Pyodide runs on the
+ * frame's own thread.
+ */
+const PYTHON_BOOTSTRAP = `<script type="module">
+  const out = document.getElementById('out');
+  const status = document.getElementById('status');
+  const write = (text, cls) => {
+    const span = document.createElement('span');
+    if (cls) span.className = cls;
+    span.textContent = text;
+    out.appendChild(span);
+    out.scrollTop = out.scrollHeight;
+  };
+
+  try {
+    status.textContent = '正在載入 Python 執行環境（首次約 12 MB，之後由瀏覽器快取）…';
+    const { loadPyodide } = await import('${PYODIDE_CDN}pyodide.mjs');
+    const pyodide = await loadPyodide({
+      indexURL: '${PYODIDE_CDN}',
+      stdout: (line) => write(line + '\\n'),
+      stderr: (line) => write(line + '\\n', 'err'),
+    });
+
+    const source = document.getElementById('__source').textContent;
+
+    status.textContent = '正在準備這段程式碼用到的套件…';
+    await pyodide.loadPackagesFromImports(source);
+
+    // matplotlib draws into the page rather than a file it cannot write.
+    if (/\\bmatplotlib\\b/.test(source)) {
+      await pyodide.runPythonAsync(
+        'import matplotlib\\n' +
+        'matplotlib.use("module://matplotlib_pyodide.html5_canvas_backend")\\n');
+    }
+
+    status.textContent = '執行中…';
+    const started = performance.now();
+    const result = await pyodide.runPythonAsync(source);
+    const elapsed = ((performance.now() - started) / 1000).toFixed(2);
+
+    // The value of the last expression, shown the way a REPL would. None is the
+    // ordinary case for a script and saying so would be noise.
+    if (result !== undefined && result !== null) write(String(result) + '\\n', 'value');
+
+    status.textContent = \`完成・\${elapsed}s\`;
+  } catch (error) {
+    // A Python exception arrives with its traceback already formatted; showing
+    // it whole is more use than the one-line message on the front of it.
+    write(String(error?.message || error) + '\\n', 'err');
+    status.textContent = '中止';
+  }
+<\/script>`;
+
+/** The console the Python output is written into. */
+const PYTHON_STYLE = `<style>
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; background: #fbfbfc; }
+  #status {
+    flex: none; padding: 6px 12px; font: 11px/1.6 ui-monospace, monospace;
+    color: #667; border-bottom: 1px solid #e3e3e8; background: #f4f4f6;
+  }
+  #out {
+    flex: 1; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #111;
+  }
+  #out .err { color: #b23; }
+  #out .value { color: #059; }
+  /* matplotlib appends its canvases to the body; keep them inside the flow. */
+  body > canvas, body > div.matplotlib { max-width: 100%; margin: 8px 12px; }
+</style>`;
+
+function buildPythonDocument(source: string): string {
+  const carried = source.replace(/<\/script/gi, '<\\/script');
+  return `<!doctype html><html><head>${PREAMBLE}${PYTHON_STYLE}</head><body>`
+    + `<div id="status">準備中…</div><pre id="out"></pre>`
+    + `<script type="text/plain" id="__source">${carried}<\/script>`
+    + `${PYTHON_BOOTSTRAP}</body></html>`;
+}
+
+/**
  * Wrap the model's source in a complete document.
  *
  * Output comes in two shapes: a whole document starting at <!DOCTYPE or <html,
@@ -274,6 +386,10 @@ function buildReactDocument(source: string): string {
 function buildDocument(source: string, language: string): string {
   if (language === 'jsx' || language === 'tsx') {
     return buildReactDocument(source);
+  }
+
+  if (language === 'python' || language === 'py') {
+    return buildPythonDocument(source);
   }
 
   if (language === 'svg') {

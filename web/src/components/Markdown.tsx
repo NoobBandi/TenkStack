@@ -10,7 +10,7 @@ import { usePreview } from './preview';
 import './markdown.css';
 
 /** Languages the preview frame can render. */
-const RUNNABLE = new Set(['html', 'svg', 'jsx', 'tsx']);
+const RUNNABLE = new Set(['html', 'svg', 'jsx', 'tsx', 'python', 'py']);
 
 /** Fence language to file extension, where they differ or are ambiguous. */
 const EXTENSIONS: Record<string, string> = {
