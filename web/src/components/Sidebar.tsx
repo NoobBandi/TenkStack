@@ -164,6 +164,20 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
           <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
             {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
           </Text>
+
+          {/* Which build is on screen, stamped in at compile time. Sits at the
+              very bottom because it is the least urgent thing here and the
+              first thing wanted when something looks wrong -- "is this even
+              the version I just deployed" is the question a reload cannot
+              answer on its own. */}
+          <Tooltip title="目前執行的前端建置（git describe · commit 日期）" placement="right">
+            <Text style={{
+              display: 'block', marginTop: 8, fontSize: 9, opacity: 0.28,
+              fontFamily: MONO, letterSpacing: 0.3, cursor: 'default',
+            }}>
+              {__BUILD__}
+            </Text>
+          </Tooltip>
         </div>
       )}
     </Sider>
