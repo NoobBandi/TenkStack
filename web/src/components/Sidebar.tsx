@@ -124,7 +124,11 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
           <img
             src="/logo.webp"
             alt="TenkStack"
-            style={{ height: 24, width: 'auto', display: 'block' }}
+            /* The file carries transparent padding, so only 83% of this height
+               is ink -- 32 here reads as about 26. Width follows at 3.83:1,
+               which is 122 of the 159px the header has once the status dot and
+               its gap are taken out. */
+            style={{ height: 32, width: 'auto', display: 'block' }}
           />
         )}
       </Link>
