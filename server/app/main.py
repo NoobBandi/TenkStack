@@ -1409,13 +1409,32 @@ if WEB_DIST.is_dir():
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str):
-        """The shell, which must never be cached.
+        """A real file if there is one, otherwise the shell.
 
-        It carries the hashed names of the current bundle, so a stale copy
+        Only /assets was mounted, so everything Vite copies from public/ --
+        favicon.svg, icons.svg, the logo -- fell through to here and was
+        answered with index.html under its own name. Nothing complained: the
+        browser asked for an icon, got HTML, and silently showed none.
+
+        Files are looked up before the fallback because a request for a path
+        that exists is never a route. The resolved path is checked against the
+        directory rather than the string, since that is the only form that
+        accounts for `..` and for a symlink pointing out of the tree.
+
+        The shell itself must never be cached: it carries the hashed names of
+        the current bundle, so a stale copy
         points a browser at the previous build and every deployment silently
         fails to arrive. It had an ETag but no Cache-Control, which leaves the
         browser to invent a freshness lifetime of its own -- and it did.
         """
+        if full_path:
+            candidate = (WEB_DIST / full_path).resolve()
+            if candidate.is_file() and WEB_DIST.resolve() in candidate.parents:
+                # Unhashed, so it can change under a fixed name: revalidate
+                # rather than trust a copy, which is the opposite of /assets.
+                return FileResponse(
+                    candidate, headers={"cache-control": "no-cache, must-revalidate"})
+
         return FileResponse(
             WEB_DIST / "index.html",
             headers={"cache-control": "no-cache, must-revalidate"},

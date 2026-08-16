@@ -115,9 +115,17 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
           }} />
         </Tooltip>
         {!collapsed && (
-          <Text style={{ fontSize: 13, letterSpacing: 1.6, fontFamily: MONO, whiteSpace: 'nowrap' }}>
-            TENKS CONSOLE
-          </Text>
+          /* Served from the console rather than linked to the CDN it came from:
+             this is the frame's own chrome, and a header that breaks when the
+             machine is off the internet -- which is a normal state for a box
+             whose whole point is running locally -- is worse than 40 KB.
+             The alt text is the fallback, so a missing file leaves a name
+             rather than a gap. */
+          <img
+            src="/logo.png"
+            alt="TenkStack"
+            style={{ height: 24, width: 'auto', display: 'block' }}
+          />
         )}
       </Link>
 
