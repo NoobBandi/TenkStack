@@ -9,6 +9,10 @@ import type { GpuSample, ModelInfo } from '../api';
 import { LINE, MONO } from '../theme';
 
 const { Sider } = Layout;
+
+/** antd fixes the collapse trigger over the bottom of the Sider rather than
+ *  laying it out, so anything meant to sit above it has to leave the room. */
+const TRIGGER_HEIGHT = 48;
 const { Text } = Typography;
 
 export const SIDEBAR_WIDTH = 208;
@@ -139,7 +143,7 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
 
       {!collapsed && (
         <div style={{
-          padding: '12px 16px 56px', borderTop: `1px solid ${LINE.faint}`, flexShrink: 0,
+          padding: '12px 16px 0', borderTop: `1px solid ${LINE.faint}`, flexShrink: 0,
         }}>
           {/* One bar per card: this strip answers "is anything full?", and a
               combined bar cannot say which card it means. */}
@@ -164,22 +168,26 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
           <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
             {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
           </Text>
-
-          {/* Which build is on screen, stamped in at compile time. Sits at the
-              very bottom because it is the least urgent thing here and the
-              first thing wanted when something looks wrong -- "is this even
-              the version I just deployed" is the question a reload cannot
-              answer on its own. */}
-          <Tooltip title="目前執行的前端建置（git describe · commit 日期）" placement="right">
-            <Text style={{
-              display: 'block', marginTop: 8, fontSize: 9, opacity: 0.28,
-              fontFamily: MONO, letterSpacing: 0.3, cursor: 'default',
-            }}>
-              {__BUILD__}
-            </Text>
-          </Tooltip>
         </div>
       )}
+
+      {/* Pinned to the floor rather than trailing the meters: it is a property
+          of the whole panel, not another reading in that stack, and sitting
+          loose in the gap above the collapse trigger read as neither.
+          marginBottom clears the trigger, which antd fixes over the bottom of
+          the Sider rather than laying out in this column. */}
+      <Tooltip title={`建置 ${__BUILD__}`} placement="right">
+        <div style={{
+          flexShrink: 0, marginBottom: TRIGGER_HEIGHT, padding: '8px 4px',
+          textAlign: 'center', cursor: 'default',
+        }}>
+          <Text style={{
+            fontSize: 10, opacity: 0.3, fontFamily: MONO, letterSpacing: 0.6,
+          }}>
+            {__VERSION__}
+          </Text>
+        </div>
+      </Tooltip>
     </Sider>
   );
 }

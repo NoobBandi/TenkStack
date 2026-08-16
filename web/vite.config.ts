@@ -1,15 +1,19 @@
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+/** The console's own version. package.json is the one place it lives. */
+const version = JSON.parse(readFileSync('./package.json', 'utf8')).version as string;
+
 /**
- * What is actually deployed, stamped in at build time.
+ * Which commit this build came from.
  *
- * Read from git rather than from package.json, because the version that matters
- * here is "which build is serving me right now" -- the console is deployed by
- * running `npm run build` over a checkout, and a hand-maintained version number
- * would only ever be right by accident. `--dirty` is included so a build made
- * from uncommitted edits says so.
+ * Kept alongside the version rather than instead of it: the version says what
+ * release this is, the commit says which build of it is actually serving you,
+ * and only the second can answer "did my deploy land". It is shown on hover, so
+ * the visible line stays a version number. `--dirty` is included, so a build
+ * made from uncommitted edits admits it.
  */
 function buildStamp(): string {
   try {
@@ -23,7 +27,10 @@ function buildStamp(): string {
 }
 
 export default defineConfig({
-  define: { __BUILD__: JSON.stringify(buildStamp()) },
+  define: {
+    __VERSION__: JSON.stringify(`v${version}`),
+    __BUILD__: JSON.stringify(buildStamp()),
+  },
   plugins: [react()],
   server: {
     host: '127.0.0.1',
