@@ -93,8 +93,14 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
         position: 'fixed', insetInlineStart: 0, top: 0, bottom: 0,
         height: '100vh', overflow: 'hidden',
         borderInlineEnd: `1px solid ${LINE.faint}`,
-        display: 'flex', flexDirection: 'column',
       }}
+      // The column has to be declared on the body, not on the Sider. antd wraps
+      // children in its own `-children` div, so a flex context on the Sider
+      // applies to that wrapper and the trigger -- not to anything below. With
+      // it in the wrong place the nav's `flex: 1` matched nothing, everything
+      // stacked from the top, and the readings sat in the middle of the panel
+      // above a void the height of the unused space.
+      styles={{ body: { height: '100%', display: 'flex', flexDirection: 'column' } }}
     >
       <Link
         to="/"
