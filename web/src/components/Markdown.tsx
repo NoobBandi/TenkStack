@@ -3,12 +3,52 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { App as AntApp, Button, Tooltip } from 'antd';
-import { CheckOutlined, CopyOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import {
+  CheckOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined,
+} from '@ant-design/icons';
 import { usePreview } from './preview';
 import './markdown.css';
 
 /** Languages the preview frame can render. */
 const RUNNABLE = new Set(['html', 'svg']);
+
+/** Fence language to file extension, where they differ or are ambiguous. */
+const EXTENSIONS: Record<string, string> = {
+  javascript: 'js', typescript: 'ts', jsx: 'jsx', tsx: 'tsx',
+  python: 'py', bash: 'sh', shell: 'sh', sh: 'sh', zsh: 'sh',
+  yaml: 'yml', markdown: 'md', rust: 'rs', golang: 'go',
+  'c++': 'cpp', csharp: 'cs', ruby: 'rb', kotlin: 'kt',
+  dockerfile: 'Dockerfile', text: 'txt', plaintext: 'txt',
+};
+
+/**
+ * Below this a block is something to read or copy, not a file.
+ *
+ * A download button on a two-line snippet is a third control competing for the
+ * bar and an answer nobody asked for -- copy already covers it. Six lines is
+ * roughly where output stops being an illustration and starts being something
+ * that wants to live somewhere.
+ */
+const DOWNLOADABLE_LINES = 6;
+
+/**
+ * A name for the downloaded file, taken from the code where the code says one.
+ *
+ * Generated files very often open with their own path in a comment, and using
+ * it is the difference between three files called snippet.py and main.py,
+ * models.py and routes.py. Only the first line is considered, and only when it
+ * is a comment: a path appearing later is being discussed, not declared.
+ */
+function fileName(source: string, language: string | undefined): string {
+  const ext = language ? (EXTENSIONS[language] ?? language) : 'txt';
+  const first = source.split('\n', 1)[0].trim();
+  const declared = /^(?:\/\/|#|--|;|\/\*|\*)\s*([\w.@/-]+\.[A-Za-z]\w{0,4})\b/.exec(first);
+  if (declared) {
+    const base = declared[1].split('/').pop();
+    if (base && base.length <= 64) return base;
+  }
+  return ext === 'Dockerfile' ? 'Dockerfile' : `snippet.${ext}`;
+}
 
 /**
  * Renders assistant output as GitHub-flavoured Markdown.
@@ -48,6 +88,7 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   const source = toText(children).replace(/\n$/, '');
   // No provider means no panel to send this to, so the button is not offered.
   const runnable = preview !== null && RUNNABLE.has(language ?? '');
+  const downloadable = source.split('\n').length >= DOWNLOADABLE_LINES;
 
   const copy = async () => {
     try {
@@ -58,6 +99,23 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
       // Clipboard access needs a secure context; over plain HTTP it is blocked.
       message.warning('瀏覽器不允許複製，請手動選取');
     }
+  };
+
+  /**
+   * Hand the block over as a file.
+   *
+   * A blob URL rather than a data: one, because a data: URL carries the whole
+   * file through the address bar and browsers cap that length -- which would
+   * fail on exactly the long listings this button exists for. Revoked on the
+   * next frame; revoking immediately races the download starting.
+   */
+  const download = () => {
+    const url = URL.createObjectURL(new Blob([source], { type: 'text/plain;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName(source, language);
+    link.click();
+    requestAnimationFrame(() => URL.revokeObjectURL(url));
   };
 
   return (
@@ -73,6 +131,11 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
                 icon={<PlayCircleOutlined />}
                 onClick={() => preview?.open(source, language ?? 'html')}
               />
+            </Tooltip>
+          )}
+          {downloadable && (
+            <Tooltip title={`下載為 ${fileName(source, language)}`}>
+              <Button type="text" size="small" icon={<DownloadOutlined />} onClick={download} />
             </Tooltip>
           )}
           <Tooltip title={copied ? '已複製' : '複製'}>
