@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   App as AntApp, Button, Card, Empty, Input, List, Progress, Space, Table, Tag, Typography,
 } from 'antd';
@@ -41,6 +41,45 @@ function sizeOptions(total: number) {
 const pageTotal = (total: number, range: [number, number]) =>
   `第 ${range[0]}-${range[1]} 筆，共 ${total} 筆`;
 
+/** antd fixes the sidebar's collapse trigger over the bottom of the window.
+ *  Its top edge is the line everything here stops at. */
+const TRIGGER_TOP = 48;
+
+/** A small Card's header, which sits above the body being sized. */
+const CARD_HEAD = 39;
+
+/**
+ * Height that takes an element from where it sits down to the collapse
+ * trigger, so the panels end on the same line as it.
+ *
+ * Measured rather than subtracted from 100vh with a constant, because what sits
+ * above these panels changes: the downloads strip appears when a transfer
+ * starts and disappears when the last one is dismissed, moving everything below
+ * it by its own height. Any fixed guess is wrong in one of those two states.
+ */
+function useFillToTrigger(
+  ref: React.RefObject<HTMLElement | null>,
+  reserve: number,
+  deps: unknown[],
+): number {
+  const [height, setHeight] = useState(420);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = ref.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      setHeight(Math.max(220, window.innerHeight - TRIGGER_TOP - top - reserve));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref, reserve, ...deps]);
+
+  return height;
+}
+
 /** Truncated, and slid to its tail on hover. See `.slide` in index.css. */
 function Slide({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return <span className="slide" style={style}><span>{children}</span></span>;
@@ -76,6 +115,8 @@ export default function Catalog() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filePageSize, setFilePageSize] = useState(10);
+  const columnsRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [files, setFiles] = useState<CatalogFile[]>([]);
@@ -165,6 +206,17 @@ export default function Catalog() {
   const shown = downloads.filter((d) => !dismissed.has(keyOf(d)));
   const running = shown.filter((d) => !ENDED.includes(d.state)).length;
 
+  const oversized = files.some((f) => f.size_gib >= VRAM_GIB * 0.9);
+  // Both panels stop at the same line. The left one is a scrolling body, so it
+  // takes the whole distance; the table's scroll region is only the rows, so
+  // the paginator and the footnote under it have to be left out of the number.
+  const columnHeight = useFillToTrigger(columnsRef, 0, [shown.length > 0, repos.length]);
+  const tableHeight = useFillToTrigger(
+    tableRef,
+    (files.length > 10 ? 56 : 0) + (oversized ? 34 : 0),
+    [shown.length > 0, selected, files.length, filePageSize, oversized],
+  );
+
   const dismiss = (d: DownloadStatus) =>
     setDismissed((prev) => new Set(prev).add(keyOf(d)));
 
@@ -245,11 +297,14 @@ export default function Catalog() {
       </Card>
 
       {(repos.length > 0 || selected) && (
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <div
+        ref={columnsRef}
+        style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}
+      >
       {repos.length > 0 && (
         <Card
           style={{ flex: '1 1 420px', minWidth: 0 }}
-          styles={{ body: { maxHeight: 'calc(100vh - 300px)', minHeight: 420, overflowY: 'auto' } }}
+          styles={{ body: { maxHeight: columnHeight - CARD_HEAD, overflowY: 'auto' } }}
           title={<span style={{ fontSize: 13 }}>搜尋結果</span>}
           size="small"
           extra={
@@ -331,6 +386,7 @@ export default function Catalog() {
           <Empty description="從左邊選一個儲存庫" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (
           <>
+          <div ref={tableRef}>
           {files.length === 0 && !loadingFiles ? (
             <Empty description="這個儲存庫沒有 GGUF 檔" />
           ) : (
@@ -339,7 +395,7 @@ export default function Catalog() {
               rowKey="filename"
               size="small"
               // The rows scroll, the header and the paginator do not.
-              scroll={{ y: 'calc(100vh - 420px)' }}
+              scroll={{ y: tableHeight }}
               pagination={files.length > 10 ? {
                 pageSize: filePageSize,
                 onChange: (_, size) => setFilePageSize(size),
@@ -392,7 +448,8 @@ export default function Catalog() {
           {/* Only when something in this repo actually is oversized. It
               explains a workaround, and a workaround with nothing to work
               around is just a paragraph in the way. */}
-          {files.some((f) => f.size_gib >= VRAM_GIB * 0.9) && (
+          </div>
+          {oversized && (
             <Text type="secondary" style={{
               display: 'block', marginTop: 10, fontSize: 11, lineHeight: 1.6, opacity: 0.6,
             }}>
