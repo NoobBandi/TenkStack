@@ -49,6 +49,9 @@ const TRIGGER_TOP = 48;
 /** A small Card's header, which sits above the body being sized. */
 const CARD_HEAD = 39;
 
+/** A small Table's own header row, inside the box its rows scroll in. */
+const TABLE_HEAD = 39;
+
 /**
  * Height that takes an element from where it sits down to the collapse
  * trigger, so the panels end on the same line as it.
@@ -78,6 +81,31 @@ function useFillToTrigger(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ref, reserve, ...deps]);
 
+  return height;
+}
+
+/**
+ * An element's own height, as laid out.
+ *
+ * For the box a flex column hands its leftover space to: nothing computes that
+ * number in advance, and guessing what sits below it -- a paginator that may or
+ * may not be there, a footnote that may or may not be there -- is how the two
+ * panels stopped agreeing on where the bottom was.
+ *
+ * No feedback loop: the box is `flex: 1` with hidden overflow, so its height
+ * comes from the column and not from whatever is measured into it.
+ */
+function useElementHeight(ref: React.RefObject<HTMLElement | null>): number {
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setHeight(entry.contentRect.height);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
   return height;
 }
 
@@ -115,6 +143,7 @@ export default function Catalog() {
   // landing on page 4 of it is never what was meant.
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [filePage, setFilePage] = useState(1);
   const [filePageSize, setFilePageSize] = useState(10);
   const columnsRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -172,6 +201,8 @@ export default function Catalog() {
 
   const onPick = async (repoId: string) => {
     setSelected(repoId);
+    setFilePage(1);
+    setFilePageSize(10);
     setLoadingFiles(true);
     try {
       setFiles(await catalogFiles(repoId));
@@ -208,15 +239,12 @@ export default function Catalog() {
   const running = shown.filter((d) => !ENDED.includes(d.state)).length;
 
   const oversized = files.some((f) => f.size_gib >= VRAM_GIB * 0.9);
-  // Both panels stop at the same line. The left one is a scrolling body, so it
-  // takes the whole distance; the table's scroll region is only the rows, so
-  // the paginator and the footnote under it have to be left out of the number.
+  // Both cards are given the same height and each pins its own paginator, so
+  // their floors line up without anyone estimating what sits on them.
   const columnHeight = useFillToTrigger(columnsRef, 0, [shown.length > 0, repos.length]);
-  const tableHeight = useFillToTrigger(
-    tableRef,
-    (files.length > 10 ? 56 : 0) + (oversized ? 34 : 0),
-    [shown.length > 0, selected, files.length, filePageSize, oversized],
-  );
+  // The table's scroll region is the rows alone; its header sits above them
+  // inside the same box.
+  const tableHeight = Math.max(120, useElementHeight(tableRef) - TABLE_HEAD);
 
   const dismiss = (d: DownloadStatus) =>
     setDismissed((prev) => new Set(prev).add(keyOf(d)));
@@ -393,6 +421,10 @@ export default function Catalog() {
         style={{ flex: '1 1 480px', minWidth: 0 }}
         size="small"
         loading={loadingFiles}
+        styles={{ body: {
+          height: columnHeight - CARD_HEAD, padding: 0,
+          display: 'flex', flexDirection: 'column',
+        } }}
         title={
           selected
             ? <Slide style={{ fontSize: 13, fontFamily: MONO }}>{selected}</Slide>
@@ -400,27 +432,22 @@ export default function Catalog() {
         }
       >
         {!selected ? (
-          <Empty description="從左邊選一個儲存庫" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description="從左邊選一個儲存庫" image={Empty.PRESENTED_IMAGE_SIMPLE}
+                 style={{ margin: 'auto' }} />
         ) : (
           <>
-          <div ref={tableRef}>
+          <div ref={tableRef} style={{ flex: 1, overflow: 'hidden', padding: '0 12px' }}>
           {files.length === 0 && !loadingFiles ? (
             <Empty description="這個儲存庫沒有 GGUF 檔" />
           ) : (
             <Table<CatalogFile>
-              dataSource={files}
+              dataSource={files.slice((filePage - 1) * filePageSize, filePage * filePageSize)}
               rowKey="filename"
               size="small"
-              // The rows scroll, the header and the paginator do not.
+              // The rows scroll; the header stays with them, the paginator does
+              // not -- it is pinned to the floor of the card below.
               scroll={{ y: tableHeight }}
-              pagination={files.length > 10 ? {
-                pageSize: filePageSize,
-                onChange: (_, size) => setFilePageSize(size),
-                showSizeChanger: { options: sizeOptions(files.length) },
-                showTotal: pageTotal,
-                size: 'small',
-                align: 'center',
-              } : false}
+              pagination={false}
               columns={[
                 {
                   title: '檔名',
@@ -462,19 +489,35 @@ export default function Catalog() {
               ]}
             />
           )}
-          {/* Only when something in this repo actually is oversized. It
-              explains a workaround, and a workaround with nothing to work
-              around is just a paragraph in the way. */}
           </div>
-          {oversized && (
-            <Text type="secondary" style={{
-              display: 'block', marginTop: 10, fontSize: 11, lineHeight: 1.6, opacity: 0.6,
-            }}>
-              <InfoCircleOutlined style={{ marginInlineEnd: 6 }} />
-              超出顯存仍可執行：MoE 模型用 <code>--n-cpu-moe N</code> 把專家層放到主記憶體，
-              只留注意力層在 GPU，在「模型」頁的額外參數設定。
-            </Text>
-          )}
+
+          <div style={{
+            flexShrink: 0, borderTop: `1px solid ${LINE.faint}`, padding: '8px 12px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <Pagination
+                current={filePage}
+                pageSize={filePageSize}
+                total={files.length}
+                onChange={(p, size) => { setFilePage(p); setFilePageSize(size); }}
+                showSizeChanger={{ options: sizeOptions(files.length) }}
+                showTotal={pageTotal}
+                size="small"
+              />
+            </div>
+            {/* Only when something in this repo actually is oversized. It
+                explains a workaround, and a workaround with nothing to work
+                around is just a paragraph in the way. */}
+            {oversized && (
+              <Text type="secondary" style={{
+                display: 'block', marginTop: 8, fontSize: 11, lineHeight: 1.6, opacity: 0.6,
+              }}>
+                <InfoCircleOutlined style={{ marginInlineEnd: 6 }} />
+                超出顯存仍可執行：MoE 模型用 <code>--n-cpu-moe N</code> 把專家層放到主記憶體，
+                只留注意力層在 GPU，在「模型」頁的額外參數設定。
+              </Text>
+            )}
+          </div>
           </>
         )}
       </Card>
