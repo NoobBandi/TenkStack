@@ -134,6 +134,135 @@ const BASE = `<style>
 const PREAMBLE = `<meta charset="utf-8">${META}${STORAGE_SHIM}`;
 
 /**
+ * Everything a React block needs to become a page, injected around it.
+ *
+ * WHY THE CODE IS TRANSPILED IN THE FRAME RATHER THAN SENT AWAY
+ *
+ * esm.sh/tsx is the one-line answer to running JSX in a browser and it works by
+ * posting the source to esm.sh to be compiled. On a console whose entire premise
+ * is that the model is local, shipping that model's output to a third party to
+ * be readable is not a tradeoff, it is a contradiction. Sucrase is fetched
+ * instead and the transform happens here: the library crosses the network, the
+ * code does not.
+ *
+ * WHY IMPORTS ARE REWRITTEN RATHER THAN MAPPED
+ *
+ * An import map can only name specifiers it knows in advance, and generated
+ * React reaches for whatever it likes -- lucide-react, recharts, framer-motion.
+ * Rewriting every bare specifier to esm.sh covers all of them with one rule.
+ * React itself is pinned and passed as `deps` to everything else, because two
+ * copies of React in one page is the "invalid hook call" that looks like a bug
+ * in the generated code and is not.
+ *
+ * React 19 removed its UMD build, so this is not a choice between modules and a
+ * script tag; modules are the only way in.
+ */
+const REACT_VERSION = '19.2.8';
+const ESM = 'https://esm.sh';
+
+/**
+ * Tailwind, because almost all generated React is written in it and without it
+ * the preview is correct and unrecognisable -- unstyled markup reads as broken
+ * more readily than an error does.
+ */
+const TAILWIND = `<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"><\/script>`;
+
+/**
+ * The bootstrap.
+ *
+ * Errors are drawn into the page rather than left in the console. A preview that
+ * fails silently is the worst of the three outcomes -- worse than an error,
+ * worse than nothing -- because it looks like a finished render of an empty
+ * design. That was already learned once here, from a tetris page that rendered
+ * perfectly and responded to nothing.
+ */
+const REACT_BOOTSTRAP = `<script type="module">
+  const show = (kind, detail) => {
+    document.body.innerHTML = '';
+    const box = document.createElement('pre');
+    box.style.cssText = 'margin:0;padding:16px;font:12px/1.6 ui-monospace,monospace;' +
+      'color:#b23;background:#fff5f5;border-left:3px solid #e05c5c;white-space:pre-wrap;';
+    box.textContent = kind + '\\n\\n' + detail;
+    document.body.appendChild(box);
+  };
+  window.addEventListener('error', (e) => show('執行時錯誤', e.message));
+  window.addEventListener('unhandledrejection', (e) => show('未處理的 Promise', String(e.reason)));
+
+  try {
+    const source = document.getElementById('__source').textContent;
+    const { transform } = await import('${ESM}/sucrase@3');
+
+    // typescript alongside jsx so a .tsx block does not fail on its annotations.
+    let code = transform(source, {
+      transforms: ['jsx', 'typescript'],
+      jsxRuntime: 'automatic',
+      production: true,
+    }).code;
+
+    // Bare specifiers -> esm.sh. Runs after the transform so that the runtime
+    // import sucrase injects for the automatic JSX runtime is rewritten too.
+    const pin = 'react@${REACT_VERSION}';
+    code = code.replace(
+      /(\\bfrom\\s*|\\bimport\\s*\\(?\\s*)(['"])([^'"./][^'"]*)\\2/g,
+      (all, lead, q, spec) => {
+        let url;
+        if (spec === 'react' || spec.startsWith('react/')) url = '${ESM}/' + spec.replace('react', pin);
+        else if (spec === 'react-dom' || spec.startsWith('react-dom/'))
+          url = '${ESM}/' + spec.replace('react-dom', 'react-dom@${REACT_VERSION}');
+        else url = '${ESM}/' + spec + '?deps=' + pin + ',react-dom@${REACT_VERSION}';
+        return lead + q + url + q;
+      },
+    );
+
+    const module = await import(URL.createObjectURL(
+      new Blob([code], { type: 'text/javascript' })));
+
+    // Code that mounts itself is left alone; anything else exporting a
+    // component is mounted here, which is what a bare component block is.
+    if (!/createRoot\\s*\\(|ReactDOM\\.render\\s*\\(/.test(source)) {
+      const Component = module.default
+        ?? Object.values(module).find((v) => typeof v === 'function');
+      if (!Component) {
+        show('沒有東西可以掛載', '這段程式碼沒有 export default，也沒有自己呼叫 createRoot。');
+      } else {
+        const [{ createElement, Component: Base }, { createRoot }] = await Promise.all([
+          import('${ESM}/${'react@' + REACT_VERSION}'),
+          import('${ESM}/react-dom@${REACT_VERSION}/client'),
+        ]);
+        // A throw during render would otherwise unmount everything and leave a
+        // blank page with the reason only in the console.
+        class Boundary extends Base {
+          constructor(p) { super(p); this.state = {}; }
+          static getDerivedStateFromError(error) { return { error }; }
+          render() {
+            if (this.state.error) {
+              show('元件渲染時丟出例外', String(this.state.error?.stack || this.state.error));
+              return null;
+            }
+            return this.props.children;
+          }
+        }
+        createRoot(document.getElementById('root'))
+          .render(createElement(Boundary, null, createElement(Component)));
+      }
+    }
+  } catch (error) {
+    show('無法執行這段 React', String(error?.stack || error));
+  }
+<\/script>`;
+
+/** Wrap a React/JSX block in the document that can run it. */
+function buildReactDocument(source: string): string {
+  // The parser ends a script block at the first `</script`, whatever it is
+  // nested in -- including the text/plain block the source is carried in.
+  const carried = source.replace(/<\/script/gi, '<\\/script');
+  return `<!doctype html><html><head>${PREAMBLE}${BASE}${TAILWIND}</head><body>`
+    + `<div id="root"></div>`
+    + `<script type="text/plain" id="__source">${carried}<\/script>`
+    + `${REACT_BOOTSTRAP}</body></html>`;
+}
+
+/**
  * Wrap the model's source in a complete document.
  *
  * Output comes in two shapes: a whole document starting at <!DOCTYPE or <html,
@@ -143,6 +272,10 @@ const PREAMBLE = `<meta charset="utf-8">${META}${STORAGE_SHIM}`;
  * the document it already has instead.
  */
 function buildDocument(source: string, language: string): string {
+  if (language === 'jsx' || language === 'tsx') {
+    return buildReactDocument(source);
+  }
+
   if (language === 'svg') {
     return `<!doctype html><html><head>${PREAMBLE}${BASE}</head><body>${source}</body></html>`;
   }
