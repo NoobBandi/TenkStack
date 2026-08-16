@@ -89,20 +89,31 @@ def _key(repo_id: str, filename: str) -> str:
     return f"{repo_id}/{filename}"
 
 
-async def search(query: str, limit: int = 20) -> list[dict]:
+async def search(query: str, limit: int = 100) -> list[dict]:
     """Search for GGUF repos.
 
     Filtered to the gguf library because nothing else is runnable here: the
     backend is llama.cpp, and offering safetensors repos would produce entries
     that cannot be deployed.
+
+    A hundred rather than the twenty it used to fetch: the page pages through
+    these locally, so a small fetch was a cap on what could be found at all,
+    dressed up as a short list. One request either way.
     """
-    params = {
-        "search": query,
-        "filter": "gguf",
-        "limit": limit,
-        "sort": "downloads",
-        "direction": -1,
-    }
+    # expand[] rather than full=true: the full form carries every sibling file
+    # of every repo, which for a hundred results is megabytes of listing the
+    # page does not read. Naming the fields keeps the response to what is shown.
+    # It replaces the default field set rather than adding to it, so everything
+    # wanted has to appear here -- lastModified was silently null before,
+    # because nothing asked for it.
+    params = [
+        ("search", query),
+        ("filter", "gguf"),
+        ("limit", limit),
+        ("sort", "downloads"),
+        ("direction", -1),
+        *(("expand[]", field) for field in ("downloads", "likes", "tags", "lastModified")),
+    ]
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             resp = await client.get(f"{HF_API}/models", params=params)

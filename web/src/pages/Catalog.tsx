@@ -3,6 +3,7 @@ import {
   Alert, App as AntApp, Button, Card, Empty, Input, List, Progress, Space, Table, Tag, Typography,
 } from 'antd';
 import { CloseOutlined, CloudDownloadOutlined, StopOutlined } from '@ant-design/icons';
+import { MONO } from '../theme';
 import {
   cancelDownload, catalogFiles, fetchDownloads, searchCatalog, startDownload, subscribe,
   type CatalogFile, type CatalogRepo, type DownloadStatus,
@@ -18,6 +19,37 @@ const keyOf = (d: DownloadStatus) => `${d.repo_id}/${d.filename}`;
 
 const ENDED = ['done', 'error', 'cancelled'];
 
+/**
+ * Page-size choices, plus a 全部 that is just the whole set as one page.
+ *
+ * Sizes at or above the total are dropped: offering "100 筆" over 23 results is
+ * three identical choices wearing different numbers. What is left is always a
+ * real reduction, and the last option is always everything.
+ */
+const PAGE_SIZES = [10, 25, 50, 100];
+
+function sizeOptions(total: number) {
+  return [
+    ...PAGE_SIZES.filter((n) => n < total).map((n) => ({ value: n, label: `${n} 筆` })),
+    { value: Math.max(total, 1), label: '全部' },
+  ];
+}
+
+/** Locale for every paginator here, so "第 1-10 筆，共 100 筆" reads the same. */
+const pageTotal = (total: number, range: [number, number]) =>
+  `第 ${range[0]}-${range[1]} 筆，共 ${total} 筆`;
+
+/** How long ago a repo was touched. A GGUF repo that has not moved in a year is
+ *  usually a re-quant of something since superseded. */
+function since(iso: string | null): string {
+  if (!iso) return '';
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (days < 1) return '今天更新';
+  if (days < 30) return `${days} 天前更新`;
+  if (days < 365) return `${Math.floor(days / 30)} 個月前更新`;
+  return `${Math.floor(days / 365)} 年前更新`;
+}
+
 /** How each state reads: bar style, label, and whether the row can be dropped. */
 const STATE_VIEW: Record<string, { status: 'active' | 'success' | 'exception' | 'normal';
                                    label: string; tag?: string }> = {
@@ -32,6 +64,11 @@ export default function Catalog() {
   const { message } = AntApp.useApp();
   const [query, setQuery] = useState('');
   const [repos, setRepos] = useState<CatalogRepo[]>([]);
+  // Reset on every search rather than remembered: a new query is a new set, and
+  // landing on page 4 of it is never what was meant.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [filePageSize, setFilePageSize] = useState(10);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [files, setFiles] = useState<CatalogFile[]>([]);
@@ -72,6 +109,9 @@ export default function Catalog() {
     setSearching(true);
     setSelected(null);
     setFiles([]);
+    setPage(1);
+    setPageSize(10);
+    setFilePageSize(10);
     try {
       setRepos(await searchCatalog(value));
     } catch (error) {
@@ -187,33 +227,70 @@ export default function Catalog() {
       </Card>
 
       {repos.length > 0 && (
-        <Card title="搜尋結果" size="small">
+        <Card
+          title={<span style={{ fontSize: 13 }}>搜尋結果</span>}
+          size="small"
+          extra={
+            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+              {repos.length} 個儲存庫
+            </Text>
+          }
+        >
           <List
             dataSource={repos}
-            renderItem={(repo) => (
-              <List.Item
-                onClick={() => onPick(repo.repo_id)}
-                style={{
-                  cursor: 'pointer',
-                  background: selected === repo.repo_id ? 'rgba(22,119,255,0.08)' : undefined,
-                  paddingInline: 8,
-                }}
-              >
-                <List.Item.Meta
-                  title={repo.repo_id}
-                  description={
-                    <Space size={4} wrap>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        ↓ {repo.downloads.toLocaleString()} ・ ♥ {repo.likes}
-                      </Text>
-                      {repo.tags.slice(0, 5).map((t) => (
-                        <Tag key={t} style={{ fontSize: 11 }}>{t}</Tag>
-                      ))}
-                    </Space>
-                  }
-                />
-              </List.Item>
-            )}
+            pagination={{
+              current: page,
+              pageSize,
+              total: repos.length,
+              onChange: (p, size) => { setPage(p); setPageSize(size); },
+              showSizeChanger: { options: sizeOptions(repos.length) },
+              showTotal: pageTotal,
+              size: 'small',
+              align: 'center',
+              hideOnSinglePage: false,
+            }}
+            renderItem={(repo) => {
+              const picked = selected === repo.repo_id;
+              return (
+                <List.Item
+                  onClick={() => onPick(repo.repo_id)}
+                  style={{
+                    cursor: 'pointer',
+                    // A left edge rather than a filled row: the fill washed out
+                    // the tags sitting on it, and the only thing that needs
+                    // saying is which one the file list below belongs to.
+                    borderInlineStart: `2px solid ${picked ? '#6ea8fe' : 'transparent'}`,
+                    background: picked ? 'rgba(110,168,254,0.06)' : undefined,
+                    paddingInline: 10,
+                  }}
+                >
+                  <List.Item.Meta
+                    title={<span style={{ fontFamily: MONO, fontSize: 13 }}>{repo.repo_id}</span>}
+                    description={
+                      <Space size={6} wrap>
+                        <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
+                          ↓ {repo.downloads.toLocaleString()}
+                        </Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>♥ {repo.likes}</Text>
+                        {repo.last_modified && (
+                          <Text type="secondary" style={{ fontSize: 12, opacity: 0.7 }}>
+                            ・ {since(repo.last_modified)}
+                          </Text>
+                        )}
+                        {/* Tags that every GGUF repo carries say nothing about
+                            this one. */}
+                        {repo.tags
+                          .filter((t) => !['gguf', 'transformers', 'text-generation'].includes(t))
+                          .slice(0, 4)
+                          .map((t) => (
+                            <Tag key={t} style={{ fontSize: 11 }}>{t}</Tag>
+                          ))}
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              );
+            }}
           />
         </Card>
       )}
@@ -227,7 +304,14 @@ export default function Catalog() {
               dataSource={files}
               rowKey="filename"
               size="small"
-              pagination={false}
+              pagination={files.length > 10 ? {
+                pageSize: filePageSize,
+                onChange: (_, size) => setFilePageSize(size),
+                showSizeChanger: { options: sizeOptions(files.length) },
+                showTotal: pageTotal,
+                size: 'small',
+                align: 'center',
+              } : false}
               columns={[
                 {
                   title: '檔名',

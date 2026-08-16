@@ -373,7 +373,7 @@ async def write_config(payload: dict = Body(...)):
 # --------------------------------------------------------------------------
 
 @app.get("/api/catalog/search")
-async def catalog_search(q: str, limit: int = 20):
+async def catalog_search(q: str, limit: int = 100):
     return await catalog.search(q, limit)
 
 
