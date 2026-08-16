@@ -59,3 +59,29 @@ body {
  * focus and kept for keyboard focus. Suppressing :focus outright would have
  * taken the keyboard user's only indicator with it. */
 .recharts-surface:focus:not(:focus-visible) { outline: none; }
+
+/* Long names in a narrow column: shown truncated, and slid once to the tail on
+ * hover rather than scrolled continuously. A looping marquee never lets you
+ * read a name at rest -- by the time your eye reaches a character it has moved,
+ * and the part you wanted is as likely to be leaving as arriving. This travels
+ * exactly the distance that is hidden, stops there, and returns when the
+ * pointer leaves.
+ *
+ * The distance needs both widths, which container query units supply without
+ * measuring anything in JavaScript: 100cqw is the box, 100% on a transform is
+ * the text's own width. min() makes it a no-op when the text already fits, so
+ * the same rule can go on every row. */
+.slide {
+  container-type: inline-size;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.slide > span {
+  display: inline-block;
+  transition: transform 900ms ease-in-out;
+}
+.slide:hover > span {
+  transform: translateX(min(0px, calc(100cqw - 100%)));
+}

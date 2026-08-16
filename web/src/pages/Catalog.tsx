@@ -39,6 +39,11 @@ function sizeOptions(total: number) {
 const pageTotal = (total: number, range: [number, number]) =>
   `第 ${range[0]}-${range[1]} 筆，共 ${total} 筆`;
 
+/** Truncated, and slid to its tail on hover. See `.slide` in index.css. */
+function Slide({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return <span className="slide" style={style}><span>{children}</span></span>;
+}
+
 /** How long ago a repo was touched. A GGUF repo that has not moved in a year is
  *  usually a re-quant of something since superseded. */
 function since(iso: string | null): string {
@@ -226,8 +231,12 @@ export default function Catalog() {
         </Text>
       </Card>
 
+      {(repos.length > 0 || selected) && (
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
       {repos.length > 0 && (
         <Card
+          style={{ flex: '1 1 420px', minWidth: 0 }}
+          styles={{ body: { maxHeight: 620, overflowY: 'auto' } }}
           title={<span style={{ fontSize: 13 }}>搜尋結果</span>}
           size="small"
           extra={
@@ -265,7 +274,7 @@ export default function Catalog() {
                   }}
                 >
                   <List.Item.Meta
-                    title={<span style={{ fontFamily: MONO, fontSize: 13 }}>{repo.repo_id}</span>}
+                    title={<Slide style={{ fontFamily: MONO, fontSize: 13 }}>{repo.repo_id}</Slide>}
                     description={
                       <Space size={6} wrap>
                         <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
@@ -295,8 +304,20 @@ export default function Catalog() {
         </Card>
       )}
 
-      {selected && (
-        <Card title={`${selected} 的檔案`} size="small" loading={loadingFiles}>
+      <Card
+        style={{ flex: '1 1 480px', minWidth: 0 }}
+        size="small"
+        loading={loadingFiles}
+        title={
+          selected
+            ? <Slide style={{ fontSize: 13, fontFamily: MONO }}>{selected}</Slide>
+            : <span style={{ fontSize: 13 }}>檔案</span>
+        }
+      >
+        {!selected ? (
+          <Empty description="從左邊選一個儲存庫" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ) : (
+          <>
           {files.length === 0 && !loadingFiles ? (
             <Empty description="這個儲存庫沒有 GGUF 檔" />
           ) : (
@@ -304,6 +325,8 @@ export default function Catalog() {
               dataSource={files}
               rowKey="filename"
               size="small"
+              // The rows scroll, the header and the paginator do not.
+              scroll={{ y: 420 }}
               pagination={files.length > 10 ? {
                 pageSize: filePageSize,
                 onChange: (_, size) => setFilePageSize(size),
@@ -317,11 +340,13 @@ export default function Catalog() {
                   title: '檔名',
                   dataIndex: 'filename',
                   render: (name: string, row) => (
-                    <Space>
-                      <span>{name}</span>
-                      {row.is_mmproj && <Tag color="purple">視覺投影</Tag>}
-                      {row.on_disk && <Tag color="green">已在磁碟</Tag>}
-                    </Space>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                      <Slide style={{ fontSize: 12, fontFamily: MONO, flex: 1, minWidth: 0 }}>
+                        {name}
+                      </Slide>
+                      {row.is_mmproj && <Tag color="purple" style={{ flex: 'none' }}>視覺投影</Tag>}
+                      {row.on_disk && <Tag color="green" style={{ flex: 'none' }}>已在磁碟</Tag>}
+                    </div>
                   ),
                 },
                 {
@@ -348,20 +373,28 @@ export default function Catalog() {
               ]}
             />
           )}
-          <Alert
-            style={{ marginTop: 12 }}
-            type="info"
-            showIcon
-            message="超出顯存的模型仍然可以跑"
-            description={
-              <span>
-                MoE 模型可用 <code>--n-cpu-moe N</code> 把專家層放到主記憶體，
-                只有注意力層留在 GPU。速度會下降，但每個 token 只啟用少數專家，
-                代價比整個模型搬到 CPU 小得多。在「模型」頁的額外參數欄位設定。
-              </span>
-            }
-          />
-        </Card>
+          {/* Only when something in this repo actually is oversized. It
+              explains a workaround, and a workaround with nothing to work
+              around is just a paragraph in the way. */}
+          {files.some((f) => f.size_gib >= VRAM_GIB * 0.9) && (
+            <Alert
+              style={{ marginTop: 12 }}
+              type="info"
+              showIcon
+              message="超出顯存的模型仍然可以跑"
+              description={
+                <span>
+                  MoE 模型可用 <code>--n-cpu-moe N</code> 把專家層放到主記憶體，
+                  只有注意力層留在 GPU。速度會下降，但每個 token 只啟用少數專家，
+                  代價比整個模型搬到 CPU 小得多。在「模型」頁的額外參數欄位設定。
+                </span>
+              }
+            />
+          )}
+          </>
+        )}
+      </Card>
+      </div>
       )}
     </Space>
   );
