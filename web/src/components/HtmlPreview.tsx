@@ -19,23 +19,51 @@ import { useMemo } from 'react';
 /**
  * Content-Security-Policy injected into every preview.
  *
- * `default-src 'none'` is what stops generated code phoning home -- an
- * `<img src="http://host/?d=...">` or a `fetch()` to the open internet is an
- * exfiltration channel, and this machine sits on a private network. The cost is
- * that previews cannot load remote images, fonts or CDN scripts; anything the
- * model wants has to be inline or a data: URI.
+ * This used to be `default-src 'none'`, which blocked every remote image, web
+ * font and CDN script -- so a page that asked for Chart.js, or Google Fonts, or
+ * a placeholder photo, rendered as a broken skeleton with nothing on screen
+ * saying why. That is most generated front-end code.
  *
- * `unsafe-eval` is allowed because a fair amount of generated code builds
- * functions at runtime, and with no network and an opaque origin it grants
- * nothing that inline script does not already have.
+ * What it was buying was not what it looked like it was buying. The boundary
+ * here has never been the CSP: it is the missing `allow-same-origin` on the
+ * sandbox, which puts this document on an opaque origin with no cookies, no
+ * storage, and no reach into the console that framed it. And `unsafe-inline`
+ * plus `unsafe-eval` were already granted, so arbitrary script was always going
+ * to run -- letting it arrive from a CDN adds a network request, not a
+ * capability.
+ *
+ * So what a strict policy actually cost was the feature, and what it bought was
+ * narrower than it appeared: a page could still not read anything of yours, only
+ * announce to a remote host that it had been opened. That is a real if small
+ * privacy leak, and it is the price of previews that work.
+ *
+ * The three restrictions kept are the ones no legitimate page needs:
+ *
+ *   object-src 'none'   no Flash/PDF plugin surfaces
+ *   base-uri 'none'     a <base> tag cannot silently repoint every relative URL
+ *   form-action 'none'  a form cannot POST what you typed to a remote host,
+ *                       which is the one exfiltration route that carries
+ *                       something you did not already have
+ *
+ * upgrade-insecure-requests is there because the console is served over TLS, so
+ * an http:// subresource would be blocked as mixed content no matter what this
+ * policy said. Upgrading is the difference between an image loading and an
+ * error nobody can act on.
  */
 const CSP = [
-  "default-src 'none'",
-  "script-src 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'unsafe-inline'",
-  "img-src data: blob:",
-  "font-src data:",
-  "media-src data: blob:",
+  "default-src https: data: blob:",
+  "script-src 'unsafe-inline' 'unsafe-eval' https: data: blob:",
+  "style-src 'unsafe-inline' https: data:",
+  "img-src https: data: blob:",
+  "font-src https: data:",
+  "media-src https: data: blob:",
+  "connect-src https: data: blob:",
+  "frame-src https: data: blob:",
+  "worker-src blob: data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  'upgrade-insecure-requests',
 ].join('; ');
 
 const META = `<meta http-equiv="Content-Security-Policy" content="${CSP}">`;
@@ -151,10 +179,22 @@ export default function HtmlPreview({ source, language, runId }: Props) {
       key={runId}
       className="md-preview-frame"
       srcDoc={doc}
-      // allow-scripts runs the code; allow-modals lets alert/confirm work,
-      // which a lot of generated demos rely on. allow-same-origin is absent by
-      // design -- see the note at the top of this file.
-      sandbox="allow-scripts allow-modals"
+      // allow-scripts runs the code and allow-modals lets alert/confirm work,
+      // which a lot of generated demos rely on.
+      //
+      // allow-forms is here because without it the browser refuses the
+      // submission outright, which breaks the ordinary demo that has a form and
+      // handles it in JavaScript. Nothing is given away by it: form-action
+      // 'none' in the policy above already stops a form reaching any host.
+      //
+      // allow-popups so that target="_blank" links open, and allow-downloads so
+      // a page that generates a file can hand it over.
+      //
+      // Two are deliberately absent. allow-same-origin would remove the whole
+      // boundary -- see the note at the top of this file. And
+      // allow-popups-to-escape-sandbox would let a window opened from here be
+      // an ordinary page again, which is the same hole through a side door.
+      sandbox="allow-scripts allow-modals allow-forms allow-popups allow-downloads"
       referrerPolicy="no-referrer"
       title="預覽"
     />
