@@ -226,6 +226,8 @@ async def read_models():
     props_list = await asyncio.gather(*(llamaswap.get_props(p) for p in proxies.values()))
     props = dict(zip(proxies.keys(), props_list))
 
+    sampling = config.sampling_defaults()
+
     result = []
     for m in models:
         model_id = m["id"]
@@ -238,6 +240,9 @@ async def read_models():
             "proxy": by_id.get(model_id, {}).get("proxy"),
             "ttl": by_id.get(model_id, {}).get("ttl"),
             "ctx_size": contexts.get(model_id),
+            # What this model was configured to be sampled with. The panel seeds
+            # itself from this so the config and the interface cannot disagree.
+            "sampling": sampling.get(model_id) or None,
             "capabilities": {
                 "vision": bool(modalities.get("vision")) if live else declared.get(model_id, False),
                 "audio": bool(modalities.get("audio")) if live else False,

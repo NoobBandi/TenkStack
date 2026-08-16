@@ -25,6 +25,11 @@ export interface ModelInfo {
   /** --ctx-size from the config; the real ceiling for context usage. */
   ctx_size?: number | null;
   capabilities?: ModelCapabilities;
+  /** The sampling flags this model's llama-swap entry carries. Only defaults on
+   *  the server -- a request with its own values overrides them, which is what
+   *  this console does -- so the panel seeds itself from these instead, and the
+   *  config and the interface cannot say different things. */
+  sampling?: Partial<ChatParams> | null;
 }
 
 export interface ModelCapabilities {

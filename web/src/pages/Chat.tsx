@@ -92,7 +92,7 @@ function ChatInner() {
   const { message: toast } = AntApp.useApp();
   const { models } = useStream();
   const {
-    model, setModel, turns, draft, setDraft, images, setImages,
+    model, setModel, seedParams, turns, draft, setDraft, images, setImages,
     params, setParams, streaming, streamStartedAt, conversationId, historyKey,
     send, stop, regenerate, openConversation, newConversation, error, clearError,
   } = useChat();
@@ -136,6 +136,14 @@ function ChatInner() {
       ?? models[0]?.id;
     if (next) setModel(next);
   }, [models, model, setModel]);
+
+  // The panel follows the model. Its sampling flags live in llama-swap's config
+  // and are only server-side defaults, which this console overrides on every
+  // request -- so without this the numbers written there never take effect for
+  // the client that matters most, and the two quietly disagree.
+  useEffect(() => {
+    seedParams(models.find((m) => m.id === model));
+  }, [models, model, seedParams]);
 
   useEffect(() => {
     if (error) { toast.error(error); clearError(); }
@@ -250,7 +258,13 @@ function ChatInner() {
   );
 
   const settings = (
-    <ChatSettings params={params} onChange={setParams} model={active} contextUsed={contextUsed} />
+    <ChatSettings
+      params={params}
+      onChange={setParams}
+      model={active}
+      onReset={() => seedParams(active, true)}
+      contextUsed={contextUsed}
+    />
   );
 
   return (

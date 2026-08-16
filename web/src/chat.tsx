@@ -3,6 +3,7 @@ import {
 } from 'react';
 import {
   chatStream, DEFAULT_PARAMS, fetchChat, patchChat, saveChat,
+  type ModelInfo,
   type ChatMessage, type ChatParams, type Timings, type Usage,
 } from './api';
 
@@ -37,6 +38,9 @@ const FLUSH_INTERVAL_MS = 80;
 interface ChatState {
   model?: string;
   setModel: (id: string) => void;
+  /** Load a model's configured sampling into the panel. Called when the model
+   *  changes, and by the panel's reset. */
+  seedParams: (model: ModelInfo | undefined, force?: boolean) => void;
   turns: Turn[];
   draft: string;
   setDraft: (v: string) => void;
@@ -67,6 +71,16 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [draft, setDraft] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [params, setParams] = useState<ChatParams>(DEFAULT_PARAMS);
+  /**
+   * Which model the panel was last seeded for.
+   *
+   * Seeding has to happen when the model changes and not otherwise, or two
+   * things break: an edit made after picking a model would be undone on the
+   * next render, and opening a saved conversation would lose the settings it
+   * was held under. Recording the model alongside the values is what separates
+   * "the model changed" from "something else did".
+   */
+  const seededFor = useRef<string | undefined>(undefined);
   const [streaming, setStreaming] = useState(false);
   const [streamStartedAt, setStreamStartedAt] = useState(0);
   const [conversationId, setConversationId] = useState<number | null>(null);
@@ -258,12 +272,37 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       setTurns(chat.messages as Turn[]);
       if (chat.model) setModel((current) => chat.model || current);
       // Restore the settings the conversation was held under, defaulting
-      // anything an older record does not carry.
+      // anything an older record does not carry. Marked as already seeded so
+      // the model-change effect does not immediately overwrite them.
+      seededFor.current = chat.model || undefined;
       setParams({ ...DEFAULT_PARAMS, ...chat.params });
       setError(null);
     } catch (err) {
       setError((err as Error).message);
     }
+  }, []);
+
+  /**
+   * Take the panel's values from the model's own configuration.
+   *
+   * Applied over DEFAULT_PARAMS rather than replacing them: a config names a
+   * few sampling flags, not the whole panel, and the rest still needs sensible
+   * values. `force` is the reset button, which should reseed even when the
+   * model has not changed.
+   */
+  const seedParams = useCallback((info: ModelInfo | undefined, force = false) => {
+    if (!info) return;
+    if (!force && seededFor.current === info.id) return;
+    seededFor.current = info.id;
+    setParams((current) => ({
+      ...DEFAULT_PARAMS,
+      // System prompt and thinking are the user's, not the model's; a config
+      // has nothing to say about them and clearing them would be a surprise.
+      system: current.system,
+      thinking: current.thinking,
+      reasoning_budget_tokens: current.reasoning_budget_tokens,
+      ...(info.sampling ?? {}),
+    }));
   }, []);
 
   const newConversation = useCallback(() => {
@@ -276,12 +315,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo<ChatState>(() => ({
-    model, setModel, turns, draft, setDraft, images, setImages,
+    model, setModel, seedParams, turns, draft, setDraft, images, setImages,
     params, setParams, streaming, streamStartedAt, conversationId, historyKey,
     send, stop: () => abort.current?.abort(), regenerate,
     openConversation, newConversation,
     error, clearError: () => setError(null),
-  }), [model, turns, draft, images, params, streaming, streamStartedAt,
+  }), [model, seedParams, turns, draft, images, params, streaming, streamStartedAt,
        conversationId, historyKey,
        send, regenerate, openConversation, newConversation, error]);
 

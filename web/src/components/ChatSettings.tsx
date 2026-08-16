@@ -19,6 +19,9 @@ interface Props {
   params: ChatParams;
   onChange: (params: ChatParams) => void;
   model?: ModelInfo;
+  /** Restore the model's configured sampling. Owned by the chat state, which is
+   *  what seeds the panel in the first place. */
+  onReset: () => void;
   /** Prompt + completion of the last reply: the window's real occupancy. */
   contextUsed: number;
 }
@@ -59,11 +62,20 @@ function Numeric({ value, onChange, min, max, step, suffix }: {
   );
 }
 
-export default function ChatSettings({ params, onChange, model, contextUsed }: Props) {
+export default function ChatSettings({ params, onChange, model, onReset, contextUsed }: Props) {
   const set = <K extends keyof ChatParams>(key: K, value: ChatParams[K]) =>
     onChange({ ...params, [key]: value });
 
   const ctxLimit = model?.ctx_size ?? 0;
+  // What seeding produces, so "already reset" is judged against the same thing
+  // the reset button restores rather than against a constant.
+  const configured: ChatParams = {
+    ...DEFAULT_PARAMS,
+    system: params.system,
+    thinking: params.thinking,
+    reasoning_budget_tokens: params.reasoning_budget_tokens,
+    ...(model?.sampling ?? {}),
+  };
   const ctxPercent = ctxLimit ? Math.min(100, (contextUsed / ctxLimit) * 100) : 0;
 
   return (
@@ -174,14 +186,26 @@ export default function ChatSettings({ params, onChange, model, contextUsed }: P
         style={{ fontSize: 12 }}
       />
 
+      {/* Back to what this model is configured with, not to a fixed set that
+          may say something different from the config. What the button restores
+          is what the panel started at, which is the only reset that is not a
+          second opinion. */}
       <Button
         size="small" icon={<ReloadOutlined />} block
         style={{ marginTop: 14 }}
-        onClick={() => onChange(DEFAULT_PARAMS)}
-        disabled={JSON.stringify(params) === JSON.stringify(DEFAULT_PARAMS)}
+        onClick={() => onReset()}
+        disabled={JSON.stringify(params) === JSON.stringify(configured)}
       >
-        重設為預設值
+        {model?.sampling ? '重設為模型設定值' : '重設為預設值'}
       </Button>
+
+      {model?.sampling && (
+        <Text style={{
+          display: 'block', marginTop: 6, fontSize: 10, opacity: 0.4, lineHeight: 1.6,
+        }}>
+          取樣預設值來自 llama-swap 設定裡的 {model.id}
+        </Text>
+      )}
     </div>
   );
 }

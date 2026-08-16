@@ -168,6 +168,59 @@ def _files_in_cmd(cmd: Any) -> set[str]:
 
 
 _CTX_FLAG = re.compile(r"--ctx-size\s+(\d+)")
+
+# Sampling flags a model entry may carry, mapped to the names the chat panel
+# and the OpenAI API use. llama.cpp normalises underscores to hyphens, so both
+# spellings are accepted here -- and `repeat-penalty` is included under its
+# llama.cpp name because that is what the config has to say, whatever the API
+# calls it.
+_SAMPLING_FLAGS = {
+    "temp": "temperature",
+    "temperature": "temperature",
+    "top-p": "top_p",
+    "top-k": "top_k",
+    "min-p": "min_p",
+    "presence-penalty": "presence_penalty",
+    "frequency-penalty": "frequency_penalty",
+    "repeat-penalty": "repeat_penalty",
+}
+_SAMPLING_INTS = {"top_k"}
+
+
+def sampling_defaults() -> dict[str, dict[str, float]]:
+    """Each model's sampling flags, so the chat panel can start from what the
+    model was actually configured with.
+
+    These flags are only defaults on the server -- a request that carries its
+    own values overrides them entirely, which is exactly what the console does.
+    So without reading them here the panel and the config drift apart silently,
+    and the numbers written in config.yaml never take effect for the one client
+    that matters most.
+    """
+    try:
+        models = _load().get("models") or {}
+    except Exception:
+        logger.exception("could not read the config while reading sampling defaults")
+        return {}
+
+    out: dict[str, dict[str, float]] = {}
+    for model_id, spec in models.items():
+        cmd = str(spec.get("cmd") or "")
+        found: dict[str, float] = {}
+        for flag, name in _SAMPLING_FLAGS.items():
+            # Underscores and hyphens both, since llama.cpp accepts both and the
+            # config is written by hand.
+            pattern = flag.replace("-", "[-_]")
+            match = re.search(rf"--{pattern}\s+(-?[\d.]+)", cmd)
+            if match:
+                try:
+                    value = float(match.group(1))
+                except ValueError:
+                    continue
+                found[name] = int(value) if name in _SAMPLING_INTS else value
+        if found:
+            out[model_id] = found
+    return out
 _MMPROJ_FLAG = re.compile(r"--mmproj\s+\S+")
 
 
