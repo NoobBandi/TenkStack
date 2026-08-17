@@ -710,15 +710,45 @@ VRAM_MARGIN = 4 * 1024**3
 _vram_lock = asyncio.Lock()
 
 
-async def _comfyui_held_vram() -> list[tuple[dict, int]]:
-    """Instances holding more than an idle amount, with how much."""
+def _shares_card(instance: dict, card: str | None) -> bool:
+    """Whether this instance is on the card llama-server uses.
+
+    Since a second GPU went in, "ComfyUI is holding VRAM" and "ComfyUI is in
+    the way" stopped being the same statement. An instance on the 3060 competes
+    with nothing an LLM does on the B70, and treating it as a rival meant
+    clearing it off its own card for no reason -- or, worse, refusing a chat
+    request with 503 because a card the model will never touch was busy.
+
+    Matched by name rather than by a table mapping vendors to torch device
+    types. ComfyUI reports `xpu:0 Intel(R) Arc(TM) Pro B70 Graphics` and
+    `cuda:0 NVIDIA GeForce RTX 3060 : cudaMallocAsync`, each containing what
+    the telemetry provider calls the same card, so one substring test covers
+    every vendor and needs no updating when a fourth appears. Type alone would
+    not do it: torch on ROCm calls itself `cuda`, which is indistinguishable
+    from a real NVIDIA card.
+
+    Unknown means yes. Failing to free a card that needed freeing is an
+    out-of-memory on load; freeing one that did not is a lost cache. Only one
+    of those is worth defaulting to.
+    """
+    name = ((instance.get("device") or {}).get("name") or "").strip()
+    if not card or not name:
+        return True
+    return card.lower() in name.lower()
+
+
+async def _comfyui_held_vram(card: str | None = None) -> list[tuple[dict, int]]:
+    """Instances holding more than an idle amount, with how much.
+
+    With `card`, only those on it -- see `_shares_card`.
+    """
     found = await asyncio.gather(*(_probe_comfyui(p) for p in COMFYUI_PORTS))
     out = []
     for instance in found:
         if instance is None:
             continue
         held = (instance.get("device") or {}).get("torch_vram_total") or 0
-        if held >= COMFYUI_IDLE_VRAM:
+        if held >= COMFYUI_IDLE_VRAM and _shares_card(instance, card):
             out.append((instance, held))
     return out
 
@@ -743,13 +773,29 @@ async def make_room_for(model_id: str) -> None:
         return
 
     async with _vram_lock:
-        held = await _comfyui_held_vram()
+        # Probed before anything else because "nothing is holding VRAM" is the
+        # common answer and costs four local requests to reach. Filtered by
+        # card afterwards rather than by asking again -- the answer is already
+        # in hand and a second round would double the probes.
+        anywhere = await _comfyui_held_vram()
+        if not anywhere:
+            return
+
+        # The card llama-server runs on. Device 0 of whichever provider
+        # answered -- on this machine the Intel one, since selection is by
+        # probe and Intel is asked first, which is also the card the models are
+        # built and flagged for.
+        sample = await gpu.sample_dict(0) or {}
+        card = sample.get("name")
+
+        held = [(i, b) for i, b in anywhere if _shares_card(i, card)]
         if not held:
+            # Something is holding VRAM, but on another card. Nothing to do,
+            # and in particular nothing to refuse the caller over.
             return
 
         # Only now is it worth asking how big the model is.
         need = sum(f["size_bytes"] for f in config.files_for_model(model_id)) + VRAM_MARGIN
-        sample = await gpu.sample_dict(0) or {}
         total = (sample.get("memory_total_mib") or 0) * 1024**2
         used = (sample.get("memory_used_mib") or 0) * 1024**2
         if total and (total - used) >= need:
@@ -785,7 +831,9 @@ async def make_room_for(model_id: str) -> None:
         # has not released yet.
         for _ in range(60):
             await asyncio.sleep(0.5)
-            if not await _comfyui_held_vram():
+            # Filtered by card too, or this waits thirty seconds for an
+            # instance on another GPU to release memory it was never asked for.
+            if not await _comfyui_held_vram(card):
                 logger.info("ComfyUI released the card")
                 return
         logger.warning("ComfyUI still holds VRAM after 30s; loading %s anyway", model_id)
