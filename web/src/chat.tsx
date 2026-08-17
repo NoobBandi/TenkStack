@@ -7,6 +7,7 @@ import {
   type ChatMessage, type ChatParams, type Timings, type ToolCall, type Usage,
 } from './api';
 import { usePythonRuntime, type RunResult } from './components/pythonRuntime';
+import type { Step } from './components/Trace';
 import { describeResult, MAX_STEPS, parseCode, SANDBOX_TOOL } from './sandboxTool';
 
 /**
@@ -32,6 +33,55 @@ export interface Turn extends ChatMessage {
   /** Wall time spent inside the reasoning block, first thought to first word.
    *  A collapsed trace says nothing about what it cost; this does. */
   thinking_ms?: number;
+}
+
+/**
+ * Fold one exchange's turns into the trace and the answer.
+ *
+ * The wire format is a list -- an assistant turn carrying tool calls, a tool
+ * turn with the result, another assistant turn -- because that is what the
+ * server has to be sent. It is not what anyone wants to read. On screen an
+ * exchange is one reply with a record of how it was arrived at, so the list is
+ * folded back into exactly that here, once, rather than being pattern-matched
+ * inside the renderer.
+ *
+ * The last assistant turn holds the answer; everything before it is trace.
+ */
+export interface Exchange {
+  user: Turn | null;
+  steps: Step[];
+  answer: Turn | null;
+}
+
+export function foldExchanges(turns: Turn[]): Exchange[] {
+  const out: Exchange[] = [];
+  let current: Exchange | null = null;
+
+  for (const turn of turns) {
+    if (turn.role === 'user') {
+      current = { user: turn, steps: [], answer: null };
+      out.push(current);
+      continue;
+    }
+    if (!current) {
+      current = { user: null, steps: [], answer: null };
+      out.push(current);
+    }
+
+    if (turn.role === 'tool') {
+      current.steps.push({ kind: 'code', text: turn.run?.code ?? '', turn });
+      continue;
+    }
+
+    // An assistant turn contributes its thinking to the trace either way; it
+    // becomes the answer only if it stopped to answer rather than to ask for
+    // something to be run.
+    if (turn.reasoning) {
+      current.steps.push({ kind: 'reasoning', text: turn.reasoning, ms: turn.thinking_ms });
+    }
+    if (turn.finish_reason !== 'tool_calls') current.answer = turn;
+  }
+  return out;
 }
 
 /**

@@ -143,8 +143,11 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
         const list = figures?.toJs ? figures.toJs() : [];
         images = list.map((b64) => 'data:image/png;base64,' + b64);
         figures?.destroy?.();
-      } catch {
-        // A figure that cannot be saved is not worth failing the run over.
+      } catch (error) {
+        // Reported, not swallowed. Silently dropping this made a failed
+        // harvest indistinguishable from code that never drew anything, which
+        // is exactly the question worth answering when no picture appears.
+        err.push('[figure] ' + String(error?.message || error));
       }
     }
 

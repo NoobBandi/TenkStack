@@ -12,10 +12,9 @@ import PreviewPanel from '../components/PreviewPanel';
 import { PreviewProvider, usePreview } from '../components/preview';
 import ChatHistory from '../components/ChatHistory';
 import Markdown from '../components/Markdown';
-import ThinkingTrace from '../components/ThinkingTrace';
-import AgentStep from '../components/AgentStep';
+import Trace from '../components/Trace';
 import { useStream } from '../stream';
-import { useChat, type Turn } from '../chat';
+import { foldExchanges, useChat, type Turn } from '../chat';
 import { LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -98,6 +97,9 @@ function ChatInner() {
     streamStartedAt, conversationId, historyKey,
     send, stop, regenerate, openConversation, newConversation, error, clearError,
   } = useChat();
+
+  // Folded once here rather than pattern-matched inside the renderer.
+  const exchanges = useMemo(() => foldExchanges(turns), [turns]);
 
   const screens = useBreakpoint();
   // Below lg the conversation cannot afford a docked column: subtracting the
@@ -333,127 +335,111 @@ function ChatInner() {
                 </Space>
               </div>
             ) : (
-              turns.map((turn, index) => {
-                const isUser = turn.role === 'user';
-                const isLast = index === turns.length - 1;
+              exchanges.map((exchange, index) => {
+                const isLast = index === exchanges.length - 1;
+                const answer = exchange.answer;
+                // The trace is live while this exchange is the one being
+                // produced and no answer has landed in it yet.
+                const tracing = isLast && streaming && !answer?.content;
 
-                // A tool result is not a speaker. It belongs to the reply being
-                // assembled around it, so it gets no header, no divider and no
-                // column of its own -- only the trace of what ran.
-                if (turn.role === 'tool') {
-                  return (
-                    <div key={index} style={{ padding: '0 0 4px' }}>
-                      <AgentStep turn={turn} live={isLast && streaming} />
-                    </div>
-                  );
-                }
-
-                // An assistant turn that follows a tool result is the same
-                // reply continuing, so it does not announce the speaker again.
-                const continues = index > 0 && turns[index - 1].role === 'tool';
                 return (
-                  <div
-                    key={index}
-                    className="turn-in"
-                    style={{
-                      // No bubbles: long code answers read as a document, and a
-                      // tinted box around a 60-line snippet fights the content.
-                      // Sides carry the speaker instead.
-                      padding: continues ? '0 0 18px' : '18px 0',
-                      borderTop: index === 0 || continues
-                        ? 'none' : `1px solid ${LINE.faint}`,
-                      display: 'flex',
-                      justifyContent: isUser ? 'flex-end' : 'flex-start',
-                    }}
-                  >
-                    <div style={{
-                      minWidth: 0,
-                      // The reply runs full width because code and tables need
-                      // it; the prompt is short and sits in a narrower column
-                      // on the right, which is what makes the sides readable.
-                      maxWidth: isUser ? '76%' : '100%',
-                      width: isUser ? undefined : '100%',
-                      // A hairline on the reader's side rather than a fill.
-                      borderInlineEnd: isUser ? `2px solid ${LINE.soft}` : undefined,
-                      paddingInlineEnd: isUser ? 14 : 0,
-                    }}>
-                    <Text style={{
-                      fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
-                      opacity: isUser ? 0.5 : 0.4, marginBottom: 8,
-                      display: continues ? 'none' : 'block',
-                      textAlign: isUser ? 'right' : 'left',
-                    }}>
-                      {isUser
-                        ? '你'
-                        : (models.find((m) => m.id === turn.model)?.name
-                           ?? turn.model
-                           ?? active?.name ?? active?.id ?? 'ASSISTANT').toUpperCase()}
-                    </Text>
+                  <div key={index}>
+                    {exchange.user && (
+                      <div
+                        className="turn-in"
+                        style={{
+                          padding: '18px 0',
+                          borderTop: index === 0 ? 'none' : `1px solid ${LINE.faint}`,
+                          display: 'flex', justifyContent: 'flex-end',
+                        }}
+                      >
+                        <div style={{
+                          minWidth: 0, maxWidth: '76%',
+                          // A hairline on the reader's side rather than a fill.
+                          borderInlineEnd: `2px solid ${LINE.soft}`, paddingInlineEnd: 14,
+                        }}>
+                          <Text style={{
+                            fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
+                            opacity: 0.5, display: 'block', marginBottom: 8, textAlign: 'right',
+                          }}>你</Text>
+                          {exchange.user.images?.length ? (
+                            <Space wrap size={6} style={{
+                              marginBottom: 10, justifyContent: 'flex-end', width: '100%',
+                            }}>
+                              {exchange.user.images.map((src, i) => (
+                                <Image key={i} src={src} width={128} style={{ borderRadius: 4 }} />
+                              ))}
+                            </Space>
+                          ) : null}
+                          <Text style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>
+                            {exchange.user.content}
+                          </Text>
+                          <Space size={2} wrap style={{
+                            marginTop: 10, width: '100%', justifyContent: 'flex-end',
+                          }}>
+                            <Tooltip title="複製">
+                              <Button type="text" size="small" icon={<CopyOutlined />}
+                                      onClick={() => copy(exchange.user!.content)} />
+                            </Tooltip>
+                          </Space>
+                        </div>
+                      </div>
+                    )}
 
-                    {turn.images?.length ? (
-                      <Space wrap size={6} style={{
-                        marginBottom: 10,
-                        justifyContent: isUser ? 'flex-end' : 'flex-start',
-                        width: '100%',
+                    {(exchange.steps.length > 0 || answer) && (
+                      <div className="turn-in" style={{
+                        // No bubbles: long code answers read as a document, and
+                        // a tinted box around a 60-line snippet fights the
+                        // content. Sides carry the speaker instead.
+                        padding: exchange.user ? '0 0 18px' : '18px 0',
+                        borderTop: exchange.user || index === 0
+                          ? 'none' : `1px solid ${LINE.faint}`,
                       }}>
-                        {turn.images.map((src, i) => (
-                          <Image key={i} src={src} width={128} style={{ borderRadius: 4 }} />
-                        ))}
-                      </Space>
-                    ) : null}
-
-                    {turn.reasoning ? (
-                      <ThinkingTrace
-                        reasoning={turn.reasoning}
-                        live={isLast && streaming && !turn.content}
-                        ms={turn.thinking_ms}
-                      />
-                    ) : null}
-
-                    {isUser ? (
-                      <Text style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>{turn.content}</Text>
-                    ) : (
-                      <Markdown>{turn.content}</Markdown>
-                    )}
-
-                    {isLast && streaming && !turn.content && !turn.reasoning && (
-                      <Space size={8}>
-                        {/* Which step, when there is more than one. A run that
-                            has been to the sandbox twice and is thinking again
-                            has spent its time on something, and a bare
-                            "思考中…" makes that look like one long stall. */}
-                        <Text style={{ fontSize: 12, opacity: 0.4 }}>
-                          {step > 1 ? `第 ${step} 步・思考中…` : '思考中…'}
+                        <Text style={{
+                          fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
+                          opacity: 0.4, display: 'block', marginBottom: 8,
+                        }}>
+                          {(models.find((m) => m.id === answer?.model)?.name
+                            ?? answer?.model
+                            ?? active?.name ?? active?.id ?? 'ASSISTANT').toUpperCase()}
                         </Text>
-                        <Elapsed since={streamStartedAt} />
-                      </Space>
-                    )}
 
-                    {turn.finish_reason === 'length' && (
-                      <Tooltip title={`回覆在 ${params.max_tokens} tokens 處被切斷。調高右側的 max tokens 後重新生成即可取得完整內容。`}>
-                        <Tag color="warning" style={{ marginTop: 10 }}>
-                          已達 max tokens 上限，內容被截斷
-                        </Tag>
-                      </Tooltip>
-                    )}
+                        <Trace steps={exchange.steps} live={tracing} />
 
-                    <Space size={2} wrap style={{
-                      marginTop: 10, width: '100%',
-                      justifyContent: isUser ? 'flex-end' : 'flex-start',
-                    }}>
-                      <Tooltip title="複製">
-                        <Button type="text" size="small" icon={<CopyOutlined />}
-                                onClick={() => copy(turn.content)} />
-                      </Tooltip>
-                      {!isUser && isLast && !streaming && (
-                        <Tooltip title="重新生成">
-                          <Button type="text" size="small" icon={<RedoOutlined />}
-                                  onClick={regenerate} />
-                        </Tooltip>
-                      )}
-                      {!isUser && <TurnStats turn={turn} />}
-                    </Space>
-                    </div>
+                        {answer?.content ? <Markdown>{answer.content}</Markdown> : null}
+
+                        {tracing && !exchange.steps.length && (
+                          <Space size={8}>
+                            <Text style={{ fontSize: 12, opacity: 0.4 }}>
+                              {step > 1 ? `第 ${step} 步・思考中…` : '思考中…'}
+                            </Text>
+                            <Elapsed since={streamStartedAt} />
+                          </Space>
+                        )}
+
+                        {answer?.finish_reason === 'length' && (
+                          <Tooltip title={`回覆在 ${params.max_tokens} tokens 處被切斷。調高右側的 max tokens 後重新生成即可取得完整內容。`}>
+                            <Tag color="warning" style={{ marginTop: 10 }}>
+                              已達 max tokens 上限，內容被截斷
+                            </Tag>
+                          </Tooltip>
+                        )}
+
+                        <Space size={2} wrap style={{ marginTop: 10, width: '100%' }}>
+                          <Tooltip title="複製">
+                            <Button type="text" size="small" icon={<CopyOutlined />}
+                                    onClick={() => copy(answer?.content ?? '')} />
+                          </Tooltip>
+                          {isLast && !streaming && (
+                            <Tooltip title="重新生成">
+                              <Button type="text" size="small" icon={<RedoOutlined />}
+                                      onClick={regenerate} />
+                            </Tooltip>
+                          )}
+                          {answer && <TurnStats turn={answer} />}
+                        </Space>
+                      </div>
+                    )}
                   </div>
                 );
               })
