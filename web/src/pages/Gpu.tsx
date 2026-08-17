@@ -4,6 +4,7 @@ import { fetchGpuDevices, type GpuDevice, type GpuSample } from '../api';
 import { useStream } from '../stream';
 import { deviceTag } from '../hardware';
 import { ACCENT, LINE, MONO } from '../theme';
+import VendorMark from '../components/VendorMark';
 
 const { Text } = Typography;
 
@@ -67,6 +68,7 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
             display: 'inline-block', transition: 'background 300ms, box-shadow 300ms',
           }} />
         </Tooltip>
+        <VendorMark vendor={device.vendor} size={15} style={{ opacity: 0.8 }} />
         <Text style={{ fontSize: 12 }} ellipsis>{device.name}</Text>
         <Tag color={VENDOR_COLOUR[device.vendor]}
              style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>
@@ -171,7 +173,15 @@ export default function Gpu() {
   const [open, setOpen] = useState<string[]>([]);
 
   useEffect(() => {
-    fetchGpuDevices().then(setDevices).catch(() => setDevices([]));
+    fetchGpuDevices()
+      .then((found) => {
+        setDevices(found);
+        // Open, once, when the listing first arrives. Set here rather than as
+        // an initial state because the devices are not known at mount, and set
+        // only from this one fetch so that collapsing a row stays collapsed.
+        setOpen(found.map((d) => String(d.index)));
+      })
+      .catch(() => setDevices([]));
   }, []);
 
   if (devices === null) return <Card size="small" loading />;
@@ -195,10 +205,11 @@ export default function Gpu() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {/* Closed to begin with. The headers already carry what the page is
-          usually opened for; the specifications are a lookup, and a page that
-          starts with two of them unrolled buries the readings it exists to
-          show. */}
+      {/* Open to begin with, and remembered once closed. A row's header holds
+          the readings and its body the specifications, and with two cards the
+          two bodies are not a wall -- hiding them by default would mean two
+          clicks before the page has said anything it could not fit in a
+          header. */}
       <Collapse
         activeKey={open}
         onChange={(keys) => setOpen(keys as string[])}
