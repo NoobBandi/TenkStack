@@ -252,10 +252,7 @@ export default function Models() {
               // different quantisations, which is now an ordinary thing to
               // have: the name, the description and the capabilities are all
               // identical between them, and only the file is not.
-              // 240 is the longest real case laid out: `Qwen3.8-27B-UD-Q4_K_XL`
-              // at 12px monospace, the vision tag, the gap and the cell
-              // padding come to 235. Wider than that is dead space in every row.
-              title: '模型檔', width: 240,
+              title: '模型檔', width: 300,
               render: (_, row) => {
                 const weights = row.weights ?? [];
                 if (weights.length === 0) return <Text type="secondary">—</Text>;
@@ -278,10 +275,7 @@ export default function Models() {
                         style={{ fontSize: 12, fontFamily: MONO, flex: 1, minWidth: 0 }}
                         ellipsis
                       >
-                        {/* Without the extension. Every file in a column
-                            headed 模型檔 is a .gguf, so those five characters
-                            are 36px of nothing in every row. */}
-                        {main.basename.replace(/\.gguf$/i, '')}
+                        {main.basename}
                       </Text>
                     </Tooltip>
                     {weights.some((w) => w.role === 'mmproj') && (
