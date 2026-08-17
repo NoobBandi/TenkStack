@@ -134,11 +134,14 @@ export default function SystemStats(
         )
       }
     >
-      {/* auto-fit rather than three fixed columns, so the dials stay centred in
-          whatever they are given and drop to one per row on a phone. */}
+      {/* Three across, on one row. This card has the full width of the page
+          now, so 140px each is met from about 450px upward and the dials only
+          stack on a phone -- which is the one width where stacking is right.
+          They are 112px wide, so each sits centred in a column wider than
+          itself rather than being stretched. */}
       <div style={{
         display: 'grid', gap: 16, justifyItems: 'center',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
       }}>
         <Dial
           title="CPU"

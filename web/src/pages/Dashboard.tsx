@@ -63,12 +63,13 @@ function GpuBlock({ gpu, showTemp }: { gpu: GpuSample; showTemp: boolean }) {
       }
       extra={gpu.busy && <Text style={{ fontSize: 10, opacity: 0.5 }}>運算中</Text>}
     >
-      {/* Two by two at this width, four across when the block has the row to
-          itself. auto-fit rather than a fixed count, so one card and two cards
-          both come out square. */}
+      {/* Four across. 108px is what one reading needs -- "2800" at 24px plus
+          its unit -- so four of them and three gaps fit inside a block from
+          about 470px wide, which is what half of a 1280px window comes to.
+          Below that they fall to two by two rather than crushing. */}
       <div style={{
-        display: 'grid', gap: 14,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+        display: 'grid', gap: 12,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(108px, 1fr))',
       }}>
         <StatBody
           label="POWER" value={(gpu.power_w ?? 0).toFixed(0)} unit="W"
@@ -141,25 +142,23 @@ export default function Dashboard() {
         />
       )}
 
-      {/* One block per card, plus one for the figures that belong to the
-          machine rather than to any card. auto-fit: one GPU and the throughput
-          share a row, two GPUs and the throughput wrap to two, and the widths
-          follow from the content instead of from spans chosen up front. */}
+      {/* The cards share a grid; the machine gets a row to itself below them.
+          One grid for all three had them competing: at two columns the system
+          block landed in the second row at half width, which squeezed three
+          dials into the space meant for one card's four readings. Two
+          containers means each is laid out against the width it actually has. */}
       <div style={{
         display: 'grid', gap: 16,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
       }}>
         {gpus.length === 0 ? (
           <StatTile label="GPU" value="—" footnote="偵測不到顯示卡" />
         ) : (
           gpus.map((g) => <GpuBlock key={g.index} gpu={g} showTemp={showTemp} />)
         )}
-        {/* The machine itself, alongside its cards rather than in a band of
-            its own below them. It is the same kind of thing -- a set of live
-            readings against ceilings -- and the row it used to sit under was a
-            single tile wide, which left most of that row empty. */}
-        <SystemStats sample={system} throughput={throughput} />
       </div>
+
+      <SystemStats sample={system} throughput={throughput} />
 
       {/* Rendered bare rather than in a Row: antd gives a gutter Row negative
           inline margins, which made this block sit 6px wider on each side than
