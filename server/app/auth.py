@@ -22,7 +22,7 @@ import os
 import time
 from hashlib import sha256
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from . import users
 from . import paths
@@ -122,3 +122,39 @@ def enforcement_enabled() -> bool:
         # A broken user store must fail closed, not open.
         logger.exception("could not read the user store; failing closed")
         return True
+
+
+def require_owner(request: Request) -> dict | None:
+    """A logged-in administrator, in a browser, and nothing else.
+
+    The middleware gates `/api` and `/v1` identically: any identity passes any
+    route. That is right for everything that reads GPU telemetry or starts a
+    model, and wrong for the routes that reach the filesystem, because the two
+    kinds of identity are not interchangeable.
+
+    An API key is minted to be pasted into somebody's chat client. It is meant
+    for `/v1/chat/completions`, it is long-lived, and it travels. A key that
+    also opens a file browser makes every client on the household network able
+    to read this machine's home directory -- which is not what anyone thought
+    they were handing out. So the filesystem routes take a session cookie only.
+
+    The `role` claim has been carried in every token since accounts existed and
+    read by nothing. This is the first thing to enforce it.
+
+    Returns None while enforcement is off, matching the rest of the app: before
+    the first account exists there is nobody to be an administrator.
+    """
+    if not enforcement_enabled():
+        return None
+
+    identity = getattr(request.state, "identity", None) or identify(request)
+    if identity is None:
+        raise HTTPException(status_code=401, detail="請先登入")
+    if identity.get("via") != "session":
+        raise HTTPException(
+            status_code=403,
+            detail="這個功能只接受登入後的瀏覽器工作階段，不接受 API 金鑰",
+        )
+    if identity.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="這個功能限管理員使用")
+    return identity

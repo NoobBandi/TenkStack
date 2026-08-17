@@ -372,7 +372,7 @@ export default function ComfyUI() {
           <Space size={8}>
             {/* The one place someone standing here is likely to want next: the
                 gallery says what came out, this says what can go in. */}
-            <Link to="/comfyui/files">
+            <Link to="/files">
               <Button size="small" icon={<FolderOpenOutlined />}>檔案</Button>
             </Link>
             <Button size="small" onClick={() => void refresh()}>重新整理</Button>

@@ -29,7 +29,7 @@ export const NAV_GROUPS = [
     items: [
       { key: '/models', icon: <AppstoreOutlined />, label: '模型' },
       { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
-      { key: '/comfyui/files', icon: <FolderOpenOutlined />, label: '圖像檔案' },
+      { key: '/files', icon: <FolderOpenOutlined />, label: '檔案' },
       { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
       { key: '/connections', icon: <ApiOutlined />, label: '連線' },
       { key: '/logs', icon: <FileTextOutlined />, label: '日誌' },

@@ -125,7 +125,13 @@ const BASE = '/api';
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`${path} returned ${res.status}`);
+  if (!res.ok) {
+    // The backend's `detail` says what actually went wrong -- which directory
+    // is off limits, which permission is missing. Dropping it for the status
+    // code alone turns every refusal into the same unhelpful sentence.
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `${path} returned ${res.status}`);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -793,63 +799,119 @@ export const patchChat = (id: number, patch: { title?: string; pinned?: boolean 
 export const deleteChat = (id: number) => send<{ ok: boolean }>(`/chats/${id}`, 'DELETE');
 
 // ---------------------------------------------------------------------------
-// ComfyUI's model and input folders
+// The filesystem
+//
+// Started as ComfyUI's model folders, which have no API of their own: ComfyUI
+// can list what it found but has no way to be given anything, so a checkpoint
+// meant a shell on the machine. It now reaches whatever the backend is
+// configured to expose, which by default is those folders plus the home
+// directory.
+//
+// These routes take a session cookie only -- an API key is refused with 403.
+// The key is meant to be pasted into a chat client and travels; one that also
+// opened a file browser would hand out more than whoever minted it intended.
 // ---------------------------------------------------------------------------
 
-export interface ComfyFileRoot {
+export interface FsRoot {
   key: string;
   label: string;
   note: string;
   path: string;
   exists: boolean;
-  /** These directories are created by the container, which runs as root, while
-   *  the console does not. Reported so the UI can explain rather than fail. */
+  /** Not assumed: ComfyUI's directories are created by a container running as
+   *  root while the console is not, and a root may be declared read-only. An
+   *  interface that offers an upload button over a directory it cannot write
+   *  is worse than one that explains itself. */
   writable: boolean;
 }
 
-export interface ComfyFolder {
+export interface FsEntry {
   name: string;
-  files: number;
-  size: number;
-  writable: boolean;
-}
-
-export interface ComfyFile {
-  name: string;
-  size: number;
+  /** `other` is a device, socket or broken symlink. Listed rather than hidden,
+   *  so the view agrees with `ls`, but nothing will open it. */
+  kind: 'dir' | 'file' | 'other';
+  /** Null for a directory. Its size on disk is its own inode, which is never
+   *  what anybody means; the real number is a separate request. */
+  size: number | null;
   modified: number;
   /** An upload that has not finished. Listed rather than hidden, so a transfer
    *  interrupted yesterday is visible today. */
   partial: boolean;
+  hidden: boolean;
 }
 
-export interface ComfyLocation {
-  folders: ComfyFolder[];
-  files: ComfyFile[];
+export interface FsListing {
+  entries: FsEntry[];
   /** Whether this exact directory takes writes, which is not the same as the
    *  root taking them -- ComfyUI creates subdirectories as root. */
   writable: boolean;
   free: number;
+  readonly_root: boolean;
 }
 
-export const fetchComfyFileRoots = () => get<{ roots: ComfyFileRoot[] }>('/comfyui/files/roots');
+/** What a file says about itself without being read: a model header, the first
+ *  page of text, or an honest nothing for a 20 GB video. */
+export type FsPeek =
+  | {
+      kind: 'model'; size: number; format: 'safetensors';
+      tensors: { name: string; dtype: string; shape: number[] }[];
+      truncated: boolean; count: number; parameters: number;
+      metadata: Record<string, unknown> | null;
+    }
+  | {
+      kind: 'model'; size: number; format: 'gguf'; version: number;
+      count: number; metadata: Record<string, unknown>;
+    }
+  | { kind: 'text'; size: number; text: string; truncated: boolean; language: string }
+  | { kind: 'binary'; size: number }
+  | { kind: 'unreadable'; size: number; detail: string };
 
-/** One location answers with its folders, its files and whether it is writable:
- *  the page needs all three to draw a row, and three round trips per navigation
- *  step would show the list, then the files, then belatedly grey out buttons. */
-export const fetchComfyLocation = (root: string, path: string) =>
-  get<ComfyLocation>(
-    `/comfyui/files?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`);
+const fsQuery = (root: string, path: string, name?: string) =>
+  `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
+  + (name === undefined ? '' : `&name=${encodeURIComponent(name)}`);
 
-export const createComfyFolder = (root: string, path: string, name: string) =>
-  send<{ ok: boolean }>(
-    `/comfyui/files/folder?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
-    + `&name=${encodeURIComponent(name)}`, 'POST');
+export const fetchFsRoots = () => get<{ roots: FsRoot[] }>('/fs/roots');
 
-export const deleteComfyFile = (root: string, path: string, name: string, partial = false) =>
+export const fetchFsListing = (root: string, path: string, hidden = false) =>
+  get<FsListing>(`/fs?${fsQuery(root, path)}&hidden=${hidden}`);
+
+/** Recursive size of one directory, asked for one at a time. The listing used
+ *  to answer this for every subdirectory at once, which over a home directory
+ *  walks the whole disk on every navigation step. */
+export const fetchFsSize = (root: string, path: string, name: string) =>
+  get<{ files: number; bytes: number }>(`/fs/size?${fsQuery(root, path, name)}`);
+
+export const fetchFsPeek = (root: string, path: string, name: string) =>
+  get<FsPeek>(`/fs/peek?${fsQuery(root, path, name)}`);
+
+/**
+ * URL for the bytes themselves.
+ *
+ * A URL rather than a fetch because this is what goes into `src` on an `<img>`
+ * or a `<video>`: the browser does its own ranged requests from there, which is
+ * the only way a scrubber works. `download` forces an attachment for the types
+ * the server would otherwise serve inline.
+ */
+export const fsRawUrl = (root: string, path: string, name: string, download = false) =>
+  `${BASE}/fs/raw?${fsQuery(root, path, name)}&download=${download}`;
+
+export const createFsFolder = (root: string, path: string, name: string) =>
+  send<{ ok: boolean }>(`/fs/folder?${fsQuery(root, path, name)}`, 'POST');
+
+export const renameFsEntry = (root: string, path: string, name: string, to: string) =>
+  send<{ ok: boolean; name: string }>(
+    `/fs/rename?${fsQuery(root, path, name)}&to=${encodeURIComponent(to)}`, 'POST');
+
+export const moveFsEntry = (
+  root: string, path: string, name: string, toRoot: string, toPath: string,
+) =>
+  send<{ ok: boolean; name: string }>(
+    `/fs/move?${fsQuery(root, path, name)}`
+    + `&to_root=${encodeURIComponent(toRoot)}&to_path=${encodeURIComponent(toPath)}`, 'POST');
+
+export const deleteFsEntry = (root: string, path: string, name: string, partial = false) =>
   send<{ ok: boolean; freed: number }>(
-    `/comfyui/files?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
-    + `&name=${encodeURIComponent(name)}&partial=${partial}`, 'DELETE');
+    `/fs?${fsQuery(root, path, name)}&partial=${partial}`, 'DELETE');
 
 /**
  * Chunk size. Large enough that a 20 GB model is ~1250 requests rather than
@@ -868,19 +930,16 @@ const UPLOAD_CHUNK = 16 * 1024 * 1024;
  * writing at, and a mismatch comes back as a 409 carrying the true length, so
  * recovery is an ordinary request rather than a special case.
  */
-export async function uploadComfyFile(
+export async function uploadFsFile(
   root: string,
   path: string,
   file: File,
   onProgress: (sent: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const base = `${BASE}/comfyui/files`;
-  const query = `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`
-    + `&name=${encodeURIComponent(file.name)}`;
+  const query = fsQuery(root, path, file.name);
 
-  const head = await get<{ offset: number; exists: boolean }>(
-    `/comfyui/files/offset?${query}`);
+  const head = await get<{ offset: number; exists: boolean }>(`/fs/offset?${query}`);
   if (head.exists) throw new Error('同名檔案已存在');
 
   let offset = head.offset;
@@ -889,7 +948,7 @@ export async function uploadComfyFile(
   while (offset < file.size) {
     const end = Math.min(offset + UPLOAD_CHUNK, file.size);
     const res = await fetch(
-      `${base}/upload?${query}&offset=${offset}&total=${file.size}`,
+      `${BASE}/fs/upload?${query}&offset=${offset}&total=${file.size}`,
       { method: 'PUT', body: file.slice(offset, end), signal },
     );
 

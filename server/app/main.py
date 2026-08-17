@@ -13,19 +13,21 @@ import asyncio
 import contextlib
 import json
 import logging
+import mimetypes
 import socket
 from pathlib import Path
 from typing import AsyncIterator
+from urllib.parse import quote
 
 import httpx
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
-    auth, catalog, channels, chats, comfyfiles, config, gpu, gpu_history, llamaswap,
+    auth, catalog, channels, chats, config, files, gpu, gpu_history, llamaswap,
     logs as journal, system, users, versions,
 )
 
@@ -784,105 +786,243 @@ async def make_room_for(model_id: str) -> None:
 
 
 # --------------------------------------------------------------------------
-# ComfyUI's model and input folders
+# The filesystem
 #
-# ComfyUI can say what it found but has no way to be given anything: /upload
-# takes input images under 100 MB and nothing else, so a checkpoint has always
-# meant a shell on this machine. These reach the filesystem directly, which is
-# also why every one of them goes through comfyfiles.resolve() -- a name from a
-# browser must never decide which directory is written to.
+# This started as ComfyUI's model folders, which have no API: ComfyUI can say
+# what it found but has no way to be given anything, so a checkpoint has always
+# meant a shell on this machine. It now reaches whatever `files.py` is
+# configured to expose.
+#
+# Every route here takes `require_owner` rather than the middleware's ordinary
+# check. The middleware treats a session cookie and an API key alike, which is
+# right for telemetry and wrong for this: an API key is pasted into a chat
+# client and travels, and one that also opens a file browser hands out more than
+# whoever minted it meant to. Sessions only, administrators only.
+#
+# Every path still goes through files.resolve(), which is what keeps a name from
+# a browser from deciding which directory gets written to.
 # --------------------------------------------------------------------------
 
-@app.get("/api/comfyui/files/roots")
-async def comfy_file_roots():
-    return {"roots": comfyfiles.roots()}
+# Types the browser may render in place. Everything else is sent as a download,
+# because serving an arbitrary file inline from this origin is stored XSS: an
+# HTML file in some directory, opened in a tab, runs script against the session
+# that opened it. Images and media have no such reach, and the headers below
+# hold the line for anything mislabelled.
+INLINE_TYPES = ("image/", "video/", "audio/")
+
+# Belt and braces on top of the allow-list. `nosniff` stops the browser
+# second-guessing a Content-Type it dislikes, and the sandbox directive strips
+# the response of an origin, so even a document that got through executes with
+# no access to cookies or storage.
+RAW_HEADERS = {
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "sandbox; default-src 'none'",
+    "cache-control": "private, max-age=60",
+}
 
 
-@app.get("/api/comfyui/files")
-async def comfy_files(root: str, path: str = ""):
-    """One location: its subdirectories, its files, and whether it takes writes.
+@contextlib.contextmanager
+def _file_errors():
+    """One translation from filesystem failures to status codes.
 
-    Answered in a single call because the page needs all three to draw a row --
-    three round trips per navigation step would show the folder list, then the
-    files, then belatedly grey out the buttons.
+    Collected here because eleven routes raise the same six exceptions, and
+    repeating the mapping is how one of them ends up answering 500 for a name
+    that is merely taken.
     """
     try:
-        listing = comfyfiles.listing(root, path)
-        return {
-            "folders": comfyfiles.folders(root, path),
-            "files": listing["files"],
-            "writable": listing["writable"],
-            "free": comfyfiles.free_bytes(root),
-        }
-    except comfyfiles.BadPath as exc:
+        yield
+    except files.Denied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except files.BadPath as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/api/comfyui/files/folder")
-async def comfy_file_mkdir(root: str, path: str = "", name: str = ""):
-    try:
-        return comfyfiles.mkdir(root, path, name)
-    except comfyfiles.BadPath as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileExistsError:
-        raise HTTPException(status_code=409, detail="同名項目已存在")
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=f"{exc} 已存在") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"找不到 {exc}") from exc
+    except IsADirectoryError as exc:
+        raise HTTPException(status_code=409, detail="資料夾不是空的") from exc
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail=f"{exc} 不是資料夾") from exc
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=f"{exc} 不可寫入")
+        raise HTTPException(status_code=403, detail=f"{exc} 不可寫入") from exc
 
 
-@app.get("/api/comfyui/files/offset")
-async def comfy_file_offset(root: str, name: str, path: str = ""):
+@app.get("/api/fs/roots")
+async def file_roots(_: dict = Depends(auth.require_owner)):
+    return {"roots": files.roots()}
+
+
+@app.get("/api/fs")
+async def file_listing(
+    root: str, path: str = "", hidden: bool = False,
+    _: dict = Depends(auth.require_owner),
+):
+    """One location: what is in it, whether it takes writes, and space left.
+
+    Answered in a single call because the page needs all of it to draw a row --
+    separate round trips would show the list, then belatedly grey out buttons.
+    """
+    with _file_errors():
+        return files.listing(root, path, hidden)
+
+
+@app.get("/api/fs/size")
+async def file_tree_size(
+    root: str, path: str = "", name: str | None = None,
+    _: dict = Depends(auth.require_owner),
+):
+    """How much is under one directory. Its own route because it is the
+    expensive question: listing used to answer it for every subdirectory at
+    once, which over a home directory walks the whole disk per navigation."""
+    with _file_errors():
+        return files.tree_size(root, path, name)
+
+
+@app.get("/api/fs/peek")
+async def file_peek(
+    root: str, name: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    """What can be said about a file without reading all of it: a model
+    header, the first page of text, or an honest nothing."""
+    with _file_errors():
+        return files.peek(root, path, name)
+
+
+@app.get("/api/fs/raw")
+async def file_raw(
+    request: Request, root: str, name: str, path: str = "",
+    download: bool = False, partial: bool = False,
+    _: dict = Depends(auth.require_owner),
+):
+    """The bytes, with Range support.
+
+    Range is not a nicety here: `<video>` will not let anyone drag the scrubber
+    unless the server answers 206, so a two-minute render plays from the start
+    or not at all.
+    """
+    with _file_errors():
+        target, size = files.open_file(root, path, name, partial)
+
+    media = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    inline = not download and media.startswith(INLINE_TYPES)
+    disposition = "inline" if inline else "attachment"
+    headers = {
+        **RAW_HEADERS,
+        "accept-ranges": "bytes",
+        # RFC 5987 rather than a bare filename: these names are Chinese as often
+        # as not, and a raw one either mangles or breaks the header.
+        "content-disposition": f"{disposition}; filename*=UTF-8''{quote(target.name)}",
+    }
+
+    start, end = 0, size - 1
+    status = 200
+    raw_range = request.headers.get("range", "")
+    if raw_range.startswith("bytes=") and size:
+        spec = raw_range[6:].split(",")[0].strip()
+        first, _, last = spec.partition("-")
+        try:
+            if first:
+                start = int(first)
+                end = int(last) if last else size - 1
+            elif last:
+                # A suffix range: the final N bytes, which is how some players
+                # read a container's trailing index.
+                start = max(0, size - int(last))
+            else:
+                raise ValueError(spec)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Range 格式錯誤")
+        end = min(end, size - 1)
+        if start > end:
+            return Response(
+                status_code=416,
+                headers={"content-range": f"bytes */{size}", **RAW_HEADERS},
+            )
+        status = 206
+        headers["content-range"] = f"bytes {start}-{end}/{size}"
+
+    length = end - start + 1 if size else 0
+    headers["content-length"] = str(length)
+    return StreamingResponse(
+        files.stream(target, start, length),
+        status_code=status, media_type=media, headers=headers,
+    )
+
+
+@app.post("/api/fs/folder")
+async def file_mkdir(
+    root: str, name: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    with _file_errors():
+        return files.mkdir(root, path, name)
+
+
+@app.post("/api/fs/rename")
+async def file_rename(
+    root: str, name: str, to: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    with _file_errors():
+        return files.rename(root, path, name, to)
+
+
+@app.post("/api/fs/move")
+async def file_move(
+    root: str, name: str, to_root: str, path: str = "", to_path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    with _file_errors():
+        return files.move(root, path, name, to_root, to_path)
+
+
+@app.delete("/api/fs")
+async def file_delete(
+    root: str, name: str, path: str = "", partial: bool = False,
+    _: dict = Depends(auth.require_owner),
+):
+    with _file_errors():
+        return files.delete(root, path, name, partial)
+
+
+@app.get("/api/fs/offset")
+async def file_offset(
+    root: str, name: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
     """What the server already holds, so an interrupted upload resumes."""
-    try:
-        return comfyfiles.upload_offset(root, path, name)
-    except comfyfiles.BadPath as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with _file_errors():
+        return files.upload_offset(root, path, name)
 
 
-@app.put("/api/comfyui/files/upload")
-async def comfy_file_upload(
+@app.put("/api/fs/upload")
+async def file_upload(
     request: Request, root: str, name: str, offset: int, total: int, path: str = "",
+    _: dict = Depends(auth.require_owner),
 ):
     """One chunk of a file, as a raw body.
 
     Deliberately not a multipart form: the whole point is that the bytes go from
     the socket to the disk without being assembled anywhere in between.
     """
-    try:
-        result = await comfyfiles.receive(
-            root, path, name, offset, total, request.stream(),
-        )
-    except comfyfiles.BadPath as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileExistsError:
-        raise HTTPException(status_code=409, detail="同名檔案已存在")
-    except PermissionError as exc:
-        raise HTTPException(
-            status_code=403,
-            detail=f"{exc} 不可寫入。容器以 root 建立了這些目錄，主控台不是。",
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    with _file_errors():
+        try:
+            result = await files.receive(
+                root, path, name, offset, total, request.stream(),
+            )
+        except files.BadPath:
+            # A ValueError too, and the handler below would flatten Denied's 403
+            # into a 400. Let the context manager have it.
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not result.get("ok"):
         # 409 with the length actually held: the client re-syncs and carries on
         # rather than starting the file again.
         return JSONResponse(result, status_code=409)
     return result
-
-
-@app.delete("/api/comfyui/files")
-async def comfy_file_delete(root: str, name: str, path: str = "", partial: bool = False):
-    try:
-        return comfyfiles.delete(root, path, name, partial)
-    except comfyfiles.BadPath as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="檔案不存在")
-    except IsADirectoryError:
-        raise HTTPException(status_code=409, detail="資料夾不是空的")
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 # --------------------------------------------------------------------------
