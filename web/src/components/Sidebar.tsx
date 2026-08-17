@@ -5,7 +5,7 @@ import {
   PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
-import type { GpuSample, ModelInfo } from '../api';
+import type { GpuSample, ModelInfo, SystemSample } from '../api';
 import { LINE, MONO } from '../theme';
 import { deviceTag } from '../hardware';
 
@@ -22,7 +22,7 @@ export const NAV_GROUPS = [
     items: [
       { key: '/', icon: <DashboardOutlined />, label: '總覽' },
       { key: '/chat', icon: <MessageOutlined />, label: '對話' },
-      { key: '/comfyui', icon: <PictureOutlined />, label: '圖像生成' },
+      { key: '/comfyui', icon: <PictureOutlined />, label: 'ComfyUI' },
       { key: '/files', icon: <FolderOpenOutlined />, label: '檔案' },
     ],
   },
@@ -45,6 +45,7 @@ interface Props {
   onCollapse: (collapsed: boolean) => void;
   gpus: GpuSample[];
   models: ModelInfo[];
+  system: SystemSample | null;
 }
 
 /** A one-line bar, drawn rather than componentised, so the footer stays dense. */
@@ -68,7 +69,7 @@ function Meter({ label, value, percent, warn }: {
   );
 }
 
-export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) {
+export default function Sidebar({ collapsed, onCollapse, gpus, models, system }: Props) {
   const location = useLocation();
   const loaded = models.filter((m) => m.running);
   const busy = gpus.some((g) => g.busy);
@@ -174,6 +175,19 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
             whether the next model fits, and whether ComfyUI is still holding
             the card.
           */}
+          {/* Host memory first, then each card's.
+              Above rather than below because a model that will not fit is a
+              VRAM problem, but a machine that has started swapping makes
+              everything slow at once -- including the loads that are about to
+              fill those VRAM bars. The order is the order they go wrong in. */}
+          {system?.memory && (
+            <Meter
+              label="RAM"
+              value={`${(system.memory.used_bytes / 1024 ** 3).toFixed(1)}G`}
+              percent={system.memory.percent}
+              warn={system.memory.percent > 90}
+            />
+          )}
           {gpus.map((g) => {
             const pc = g.memory_total_mib
               ? ((g.memory_used_mib ?? 0) / g.memory_total_mib) * 100 : 0;

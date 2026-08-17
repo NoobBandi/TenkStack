@@ -47,7 +47,7 @@ const TITLES: Record<string, string> = Object.fromEntries(
 function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sider') === 'collapsed');
-  const { gpus, models } = useStream();
+  const { gpus, models, system } = useStream();
 
   useEffect(() => {
     localStorage.setItem('sider', collapsed ? 'collapsed' : 'expanded');
@@ -63,7 +63,8 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
     <ConfigProvider locale={zhTW} theme={darkTheme}>
       <AntApp>
         <Layout style={{ minHeight: '100vh' }}>
-          <Sidebar collapsed={collapsed} onCollapse={setCollapsed} gpus={gpus} models={models} />
+          <Sidebar collapsed={collapsed} onCollapse={setCollapsed}
+                   gpus={gpus} models={models} system={system} />
 
           {/* The sider is fixed, so the content needs the space reserved. */}
           <Layout style={{

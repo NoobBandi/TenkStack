@@ -11,7 +11,11 @@ const { Text, Paragraph } = Typography;
 
 const SERVICES = [
   { name: 'llama-swap', port: 8080, note: 'LLM 生命週期與 OpenAI 相容端點' },
-  { name: 'ComfyUI', port: 8188, note: '圖像生成（容器 comfyui-xpu）' },
+  // One per card, since the device is fixed when the process starts. The
+  // ports are the ones the console probes; instances actually running are
+  // listed on the ComfyUI page, which asks them rather than assuming.
+  { name: 'ComfyUI', port: 8188, note: '圖像生成，B70（容器 comfyui-xpu）' },
+  { name: 'ComfyUI', port: 8189, note: '圖像生成，3060（容器 comfyui-nv0）' },
   { name: '主控台 API', port: 8070, note: '本服務' },
 ];
 
