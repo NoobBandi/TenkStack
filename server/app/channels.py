@@ -196,7 +196,18 @@ async def _run(*args: str, timeout: float = 60.0) -> tuple[int, str]:
 
 
 async def _apply(rollback) -> None:
-    """Validate, restart, and undo the change if either step fails."""
+    """Validate, reload, and undo the change if either step fails.
+
+    Reload rather than restart. A restart drops every open connection, and this
+    is the gateway: the console's own SSE stream goes with it, and so does any
+    ComfyUI websocket carrying the progress of a job that is still running.
+    Toggling a channel is a change to who may reach what, and it should not
+    interrupt what is already happening.
+
+    This became possible when the admin endpoint moved from `off` to a unix
+    socket. Before that `caddy reload` could only fail -- it drives the admin
+    API -- so a restart was the only way to apply anything.
+    """
     code, output = await _run(str(CADDY_BIN), "validate",
                               "--config", str(CADDYFILE), "--adapter", "caddyfile")
     if code != 0:
@@ -204,11 +215,15 @@ async def _apply(rollback) -> None:
         logger.error("caddy validate rejected the change: %s", output[-400:])
         raise RuntimeError(f"設定驗證失敗，已還原：{output.strip()[-200:]}")
 
-    code, output = await _run("systemctl", "--user", "restart", "caddy")
+    code, output = await _run("systemctl", "--user", "reload", "caddy")
     if code != 0:
         rollback()
-        await _run("systemctl", "--user", "restart", "caddy")
-        raise RuntimeError(f"Caddy 重啟失敗，已還原：{output.strip()[-200:]}")
+        # Reload the rolled-back config so the running Caddy matches the files
+        # again. If that also fails, a restart is the last thing that always
+        # works, downtime and all.
+        if (await _run("systemctl", "--user", "reload", "caddy"))[0] != 0:
+            await _run("systemctl", "--user", "restart", "caddy")
+        raise RuntimeError(f"Caddy 重新載入失敗，已還原：{output.strip()[-200:]}")
 
 
 async def set_enabled(name: str, enabled: bool):
