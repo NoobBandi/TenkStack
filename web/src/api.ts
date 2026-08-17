@@ -711,6 +711,10 @@ export interface GpuDevice {
   drm_device: string;
   pci_bdf_address: string;
   state: string;
+  /** Which telemetry provider produced this card. Every vendor that finds
+   *  hardware contributes now, so on a mixed machine "device 1" says nothing
+   *  useful without it. */
+  vendor: 'intel' | 'nvidia' | 'amd' | string;
   groups: GpuDeviceGroup[];
   live: GpuSample | null;
 }

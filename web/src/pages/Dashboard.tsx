@@ -185,7 +185,7 @@ export default function Dashboard() {
       ) : (
         <TileRow>
           {gpus.length === 0 ? (
-            <Tile><StatTile label="GPU" value="—" footnote="xpu-smi 無回應" /></Tile>
+            <Tile><StatTile label="GPU" value="—" footnote="偵測不到顯示卡" /></Tile>
           ) : (
             gpuTiles(gpus[0], showTemp)
           )}

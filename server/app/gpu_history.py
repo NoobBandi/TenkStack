@@ -86,8 +86,13 @@ async def _poll() -> None:
             now = time.time()
             if not known or now - discovered_at >= DISCOVER_EVERY:
                 devices = await gpu.discover()
+                # `index`, not `device_id`. That key is xpu-smi's own and never
+                # reaches here -- both providers translate it away -- so this
+                # matched nothing and the fallback below was the only path
+                # taken. Invisible with one card, and with two it would have
+                # left the second one without any history at all.
                 found = sorted(
-                    d["device_id"] for d in devices if d.get("device_id") is not None
+                    d["index"] for d in devices if d.get("index") is not None
                 )
                 # Fall back to device 0 rather than sampling nothing: discovery
                 # can fail while stats still answer, and an empty dashboard is a
