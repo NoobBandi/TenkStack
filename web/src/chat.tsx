@@ -4,8 +4,10 @@ import {
 import {
   chatStream, DEFAULT_PARAMS, fetchChat, patchChat, saveChat,
   type ModelInfo,
-  type ChatMessage, type ChatParams, type Timings, type Usage,
+  type ChatMessage, type ChatParams, type Timings, type ToolCall, type Usage,
 } from './api';
+import { usePythonRuntime, type RunResult } from './components/pythonRuntime';
+import { describeResult, MAX_STEPS, parseCode, SANDBOX_TOOL } from './sandboxTool';
 
 /**
  * The conversation, held above the router.
@@ -17,6 +19,10 @@ import {
  */
 
 export interface Turn extends ChatMessage {
+  /** What a `tool` turn actually did, kept beside the text the model reads so
+   *  the interface can show the code and its output rather than the prose
+   *  summary of them. */
+  run?: { code: string; result?: RunResult };
   usage?: Usage;
   timings?: Timings;
   finish_reason?: string;
@@ -49,6 +55,13 @@ interface ChatState {
   params: ChatParams;
   setParams: (p: ChatParams) => void;
   streaming: boolean;
+  /** Whether the model may call the sandbox. Off by default: it changes what
+   *  an answer costs and how long it takes, which is not something to switch on
+   *  for somebody without their asking. */
+  agent: boolean;
+  setAgent: (on: boolean) => void;
+  /** Which step of an agent run is in flight, 0 when none is. */
+  step: number;
   /** performance.now() when the current request went out, for an elapsed
    *  counter: a static "thinking…" cannot distinguish slow from stuck. */
   streamStartedAt: number;
@@ -82,6 +95,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
    */
   const seededFor = useRef<string | undefined>(undefined);
   const [streaming, setStreaming] = useState(false);
+  // Off by default. Offering the sandbox changes what an answer costs and how
+  // long it takes, which is not something to switch on for somebody without
+  // their asking.
+  const [agent, setAgent] = useState(false);
+  const [step, setStep] = useState(0);
+  const sandbox = usePythonRuntime();
   const [streamStartedAt, setStreamStartedAt] = useState(0);
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
@@ -151,22 +170,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const run = useCallback(async (history: Turn[]) => {
-    if (!model) return;
-    const activeModel = model;
-
-    // Save before generating: a question asked is worth keeping even if the
-    // answer never arrives, and the history list should show the thread the
-    // moment it starts rather than when it finishes.
-    const isFirstExchange = history.filter((t) => t.role === 'user').length === 1;
-    void persist(history, activeModel);
-
-    setTurns([...history, { role: 'assistant', content: '', reasoning: '', model: activeModel }]);
-    setStreaming(true);
-    setError(null);
-
-    const controller = new AbortController();
-    abort.current = controller;
+  /**
+   * One completion, streamed into the turn at the end of the list.
+   *
+   * Split out of `run` because an agent run does this several times: the model
+   * answers, asks for something to be executed, reads the result, and answers
+   * again. Everything that was once "the reply" is now "this step's reply".
+   */
+  const streamOnce = useCallback(async (
+    messages: Turn[], activeModel: string, controller: AbortController,
+    withTools: boolean,
+  ): Promise<Turn> => {
     const startedAt = performance.now();
     setStreamStartedAt(startedAt);
     let ttft: number | undefined;
@@ -180,6 +194,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const pending: Partial<Turn> = {};
     let content = '';
     let reasoning = '';
+    let calls: ToolCall[] | undefined;
     let lastFlush = 0;
 
     const flush = () => {
@@ -188,63 +203,155 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const next = [...prev];
         next[next.length - 1] = {
           ...next[next.length - 1], ...pending,
-          content, reasoning, ttft_ms: ttft, thinking_ms: thinkingMs,
-          model: activeModel,
+          content, reasoning, tool_calls: calls, ttft_ms: ttft,
+          thinking_ms: thinkingMs, model: activeModel,
         };
         return next;
       });
     };
 
-    try {
-      for await (const delta of chatStream({
-        model: activeModel, messages: history, params, signal: controller.signal,
-      })) {
-        if ((delta.content || delta.reasoning) && ttft === undefined) {
-          ttft = performance.now() - startedAt;
-          // Show the first token at once; the moment the user is watching for
-          // should not wait for the next tick.
-          lastFlush = 0;
-        }
-        if (delta.reasoning && reasoningAt === undefined) {
-          reasoningAt = performance.now();
-        }
-        if (delta.content && reasoningAt !== undefined && thinkingMs === undefined) {
-          thinkingMs = performance.now() - reasoningAt;
-        }
-        if (delta.content) content += delta.content;
-        if (delta.reasoning) reasoning += delta.reasoning;
-        if (delta.usage) pending.usage = delta.usage;
-        if (delta.timings) pending.timings = delta.timings;
-        if (delta.finish_reason) pending.finish_reason = delta.finish_reason;
-        if (performance.now() - lastFlush >= FLUSH_INTERVAL_MS) flush();
+    for await (const delta of chatStream({
+      model: activeModel,
+      messages,
+      params,
+      signal: controller.signal,
+      ...(withTools ? { tools: [SANDBOX_TOOL] } : {}),
+    })) {
+      if ((delta.content || delta.reasoning) && ttft === undefined) {
+        ttft = performance.now() - startedAt;
+        // Show the first token at once; the moment the user is watching for
+        // should not wait for the next tick.
+        lastFlush = 0;
       }
-      flush();
+      if (delta.reasoning && reasoningAt === undefined) {
+        reasoningAt = performance.now();
+      }
+      if (delta.content && reasoningAt !== undefined && thinkingMs === undefined) {
+        thinkingMs = performance.now() - reasoningAt;
+      }
+      if (delta.content) content += delta.content;
+      if (delta.reasoning) reasoning += delta.reasoning;
+      if (delta.tool_calls) calls = delta.tool_calls;
+      if (delta.usage) pending.usage = delta.usage;
+      if (delta.timings) pending.timings = delta.timings;
+      if (delta.finish_reason) pending.finish_reason = delta.finish_reason;
+      if (performance.now() - lastFlush >= FLUSH_INTERVAL_MS) flush();
+    }
+    flush();
+
+    // A reply that was all reasoning and no answer still spent the time.
+    if (thinkingMs === undefined && reasoningAt !== undefined) {
+      thinkingMs = performance.now() - reasoningAt;
+    }
+    return {
+      role: 'assistant', content, reasoning, tool_calls: calls, ...pending,
+      ttft_ms: ttft, thinking_ms: thinkingMs, model: activeModel,
+    };
+  }, [params]);
+
+  /**
+   * A turn, which may take several completions.
+   *
+   * The loop is the whole of the agent: stream, and if the model stopped to ask
+   * for something rather than to answer, run it, hand back what happened, and
+   * stream again. It ends when the model answers, when the step budget runs
+   * out, or when the user aborts.
+   *
+   * The messages sent back are the OpenAI shape exactly -- an assistant turn
+   * carrying `tool_calls`, then one `tool` turn per call -- so persistence,
+   * regeneration and the next request all take the list as it stands with no
+   * translation step to get wrong.
+   */
+  const run = useCallback(async (history: Turn[]) => {
+    if (!model) return;
+    const activeModel = model;
+    const useTools = agent;
+
+    // Save before generating: a question asked is worth keeping even if the
+    // answer never arrives, and the history list should show the thread the
+    // moment it starts rather than when it finishes.
+    const isFirstExchange = history.filter((t) => t.role === 'user').length === 1;
+    void persist(history, activeModel);
+
+    setTurns([...history, { role: 'assistant', content: '', reasoning: '', model: activeModel }]);
+    setStreaming(true);
+    setStep(useTools ? 1 : 0);
+    setError(null);
+
+    const controller = new AbortController();
+    abort.current = controller;
+
+    let conversation = [...history];
+    let last: Turn | null = null;
+
+    try {
+      for (let step = 0; step < MAX_STEPS; step += 1) {
+        setStep(useTools ? step + 1 : 0);
+        const reply = await streamOnce(conversation, activeModel, controller, useTools);
+        conversation = [...conversation, reply];
+        last = reply;
+
+        const calls = reply.tool_calls ?? [];
+        if (reply.finish_reason !== 'tool_calls' || !calls.length) break;
+
+        // Said out loud rather than stopping quietly. A run that used its whole
+        // budget and never answered looks identical to one that finished, and
+        // the reader is the only one who can decide whether to ask again.
+        if (step === MAX_STEPS - 1) {
+          setError(`已用完 ${MAX_STEPS} 個步驟仍未得到答案，已停下。`);
+        }
+
+        for (const call of calls) {
+          if (controller.signal.aborted) throw new DOMException('aborted', 'AbortError');
+          const parsed = parseCode(call.function.arguments);
+          const code = 'error' in parsed ? call.function.arguments : parsed.code;
+
+          // Shown before it runs, not after. The code is the part worth seeing
+          // while it is happening -- afterwards it is only evidence.
+          setTurns([...conversation, {
+            role: 'tool', tool_call_id: call.id, content: '', run: { code },
+          }]);
+
+          const result: RunResult = 'error' in parsed
+            // A malformed argument is the model's mistake and a fixable one, so
+            // it goes back as a result rather than ending the turn.
+            ? { stdout: '', stderr: '', value: null, error: parsed.error,
+                elapsed_ms: 0, timed_out: false, truncated: false }
+            : await sandbox.run(parsed.code);
+
+          conversation = [...conversation, {
+            role: 'tool',
+            tool_call_id: call.id,
+            content: describeResult(result),
+            run: { code, result },
+          }];
+          setTurns([...conversation]);
+        }
+
+        // The next step streams into a fresh turn at the end of the list.
+        setTurns([...conversation, {
+          role: 'assistant', content: '', reasoning: '', model: activeModel,
+        }]);
+      }
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         setError((err as Error).message);
-        if (content) flush(); else setTurns((prev) => prev.slice(0, -1));
+        if (!last?.content) setTurns((prev) => prev.slice(0, -1));
       }
     } finally {
       setStreaming(false);
+      setStep(0);
       abort.current = null;
 
-      if (content || reasoning) {
-        // A reply that was all reasoning and no answer still spent the time.
-        if (thinkingMs === undefined && reasoningAt !== undefined) {
-          thinkingMs = performance.now() - reasoningAt;
-        }
-        const reply: Turn = {
-          role: 'assistant', content, reasoning, ...pending,
-          ttft_ms: ttft, thinking_ms: thinkingMs, model: activeModel,
-        };
-        const id = await persist([...history, reply], activeModel);
+      if (last && (last.content || last.reasoning || last.tool_calls)) {
+        const id = await persist(conversation, activeModel);
         const firstUser = history.find((t) => t.role === 'user');
-        if (id && isFirstExchange && firstUser) {
-          void generateTitle(id, firstUser, reply, activeModel);
+        if (id && isFirstExchange && firstUser && last.content) {
+          void generateTitle(id, firstUser, last, activeModel);
         }
       }
     }
-  }, [model, params, persist, generateTitle]);
+  }, [model, agent, sandbox, streamOnce, persist, generateTitle]);
 
   const send = useCallback((text?: string) => {
     const content = (text ?? draft).trim();
@@ -316,11 +423,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<ChatState>(() => ({
     model, setModel, seedParams, turns, draft, setDraft, images, setImages,
-    params, setParams, streaming, streamStartedAt, conversationId, historyKey,
+    params, setParams, streaming, agent, setAgent, step,
+    streamStartedAt, conversationId, historyKey,
     send, stop: () => abort.current?.abort(), regenerate,
     openConversation, newConversation,
     error, clearError: () => setError(null),
-  }), [model, seedParams, turns, draft, images, params, streaming, streamStartedAt,
+  }), [model, seedParams, turns, draft, images, params, streaming, agent, step,
+    streamStartedAt,
        conversationId, historyKey,
        send, regenerate, openConversation, newConversation, error]);
 

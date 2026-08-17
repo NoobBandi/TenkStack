@@ -13,6 +13,7 @@ import { PreviewProvider, usePreview } from '../components/preview';
 import ChatHistory from '../components/ChatHistory';
 import Markdown from '../components/Markdown';
 import ThinkingTrace from '../components/ThinkingTrace';
+import AgentStep from '../components/AgentStep';
 import { useStream } from '../stream';
 import { useChat, type Turn } from '../chat';
 import { LINE, MONO } from '../theme';
@@ -93,7 +94,8 @@ function ChatInner() {
   const { models } = useStream();
   const {
     model, setModel, seedParams, turns, draft, setDraft, images, setImages,
-    params, setParams, streaming, streamStartedAt, conversationId, historyKey,
+    params, setParams, streaming, agent, setAgent, step,
+    streamStartedAt, conversationId, historyKey,
     send, stop, regenerate, openConversation, newConversation, error, clearError,
   } = useChat();
 
@@ -334,6 +336,21 @@ function ChatInner() {
               turns.map((turn, index) => {
                 const isUser = turn.role === 'user';
                 const isLast = index === turns.length - 1;
+
+                // A tool result is not a speaker. It belongs to the reply being
+                // assembled around it, so it gets no header, no divider and no
+                // column of its own -- only the trace of what ran.
+                if (turn.role === 'tool') {
+                  return (
+                    <div key={index} style={{ padding: '0 0 4px' }}>
+                      <AgentStep turn={turn} live={isLast && streaming} />
+                    </div>
+                  );
+                }
+
+                // An assistant turn that follows a tool result is the same
+                // reply continuing, so it does not announce the speaker again.
+                const continues = index > 0 && turns[index - 1].role === 'tool';
                 return (
                   <div
                     key={index}
@@ -342,8 +359,9 @@ function ChatInner() {
                       // No bubbles: long code answers read as a document, and a
                       // tinted box around a 60-line snippet fights the content.
                       // Sides carry the speaker instead.
-                      padding: '18px 0',
-                      borderTop: index === 0 ? 'none' : `1px solid ${LINE.faint}`,
+                      padding: continues ? '0 0 18px' : '18px 0',
+                      borderTop: index === 0 || continues
+                        ? 'none' : `1px solid ${LINE.faint}`,
                       display: 'flex',
                       justifyContent: isUser ? 'flex-end' : 'flex-start',
                     }}
@@ -361,7 +379,8 @@ function ChatInner() {
                     }}>
                     <Text style={{
                       fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
-                      opacity: isUser ? 0.5 : 0.4, display: 'block', marginBottom: 8,
+                      opacity: isUser ? 0.5 : 0.4, marginBottom: 8,
+                      display: continues ? 'none' : 'block',
                       textAlign: isUser ? 'right' : 'left',
                     }}>
                       {isUser
@@ -399,7 +418,13 @@ function ChatInner() {
 
                     {isLast && streaming && !turn.content && !turn.reasoning && (
                       <Space size={8}>
-                        <Text style={{ fontSize: 12, opacity: 0.4 }}>思考中…</Text>
+                        {/* Which step, when there is more than one. A run that
+                            has been to the sandbox twice and is thinking again
+                            has spent its time on something, and a bare
+                            "思考中…" makes that look like one long stall. */}
+                        <Text style={{ fontSize: 12, opacity: 0.4 }}>
+                          {step > 1 ? `第 ${step} 步・思考中…` : '思考中…'}
+                        </Text>
                         <Elapsed since={streamStartedAt} />
                       </Space>
                     )}
@@ -463,6 +488,8 @@ function ChatInner() {
             onModelChange={setModel}
             onClear={newConversation}
             canClear={turns.length > 0 && !streaming}
+            agent={agent}
+            onAgentChange={setAgent}
             onToggleSettings={() => setShowSettings((v) => !v)}
             settingsOpen={showSettings}
             onToggleHistory={() => setShowHistory((v) => !v)}

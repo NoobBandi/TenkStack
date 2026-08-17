@@ -1,11 +1,12 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { App as AntApp, Button, Image, Select, Space, Tooltip, Typography } from 'antd';
 import {
-  ClearOutlined, CloseOutlined, CodeOutlined, FileTextOutlined, HistoryOutlined,
-  PaperClipOutlined, SendOutlined, SlidersOutlined, StopOutlined,
+  ClearOutlined, CloseOutlined, CodeOutlined, FileTextOutlined,
+  HistoryOutlined, PaperClipOutlined, SendOutlined, SlidersOutlined,
+  StopOutlined
 } from '@ant-design/icons';
 import type { ModelCapabilities, ModelInfo } from '../api';
-import { LINE, MONO } from '../theme';
+import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
 
@@ -118,6 +119,11 @@ interface Props {
   canClear: boolean;
   onToggleSettings: () => void;
   settingsOpen: boolean;
+  /** Whether the model may call the sandbox. Only offered when the model
+   *  reports tool support -- a template without one silently ignores the tools
+   *  and the button would promise something that never happens. */
+  agent: boolean;
+  onAgentChange: (on: boolean) => void;
   onToggleHistory: () => void;
   historyOpen: boolean;
 }
@@ -126,7 +132,7 @@ export default function Composer({
   value, onChange, onSend, onStop, streaming, disabled,
   capabilities, images, onImagesChange,
   models, model, onModelChange, onClear, canClear,
-  onToggleSettings, settingsOpen, onToggleHistory, historyOpen,
+  onToggleSettings, settingsOpen, agent, onAgentChange, onToggleHistory, historyOpen,
 }: Props) {
   const { message: toast } = AntApp.useApp();
   const filePicker = useRef<HTMLInputElement>(null);
@@ -428,6 +434,17 @@ export default function Composer({
                     onClick={onToggleSettings}
                     style={{ opacity: settingsOpen ? 1 : 0.45 }} />
           </Tooltip>
+          {capabilities?.tools && (
+            <Tooltip title={agent
+              ? '沙箱已開啟：模型可以自己寫 Python 執行並讀取結果'
+              : '開啟沙箱：讓模型能寫 Python 執行來回答需要計算的問題'}>
+              <Button
+                type="text" size="small" icon={<CodeOutlined />}
+                onClick={() => onAgentChange(!agent)}
+                style={{ opacity: agent ? 1 : 0.45, color: agent ? ACCENT.ok : undefined }}
+              />
+            </Tooltip>
+          )}
           <Tooltip title="開始新對話">
             <Button type="text" size="small" icon={<ClearOutlined />}
                     disabled={!canClear} onClick={onClear} />

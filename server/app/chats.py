@@ -164,8 +164,14 @@ def save(
                 # continued by a different model, and attributing an old reply
                 # to whichever model is selected now would misreport who said
                 # what.
+                # `tool_calls`, `tool_call_id` and `run` are here because a
+                # conversation that used the sandbox is not reloadable without
+                # them. Dropping them loses the trace, and worse, leaves an
+                # assistant turn with no calls followed by tool turns with no id
+                # -- a message list the server rejects on the next question.
                 {k: m[k] for k in ("usage", "timings", "finish_reason", "ttft_ms",
-                                   "thinking_ms", "model")
+                                   "thinking_ms", "model",
+                                   "tool_calls", "tool_call_id", "run")
                  if k in m},
                 ensure_ascii=False,
             ) or None,

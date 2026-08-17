@@ -441,12 +441,34 @@ export const logout = () => send<{ ok: boolean }>('/auth/logout', 'POST');
 // ---------------------------------------------------------------------------
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   /** Qwen-style thinking, streamed separately from the answer. */
   reasoning?: string;
   /** Data URIs. Only sent to models whose /props reports vision support. */
   images?: string[];
+  /** What the model asked to run. Present on an assistant turn that ended in
+   *  `finish_reason: 'tool_calls'` rather than in an answer. */
+  tool_calls?: ToolCall[];
+  /** Which call this result answers. Required on a `tool` message; the server
+   *  matches it back to the request that asked for it. */
+  tool_call_id?: string;
+}
+
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+/** A tool the model may call, in the OpenAI schema llama-server accepts. */
+export interface ToolSpec {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
 }
 
 /** Sampling controls, named as llama.cpp's server accepts them. */
@@ -495,6 +517,9 @@ export interface ChatOptions {
   messages: ChatMessage[];
   params: ChatParams;
   signal?: AbortSignal;
+  /** Offered to the model, or omitted entirely. An empty array is not the same
+   *  as absent: some templates render a "you have no tools" preamble for it. */
+  tools?: ToolSpec[];
 }
 
 /**
@@ -526,8 +551,13 @@ export interface ChatDelta {
   done?: boolean;
   usage?: Usage;
   timings?: Timings;
-  /** 'stop' when the model finished, 'length' when it hit max tokens mid-answer. */
+  /** 'stop' when the model finished, 'length' when it hit max tokens mid-answer,
+   *  'tool_calls' when it stopped to ask for something to be run. */
   finish_reason?: string;
+  /** Assembled so far. Rebuilt on every frame rather than sent as fragments,
+   *  because the arguments arrive a few characters at a time and half a JSON
+   *  object is not something a caller can do anything with. */
+  tool_calls?: ToolCall[];
 }
 
 /**
@@ -572,6 +602,9 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
             }
           : { role, content },
       ),
+      // Omitted rather than sent empty: some chat templates render a "you have
+      // no tools" preamble for an empty array, which is worse than silence.
+      ...(options.tools?.length ? { tools: options.tools } : {}),
       stream: true,
       stream_options: { include_usage: true },
       // Makes llama-server attach its own timings to the final chunk.
@@ -587,6 +620,38 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+
+  /**
+   * Tool calls arrive in pieces and have to be sewn back together here.
+   *
+   * Measured against this llama-server: the name and id come whole in the first
+   * frame, then the arguments follow a few characters at a time -- `{`,
+   * `"index":`, `0`, `}` across four frames for one two-field object. Nothing
+   * downstream can use half of a JSON literal, so the accumulator lives here
+   * and every frame yields the whole of what is known so far.
+   *
+   * Keyed by the delta's own `index`, not by position: a model may open a
+   * second call before finishing the first, and the fragments are labelled for
+   * exactly that reason.
+   */
+  const building = new Map<number, ToolCall>();
+
+  const absorb = (fragments: unknown): ToolCall[] | undefined => {
+    if (!Array.isArray(fragments)) return undefined;
+    for (const piece of fragments) {
+      const at = typeof piece?.index === 'number' ? piece.index : 0;
+      const call = building.get(at) ?? {
+        id: '', type: 'function' as const, function: { name: '', arguments: '' },
+      };
+      if (piece.id) call.id = piece.id;
+      if (piece.function?.name) call.function.name = piece.function.name;
+      if (piece.function?.arguments) call.function.arguments += piece.function.arguments;
+      building.set(at, call);
+    }
+    return [...building.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, call]) => call);
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -615,6 +680,7 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
           usage: parsed.usage ?? undefined,
           timings: parsed.timings ?? undefined,
           finish_reason: parsed.choices?.[0]?.finish_reason ?? undefined,
+          tool_calls: absorb(delta.tool_calls),
         };
       } catch {
         // A malformed frame should not abort the stream.

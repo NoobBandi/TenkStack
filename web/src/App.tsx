@@ -20,6 +20,7 @@ import Logs from './pages/Logs';
 import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
 import { ChatProvider } from './chat';
+import { PythonRuntimeProvider } from './components/pythonRuntime';
 import { fetchAuth, logout, type AuthState } from './api';
 import { darkTheme, LINE, MONO } from './theme';
 
@@ -148,9 +149,14 @@ export default function App() {
           the stream is never opened by a caller who would only get 401s. */}
       <StreamProvider>
         {/* Above the routes so a streaming reply survives navigating away. */}
+        {/* Outside the chat, because the chat reads it. Nothing boots until
+            something asks to run code, so a conversation that never uses the
+            sandbox never pays for it. */}
+        <PythonRuntimeProvider>
         <ChatProvider>
           <Shell auth={auth} onSignOut={() => logout().then(refreshAuth)} />
         </ChatProvider>
+        </PythonRuntimeProvider>
       </StreamProvider>
     </BrowserRouter>
   );
