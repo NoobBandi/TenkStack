@@ -869,6 +869,20 @@ async def file_listing(
         return files.listing(root, path, hidden, query)
 
 
+@app.get("/api/fs/locate")
+async def file_locate(path: str, _: dict = Depends(auth.require_owner)):
+    """Where an absolute path lands: which root, and where inside it.
+
+    What the address bar submits is whatever somebody pasted out of a terminal.
+    Turning that into a root and a relative path needs `~` expanded against this
+    process, `..` collapsed, and symlinks followed before the deny list is
+    consulted -- so it happens here rather than by prefix-matching in the
+    browser.
+    """
+    with _file_errors():
+        return files.locate(path)
+
+
 @app.get("/api/fs/size")
 async def file_tree_size(
     root: str, path: str = "", name: str | None = None,

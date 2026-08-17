@@ -1,21 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Breadcrumb, Button, Card, Dropdown, Empty, Input, Modal,
-  Popconfirm, Progress, Segmented, Space, Switch, Table, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Empty, Input, Modal,
+  Progress, Segmented, Space, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
+import type { InputRef } from 'antd';
 import {
   AppstoreOutlined, DeleteOutlined, DownloadOutlined, DownOutlined,
   DragOutlined, EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined,
-  MoreOutlined, PlusOutlined, QuestionOutlined, StopOutlined,
+  MoreOutlined, PlusOutlined, QuestionCircleOutlined, QuestionOutlined, StopOutlined,
   UnorderedListOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import {
   createFsFolder, deleteFsEntry, fetchFsListing, fetchFsRoots, fetchFsSize,
-  fsRawUrl, fsThumbUrl, moveFsEntry, renameFsEntry, uploadFsFile,
+  fsRawUrl, fsThumbUrl, locateFsPath, moveFsEntry, renameFsEntry, uploadFsFile,
   type FsEntry, type FsRoot,
 } from '../api';
 import FilePreview from '../components/FilePreview';
 import FolderPicker from '../components/FolderPicker';
+import PathBar from '../components/PathBar';
 import { MONO } from '../theme';
 
 const { Text } = Typography;
@@ -63,6 +65,22 @@ interface Transfer {
 /** A directory's recursive size, once somebody has asked for it. */
 type Measured = { files: number; bytes: number } | 'working';
 
+/** Written out once, so the dialog cannot describe a binding that is not bound. */
+const SHORTCUTS: [string, string][] = [
+  ['Ctrl / ⌘ + L', '編輯路徑，直接貼絕對路徑跳過去'],
+  ['/', '搜尋這個資料夾'],
+  ['Backspace', '回上一層'],
+  ['Ctrl / ⌘ + A', '全選'],
+  ['Esc', '取消選取'],
+  ['Ctrl / ⌘ + U', '上傳檔案'],
+  ['N', '新增資料夾'],
+  ['F2', '重新命名（選一項時）'],
+  ['Delete', '刪除已選取的'],
+  ['G', '清單／格狀切換'],
+  ['← →', '預覽開著時，走前後一個檔案'],
+  ['?', '這張表'],
+];
+
 /**
  * Whether the grid is worth offering here.
  *
@@ -105,6 +123,11 @@ export default function Files() {
   // selection -- the dialog and the loop do not need to know which.
   const [moving, setMoving] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editingPath, setEditingPath] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  // Set by a jump that named a file, consumed once the listing it belongs to
+  // has arrived -- the entry cannot be selected before it exists.
+  const pendingOpen = useRef<string | null>(null);
   // An index into `entries` rather than the entry itself, so the arrows inside
   // the panel can walk the directory without the page handing it a new object.
   const [previewing, setPreviewing] = useState<number | null>(null);
@@ -115,9 +138,9 @@ export default function Files() {
   // rather than by whatever is on screen.
   const nextId = useRef(0);
   const picker = useRef<HTMLInputElement>(null);
+  const search = useRef<InputRef>(null);
 
   const activeRoot = roots.find((r) => r.key === root);
-  const segments = path ? path.split('/') : [];
   const at = (name: string) => `${root}:${path}/${name}`;
 
   const load = useCallback(async (
@@ -169,6 +192,51 @@ export default function Files() {
   // deliberate switch to the grid should survive stepping into a subfolder.
   const visual = looksVisual(entries);
   const gridding = view === 'grid' && visual;
+
+  const up = () => {
+    if (!path) return;
+    const parts = path.split('/');
+    parts.pop();
+    setPath(parts.join('/'));
+  };
+
+  /**
+   * Go wherever an absolute path points.
+   *
+   * The backend does the resolving, so this accepts what somebody pasted out of
+   * a terminal -- `~`, `..`, a symlink -- and crosses roots without the page
+   * needing to know which one owns it. A path naming a file lands on its folder
+   * with the file opened, because that is what someone pasting a checkpoint's
+   * full path is after.
+   */
+  const jump = async (text: string) => {
+    try {
+      const where = await locateFsPath(text);
+      setEditingPath(false);
+      if (where.root === root && where.path === path) {
+        // Already here, so no listing is coming and nothing would consume a
+        // pending open. Find it now or say it is gone.
+        const index = entries.findIndex((e) => e.name === where.name && e.kind === 'file');
+        if (index >= 0) setPreviewing(index);
+        return;
+      }
+      pendingOpen.current = where.name || null;
+      if (where.root !== root) setRoot(where.root);
+      setPath(where.path);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  // The listing a jump asked for has arrived; now the file it named can be
+  // found in it.
+  useEffect(() => {
+    const wanted = pendingOpen.current;
+    if (!wanted || loading) return;
+    pendingOpen.current = null;
+    const index = entries.findIndex((e) => e.name === wanted && e.kind === 'file');
+    if (index >= 0) setPreviewing(index);
+  }, [entries, loading]);
 
   const open = (entry: FsEntry) => {
     if (entry.kind === 'dir') {
@@ -243,16 +311,6 @@ export default function Files() {
     }
   };
 
-  const onDelete = async (entry: FsEntry) => {
-    try {
-      const { freed } = await deleteFsEntry(root, path, entry.name, entry.partial);
-      message.success(freed ? `已刪除，釋出 ${bytes(freed)}` : '已刪除');
-      void load(root, path, hidden, query);
-    } catch (error) {
-      message.error((error as Error).message);
-    }
-  };
-
   const chosen = entries.filter((e) => selected.includes(`${e.kind}:${e.name}`));
 
   /**
@@ -312,6 +370,100 @@ export default function Files() {
     );
   };
 
+  const confirmDelete = (items: FsEntry[]) => modal.confirm({
+    title: items.length === 1 ? `刪除 ${items[0].name}？` : `刪除這 ${items.length} 項？`,
+    content: items.some((e) => e.kind === 'dir') ? '資料夾必須是空的' : undefined,
+    okText: '刪除', cancelText: '取消', okButtonProps: { danger: true },
+    onOk: () => each(items, '刪除', (e) => deleteFsEntry(root, path, e.name, e.partial)),
+  });
+
+  /**
+   * Keys.
+   *
+   * The bindings are the ones a file manager has had since Explorer: F2
+   * renames, Delete deletes, Backspace goes up, Ctrl-L addresses. Nothing is
+   * invented, because a shortcut you have to learn is a shortcut nobody uses.
+   *
+   * Two guards matter. Anything typed into a field is typing, not a command --
+   * without that check, naming a folder "n" would open a second dialog on the
+   * keystroke. And the preview panel owns the arrows while it is open, so the
+   * page stands down entirely rather than the two fighting over a keydown.
+   */
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      )) {
+        return;
+      }
+      const mod = event.ctrlKey || event.metaKey;
+
+      // Ctrl-L works with a dialog open -- it is how you leave one -- and the
+      // rest do not.
+      if (mod && event.key.toLowerCase() === 'l') {
+        event.preventDefault();
+        setPreviewing(null);
+        setEditingPath(true);
+        return;
+      }
+      if (previewing !== null || renaming || moving || newFolder !== null || showKeys) return;
+
+      if (mod && event.key.toLowerCase() === 'a') {
+        event.preventDefault();
+        setSelected(entries.filter((e) => e.kind !== 'other').map((e) => `${e.kind}:${e.name}`));
+        return;
+      }
+      if (mod && event.key.toLowerCase() === 'u') {
+        event.preventDefault();
+        if (writable) picker.current?.click();
+        return;
+      }
+      if (mod) return;
+
+      switch (event.key) {
+        case '/':
+          event.preventDefault();
+          search.current?.focus();
+          break;
+        case 'Backspace':
+          event.preventDefault();
+          up();
+          break;
+        case 'Escape':
+          setSelected([]);
+          break;
+        case 'F2': {
+          const one = chosen.length === 1 ? chosen[0] : null;
+          if (one && writable && !one.partial) setRenaming({ entry: one, to: one.name });
+          break;
+        }
+        case 'Delete':
+          if (chosen.length && writable) confirmDelete(chosen);
+          break;
+        case 'n':
+        case 'N':
+          if (writable) setNewFolder('');
+          break;
+        case 'g':
+        case 'G':
+          if (visual) setView((v) => (v === 'grid' ? 'list' : 'grid'));
+          break;
+        case '?':
+          setShowKeys(true);
+          break;
+        default:
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // No dependency array on purpose. The handler closes over most of this
+    // component's state, and listing them would be a list that goes stale
+    // silently -- a forgotten entry means a key acting on the directory you
+    // were in two navigations ago. Re-binding one listener per render costs
+    // nothing measurable.
+  });
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <input ref={picker} type="file" multiple hidden onChange={onPick} />
@@ -357,16 +509,13 @@ export default function Files() {
       <Card
         size="small"
         title={
-          <Breadcrumb
-            style={{ fontSize: 12, fontFamily: MONO }}
-            items={[
-              { title: <a onClick={() => setPath('')}>{activeRoot?.label ?? root}</a> },
-              ...segments.map((segment, i) => ({
-                title: i === segments.length - 1
-                  ? <span>{segment}</span>
-                  : <a onClick={() => setPath(segments.slice(0, i + 1).join('/'))}>{segment}</a>,
-              })),
-            ]}
+          <PathBar
+            rootPath={activeRoot?.path ?? ''}
+            path={path}
+            onSegment={setPath}
+            onSubmit={(text) => void jump(text)}
+            editing={editingPath}
+            onEditing={setEditingPath}
           />
         }
         extra={
@@ -395,9 +544,10 @@ export default function Files() {
               </Button>
             </Dropdown>
             <Input.Search
+              ref={search}
               size="small"
               allowClear
-              placeholder="搜尋這個資料夾"
+              placeholder="搜尋這個資料夾（/）"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
               style={{ width: 190 }}
@@ -414,6 +564,12 @@ export default function Files() {
               />
             )}
             <Button size="small" onClick={() => void load(root, path, hidden, query)}>重新整理</Button>
+            <Tooltip title="快捷鍵（?）">
+              <Button
+                size="small" type="text" icon={<QuestionCircleOutlined />}
+                onClick={() => setShowKeys(true)}
+              />
+            </Tooltip>
           </Space>
         }
       >
@@ -488,19 +644,12 @@ export default function Files() {
               >
                 移動
               </Button>
-              <Popconfirm
-                title={`刪除這 ${chosen.length} 項？`}
-                description="資料夾必須是空的"
-                okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
-                onConfirm={() => void each(
-                  chosen, '刪除',
-                  (entry) => deleteFsEntry(root, path, entry.name, entry.partial),
-                )}
+              <Button
+                size="small" danger icon={<DeleteOutlined />} disabled={!writable || busy}
+                onClick={() => confirmDelete(chosen)}
               >
-                <Button size="small" danger icon={<DeleteOutlined />} disabled={!writable || busy}>
-                  刪除
-                </Button>
-              </Popconfirm>
+                刪除
+              </Button>
               <Button size="small" type="text" onClick={() => setSelected([])}>取消選取</Button>
             </Space>
           )}
@@ -669,14 +818,7 @@ export default function Files() {
                             icon: <DeleteOutlined />,
                             danger: true,
                             disabled: !writable,
-                            onClick: () => modal.confirm({
-                              title: `刪除 ${row.name}？`,
-                              content: row.kind === 'dir' ? '資料夾必須是空的' : undefined,
-                              okText: '刪除',
-                              cancelText: '取消',
-                              okButtonProps: { danger: true },
-                              onOk: () => onDelete(row),
-                            }),
+                            onClick: () => confirmDelete([row]),
                           },
                         ],
                       }}
@@ -740,6 +882,30 @@ export default function Files() {
         <Text type="secondary" style={{ fontSize: 11 }}>
           只是換個名字，位置不變。同名的東西已經存在時會拒絕。
         </Text>
+      </Modal>
+
+      <Modal
+        open={showKeys}
+        title="快捷鍵"
+        footer={null}
+        onCancel={() => setShowKeys(false)}
+      >
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px' }}>
+          {SHORTCUTS.map(([keys, what]) => (
+            <Fragment key={keys}>
+              <kbd
+                style={{
+                  fontFamily: MONO, fontSize: 11, padding: '2px 7px',
+                  border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4,
+                  background: 'rgba(255,255,255,0.05)', whiteSpace: 'nowrap',
+                }}
+              >
+                {keys}
+              </kbd>
+              <Text style={{ fontSize: 12 }}>{what}</Text>
+            </Fragment>
+          ))}
+        </div>
       </Modal>
 
       {moving && (

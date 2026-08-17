@@ -312,6 +312,64 @@ def resolve(root_key: str, path: str, name: str | None = None) -> Path:
     return final
 
 
+def locate(raw: str) -> dict:
+    """Which root a typed absolute path belongs to, and where in it.
+
+    The address bar accepts what somebody pasted out of a terminal, which is an
+    absolute path with no idea that roots exist. Resolving it here rather than
+    by prefix-matching in the browser is not tidiness: `~` has to expand against
+    this process, `..` has to collapse before anything is compared, and a
+    symlink has to be followed before the deny list is consulted -- none of
+    which the browser can do.
+
+    The longest matching root wins. With both `/` and `~` configured, a path
+    inside the home directory belongs to the home root, which is the one whose
+    breadcrumb makes sense.
+
+    A file is answered as its directory plus its name, so that typing the full
+    path of a checkpoint lands on the folder with that file ready to open,
+    rather than on an error saying it is not a directory.
+    """
+    text = (raw or "").strip()
+    if not text:
+        raise BadPath("要一個路徑")
+
+    target = Path(text).expanduser()
+    if not target.is_absolute():
+        raise BadPath("要絕對路徑，例如 /home/tenk/ai")
+    try:
+        final = target.resolve()
+    except OSError as exc:
+        raise BadPath(str(exc)) from exc
+    if not final.exists():
+        raise FileNotFoundError(text)
+    if _denied(final):
+        raise Denied("這個位置主控台不提供存取")
+
+    directory = final if final.is_dir() else final.parent
+    name = "" if final.is_dir() else final.name
+
+    best: tuple[int, str, str] | None = None
+    for root in _roots().values():
+        try:
+            base = root.path.resolve()
+        except OSError:
+            continue
+        if directory == base:
+            relative = ""
+        elif base in directory.parents:
+            relative = str(directory.relative_to(base))
+        else:
+            continue
+        depth = len(base.parts)
+        if best is None or depth > best[0]:
+            best = (depth, root.key, relative)
+
+    if best is None:
+        raise BadPath(f"{final} 不在任何一個開放的根目錄底下")
+    return {"root": best[1], "path": best[2], "name": name}
+
+
 def _writable(path: Path) -> bool:
     return path.is_dir() and os.access(path, os.W_OK | os.X_OK)
 

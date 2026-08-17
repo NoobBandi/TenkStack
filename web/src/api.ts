@@ -895,6 +895,21 @@ export const fetchFsListing = (root: string, path: string, hidden = false, query
 /** Recursive size of one directory, asked for one at a time. The listing used
  *  to answer this for every subdirectory at once, which over a home directory
  *  walks the whole disk on every navigation step. */
+/**
+ * Where an absolute path lands: which root, and where inside it.
+ *
+ * Resolved on the server rather than by matching prefixes here, because what
+ * the address bar submits is whatever was pasted out of a terminal: `~` has to
+ * expand against the backend's user, `..` has to collapse before anything is
+ * compared, and a symlink has to be followed before the deny list applies.
+ *
+ * `name` is empty for a directory and set when the path named a file, so that
+ * typing a checkpoint's full path lands on its folder with it ready to open.
+ */
+export const locateFsPath = (path: string) =>
+  get<{ root: string; path: string; name: string }>(
+    `/fs/locate?path=${encodeURIComponent(path)}`);
+
 export const fetchFsSize = (root: string, path: string, name: string) =>
   get<{ files: number; bytes: number }>(`/fs/size?${fsQuery(root, path, name)}`);
 
