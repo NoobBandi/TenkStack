@@ -68,7 +68,9 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
             display: 'inline-block', transition: 'background 300ms, box-shadow 300ms',
           }} />
         </Tooltip>
-        <VendorMark vendor={device.vendor} size={15} style={{ opacity: 0.8 }} />
+        {/* 18 against the 12px name beside it. The mark is the fastest thing
+            to recognise in the row, so it leads rather than matches. */}
+        <VendorMark vendor={device.vendor} size={18} style={{ opacity: 0.85 }} />
         <Text style={{ fontSize: 12 }} ellipsis>{device.name}</Text>
         <Tag color={VENDOR_COLOUR[device.vendor]}
              style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>
