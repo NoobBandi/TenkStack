@@ -854,16 +854,19 @@ async def file_roots(_: dict = Depends(auth.require_owner)):
 
 @app.get("/api/fs")
 async def file_listing(
-    root: str, path: str = "", hidden: bool = False,
+    root: str, path: str = "", hidden: bool = False, query: str = "",
     _: dict = Depends(auth.require_owner),
 ):
     """One location: what is in it, whether it takes writes, and space left.
 
     Answered in a single call because the page needs all of it to draw a row --
     separate round trips would show the list, then belatedly grey out buttons.
+
+    `query` filters here rather than in the browser so that it still reaches
+    names past the truncation point of a five-figure directory.
     """
     with _file_errors():
-        return files.listing(root, path, hidden)
+        return files.listing(root, path, hidden, query)
 
 
 @app.get("/api/fs/size")

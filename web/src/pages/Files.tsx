@@ -89,6 +89,12 @@ export default function Files() {
   const [writable, setWritable] = useState(false);
   const [free, setFree] = useState(0);
   const [hidden, setHidden] = useState(false);
+  // What is typed, and what has been asked for. Separated so that typing stays
+  // responsive while the request trails it by a beat.
+  const [typed, setTyped] = useState('');
+  const [query, setQuery] = useState('');
+  const [total, setTotal] = useState(0);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [newFolder, setNewFolder] = useState<string | null>(null);
@@ -114,17 +120,23 @@ export default function Files() {
   const segments = path ? path.split('/') : [];
   const at = (name: string) => `${root}:${path}/${name}`;
 
-  const load = useCallback(async (key: string, where: string, showHidden: boolean) => {
+  const load = useCallback(async (
+    key: string, where: string, showHidden: boolean, needle: string,
+  ) => {
     setLoading(true);
     try {
-      const data = await fetchFsListing(key, where, showHidden);
+      const data = await fetchFsListing(key, where, showHidden, needle);
       setEntries(data.entries);
       setWritable(data.writable);
       setFree(data.free);
+      setTotal(data.total);
+      setTruncated(data.truncated);
     } catch (error) {
       message.error((error as Error).message);
       setEntries([]);
       setWritable(false);
+      setTotal(0);
+      setTruncated(false);
     } finally {
       setLoading(false);
     }
@@ -133,14 +145,25 @@ export default function Files() {
   useEffect(() => {
     fetchFsRoots().then((d) => setRoots(d.roots)).catch(() => undefined);
   }, []);
+  // A directory changed under a search is a different question, so the box
+  // empties on navigation rather than silently hiding most of where you landed.
+  useEffect(() => { setTyped(''); setQuery(''); }, [root, path]);
+
+  // Trailing the keystrokes: without this, typing a nine-character name in a
+  // 20000-entry directory is nine listings, of which eight are discarded.
+  useEffect(() => {
+    const timer = setTimeout(() => setQuery(typed), 250);
+    return () => clearTimeout(timer);
+  }, [typed]);
+
   useEffect(() => {
     // The open panel is holding an index into a listing that is about to be
     // replaced, and the selection names entries that are about to be gone.
     // Clearing both is the only honest option.
     setPreviewing(null);
     setSelected([]);
-    void load(root, path, hidden);
-  }, [root, path, hidden, load]);
+    void load(root, path, hidden, query);
+  }, [root, path, hidden, query, load]);
 
   // Offered where there are pictures, but never taken away once chosen: a
   // deliberate switch to the grid should survive stepping into a subfolder.
@@ -191,7 +214,7 @@ export default function Files() {
       .then(() => {
         setTransfers((prev) => prev.filter((t) => t.id !== id));
         message.success(`${file.name} 已上傳`);
-        if (which === root && where === path) void load(root, path, hidden);
+        if (which === root && where === path) void load(root, path, hidden, query);
       })
       .catch((error: Error) => {
         // Kept in the list rather than cleared: the bytes are still on disk as a
@@ -214,7 +237,7 @@ export default function Files() {
     try {
       await createFsFolder(root, path, name);
       setNewFolder(null);
-      void load(root, path, hidden);
+      void load(root, path, hidden, query);
     } catch (error) {
       message.error((error as Error).message);
     }
@@ -224,7 +247,7 @@ export default function Files() {
     try {
       const { freed } = await deleteFsEntry(root, path, entry.name, entry.partial);
       message.success(freed ? `已刪除，釋出 ${bytes(freed)}` : '已刪除');
-      void load(root, path, hidden);
+      void load(root, path, hidden, query);
     } catch (error) {
       message.error((error as Error).message);
     }
@@ -263,7 +286,7 @@ export default function Files() {
         { content: `${failed.length} 項失敗 — ${failed[0]}`, duration: 6 },
       );
     }
-    void load(root, path, hidden);
+    void load(root, path, hidden, query);
   };
 
   const onRename = async () => {
@@ -273,7 +296,7 @@ export default function Files() {
     try {
       await renameFsEntry(root, path, renaming.entry.name, to);
       setRenaming(null);
-      void load(root, path, hidden);
+      void load(root, path, hidden, query);
     } catch (error) {
       message.error((error as Error).message);
     }
@@ -371,6 +394,14 @@ export default function Files() {
                 新建 <DownOutlined style={{ fontSize: 9 }} />
               </Button>
             </Dropdown>
+            <Input.Search
+              size="small"
+              allowClear
+              placeholder="搜尋這個資料夾"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              style={{ width: 190 }}
+            />
             {visual && (
               <Segmented
                 size="small"
@@ -382,7 +413,7 @@ export default function Files() {
                 ]}
               />
             )}
-            <Button size="small" onClick={() => void load(root, path, hidden)}>重新整理</Button>
+            <Button size="small" onClick={() => void load(root, path, hidden, query)}>重新整理</Button>
           </Space>
         }
       >
@@ -427,6 +458,20 @@ export default function Files() {
               )}
             </div>
           ))}
+
+          {truncated && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 10 }}
+              message={
+                <span style={{ fontSize: 12 }}>
+                  這裡有 {total.toLocaleString()} 個項目，只顯示前 {entries.length.toLocaleString()} 個。
+                  用上面的搜尋找特定的檔案 — 搜尋是在伺服器端跑的，找得到沒顯示出來的那些。
+                </span>
+              }
+            />
+          )}
 
           {chosen.length > 0 && (
             <Space
@@ -476,11 +521,21 @@ export default function Files() {
               columnWidth: 36,
             }}
             pagination={false}
-            scroll={{ y: 460 }}
+            // Rows are drawn only where they are looked at. Three thousand
+            // ordinary antd rows is a second of layout and a scrollbar that
+            // stutters; virtual needs every column to carry a width and an x
+            // for the total, which is the whole cost of it.
+            virtual={entries.length > 200}
+            // 36 selection + 400 name + 150 size + 130 modified + 78 actions.
+            scroll={{ y: 460, x: 794 }}
             locale={{
               emptyText: (
                 <Empty
-                  description={writable ? '空的 — 拖檔案進來，或用右上角的「新建」' : '空的'}
+                  description={
+                    query
+                      ? `沒有符合「${query}」的項目`
+                      : writable ? '空的 — 拖檔案進來，或用右上角的「新建」' : '空的'
+                  }
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               ),
@@ -488,6 +543,9 @@ export default function Files() {
             columns={[
               {
                 title: '名稱',
+                // A width is required for the virtual renderer; the sum of the
+                // widths is the `x` above, so nothing overflows or leaves a gap.
+                width: 400,
                 render: (_, row) => (
                   <Space size={7}>
                     {row.kind === 'dir'

@@ -126,6 +126,22 @@ def _deny_list() -> list[Path]:
     return out
 
 
+def _deny_prefixes() -> list[str]:
+    """The deny list as strings, ready for a prefix test.
+
+    `banned in path.parents` reads better and costs 1.3 seconds over a 20000
+    entry directory: `.parents` materialises a sequence per comparison, and
+    there are nine banned paths. The same answer by string prefix is 15 ms.
+    Equality and `startswith(banned + "/")` are checked separately, because a
+    bare prefix would also match `~/.sshfoo`.
+    """
+    return [str(p) for p in _deny_list()]
+
+
+def _under(path: str, banned: list[str]) -> bool:
+    return any(path == b or path.startswith(b + os.sep) for b in banned)
+
+
 def _denied(final: Path) -> bool:
     """Whether a resolved path is the deny list or lives under it.
 
@@ -133,10 +149,7 @@ def _denied(final: Path) -> bool:
     root is the normal case -- `~/.ssh` sits in the home root -- and that root
     stays browsable. The entry is hidden from its listing instead.
     """
-    for banned in _deny_list():
-        if final == banned or banned in final.parents:
-            return True
-    return False
+    return _under(str(final), _deny_prefixes())
 
 
 # --------------------------------------------------------------------------
@@ -333,7 +346,24 @@ def roots() -> list[dict]:
 # Listing
 # --------------------------------------------------------------------------
 
-def listing(root_key: str, path: str = "", hidden: bool = False) -> dict:
+# Beyond this a directory is sent in part.
+#
+# A `node_modules` or a cache directory reaches five figures, and 20k entries is
+# 2.7 MB of JSON that a table then has to draw. The cap is not a page: there is
+# no "next", because a directory of 20000 files is not something anybody pages
+# through. What it is, is something you search -- which is why `query` filters
+# on this side of the cap rather than in the browser, so a name that sorts at
+# position 19000 is still findable.
+LISTING_LIMIT = 3000
+
+
+def listing(
+    root_key: str,
+    path: str = "",
+    hidden: bool = False,
+    query: str = "",
+    limit: int = LISTING_LIMIT,
+) -> dict:
     """Everything at one location, in a single `scandir`.
 
     Directories and files come back in one list because they are one list on
@@ -358,7 +388,8 @@ def listing(root_key: str, path: str = "", hidden: bool = False) -> dict:
     if not here.is_dir():
         return {"entries": [], "writable": False, "free": 0}
 
-    denied = _deny_list()
+    denied = _deny_prefixes()
+    needle = query.strip().lower()
     entries: list[dict] = []
     with os.scandir(here) as scan:
         for entry in scan:
@@ -366,10 +397,18 @@ def listing(root_key: str, path: str = "", hidden: bool = False) -> dict:
             is_hidden = name.startswith(".")
             if is_hidden and not hidden:
                 continue
+            if needle and needle not in name.lower():
+                continue
 
+            # `here` is already resolved, so an ordinary child's resolved path
+            # is just its own path, and realpath would be 340 ms of syscalls per
+            # 20k entries to learn that. Only a symlink can point somewhere
+            # else, and only then is it worth asking.
             try:
-                resolved = Path(entry.path).resolve()
-                if any(resolved == b or b in resolved.parents for b in denied):
+                resolved = (
+                    os.path.realpath(entry.path) if entry.is_symlink() else entry.path
+                )
+                if _under(resolved, denied):
                     continue
             except OSError:
                 pass
@@ -411,8 +450,14 @@ def listing(root_key: str, path: str = "", hidden: bool = False) -> dict:
             })
 
     entries.sort(key=lambda e: (e["kind"] != "dir", e["name"].lower()))
+    total = len(entries)
     return {
-        "entries": entries,
+        "entries": entries[:limit],
+        # Sent whether or not it was hit. An interface that only learns the true
+        # count when it is over the limit cannot say "652 items" the rest of the
+        # time, which is the number people actually want.
+        "total": total,
+        "truncated": total > limit,
         "writable": _can_write(root, here),
         "free": free_bytes(here),
         "readonly_root": root.readonly,
@@ -837,7 +882,13 @@ THUMB_DIR = paths.STATE_DIR / "thumbs"
 
 
 def can_thumbnail(name: str) -> bool:
-    return Path(name).suffix.lower() in IMAGE_SUFFIXES
+    return _suffix(name) in IMAGE_SUFFIXES
+
+
+def _suffix(name: str) -> str:
+    # `Path(name).suffix` costs five times as much and this runs once per entry
+    # in every listing.
+    return os.path.splitext(name)[1].lower()
 
 
 def media_kind(name: str) -> str | None:
@@ -848,7 +899,7 @@ def media_kind(name: str) -> str | None:
     problem -- and because reading the first bytes of every file in a directory
     to find out would put an open() in the listing loop.
     """
-    suffix = Path(name).suffix.lower()
+    suffix = _suffix(name)
     if suffix in IMAGE_SUFFIXES or suffix == ".svg":
         return "image"
     if suffix in VIDEO_SUFFIXES:

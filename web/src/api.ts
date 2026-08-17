@@ -846,6 +846,10 @@ export interface FsEntry {
 
 export interface FsListing {
   entries: FsEntry[];
+  /** How many matched, which is not how many were sent. Always present, so the
+   *  count can be shown when nothing was truncated too. */
+  total: number;
+  truncated: boolean;
   /** Whether this exact directory takes writes, which is not the same as the
    *  root taking them -- ComfyUI creates subdirectories as root. */
   writable: boolean;
@@ -876,8 +880,17 @@ const fsQuery = (root: string, path: string, name?: string) =>
 
 export const fetchFsRoots = () => get<{ roots: FsRoot[] }>('/fs/roots');
 
-export const fetchFsListing = (root: string, path: string, hidden = false) =>
-  get<FsListing>(`/fs?${fsQuery(root, path)}&hidden=${hidden}`);
+/**
+ * One directory.
+ *
+ * `query` filters on the server rather than here, which matters exactly when
+ * the directory is big enough for the listing to be truncated: a name that
+ * sorts at position 19000 of 20000 is still findable, and filtering what
+ * arrived would only ever search the first three thousand.
+ */
+export const fetchFsListing = (root: string, path: string, hidden = false, query = '') =>
+  get<FsListing>(
+    `/fs?${fsQuery(root, path)}&hidden=${hidden}&query=${encodeURIComponent(query)}`);
 
 /** Recursive size of one directory, asked for one at a time. The listing used
  *  to answer this for every subdirectory at once, which over a home directory
