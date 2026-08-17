@@ -7,6 +7,7 @@ import {
 import { Link, useLocation } from 'react-router-dom';
 import type { GpuSample, ModelInfo } from '../api';
 import { LINE, MONO } from '../theme';
+import { deviceTag } from '../hardware';
 
 const { Sider } = Layout;
 const { Text } = Typography;
@@ -70,14 +71,6 @@ function Meter({ label, value, percent, warn }: {
 export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) {
   const location = useLocation();
   const loaded = models.filter((m) => m.running);
-  // Against each card's own declared cap, summed. A fixed 250 W per card was
-  // close enough while there was one Arc; beside a 170 W 3060 it reads the
-  // machine as idler than it is. 250 remains the fallback for a card whose
-  // driver declares no limit -- the bar is a sense of proportion, not a
-  // calibrated instrument.
-  const totalPower = gpus.reduce((sum, g) => sum + (g.power_w ?? 0), 0);
-  const totalCap = gpus.reduce((sum, g) => sum + (g.power_cap_w ?? 250), 0);
-  const powerPercent = (totalPower / Math.max(1, totalCap)) * 100;
   const busy = gpus.some((g) => g.busy);
 
   return (
@@ -165,26 +158,37 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
         <div style={{
           padding: '12px 16px 2px', borderTop: `1px solid ${LINE.faint}`, flexShrink: 0,
         }}>
-          {/* One bar per card: this strip answers "is anything full?", and a
-              combined bar cannot say which card it means. */}
+          {/*
+            One bar per card, and only memory.
+
+            This strip answers one question -- is anything full -- and that is a
+            memory question. It carried a power bar too, summed across every
+            card, which was the least informative form of a figure that did not
+            belong here anyway: a card sitting at its cap is working normally,
+            not filling up, and 200W against a 400W total could be one card at
+            full tilt or two at half. Whether anything is busy is already
+            answered by the dot at the top of this panel, and the exact wattage
+            by the dashboard and its chart.
+
+            Memory earns its place because it is the one that decides something:
+            whether the next model fits, and whether ComfyUI is still holding
+            the card.
+          */}
           {gpus.map((g) => {
             const pc = g.memory_total_mib
               ? ((g.memory_used_mib ?? 0) / g.memory_total_mib) * 100 : 0;
             return (
               <Meter
                 key={g.index}
-                label={gpus.length > 1 ? `VRAM ${g.index}` : 'VRAM'}
+                // Named the way every other surface names a card, rather than
+                // by a bare index that says nothing about which vendor it is.
+                label={gpus.length > 1 ? `VRAM ${deviceTag(g.vendor, g.index)}` : 'VRAM'}
                 value={`${((g.memory_used_mib ?? 0) / 1024).toFixed(1)}G`}
                 percent={pc}
                 warn={pc > 92}
               />
             );
           })}
-          <Meter
-            label="POWER"
-            value={`${totalPower.toFixed(0)}W`}
-            percent={powerPercent}
-          />
           <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
             {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
           </Text>
