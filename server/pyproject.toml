@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.28.1",
     "httpx-sse>=0.4.3",
     "huggingface-hub>=1.27.0",
+    "pillow>=11.0",
     "ruamel-yaml>=0.19.1",
     "uvicorn[standard]>=0.52.1",
 ]

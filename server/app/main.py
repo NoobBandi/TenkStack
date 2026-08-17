@@ -950,6 +950,32 @@ async def file_raw(
     )
 
 
+@app.get("/api/fs/thumb")
+async def file_thumbnail(
+    root: str, name: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    """A 320 px WebP of an image, made once and cached.
+
+    Its own route rather than a flag on /raw because the failure modes differ:
+    an unreadable image is not a missing file, and answering 415 lets the grid
+    fall back to an icon instead of drawing a broken picture.
+    """
+    if not files.can_thumbnail(name):
+        raise HTTPException(status_code=415, detail="這個格式沒有縮圖")
+    with _file_errors():
+        try:
+            cached = await asyncio.to_thread(files.thumbnail, root, path, name)
+        except files.BadPath:
+            raise
+        except Exception as exc:  # Pillow raises its own hierarchy for these.
+            raise HTTPException(status_code=415, detail=f"讀不出圖片：{exc}") from exc
+    return FileResponse(
+        cached, media_type="image/webp",
+        headers={**RAW_HEADERS, "cache-control": "private, max-age=86400"},
+    )
+
+
 @app.post("/api/fs/folder")
 async def file_mkdir(
     root: str, name: str, path: str = "",

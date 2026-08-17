@@ -830,6 +830,10 @@ export interface FsEntry {
   /** `other` is a device, socket or broken symlink. Listed rather than hidden,
    *  so the view agrees with `ls`, but nothing will open it. */
   kind: 'dir' | 'file' | 'other';
+  /** What the preview panel should draw, decided by the server so that one
+   *  list of extensions governs both this and which files get a thumbnail.
+   *  Null means there is nothing to show. */
+  media: 'image' | 'video' | 'audio' | 'text' | 'model' | null;
   /** Null for a directory. Its size on disk is its own inode, which is never
    *  what anybody means; the real number is a separate request. */
   size: number | null;
@@ -894,6 +898,16 @@ export const fetchFsPeek = (root: string, path: string, name: string) =>
  */
 export const fsRawUrl = (root: string, path: string, name: string, download = false) =>
   `${BASE}/fs/raw?${fsQuery(root, path, name)}&download=${download}`;
+
+/**
+ * URL for a 320 px WebP of an image, made once on the server and cached.
+ *
+ * A grid of ComfyUI's outputs is forty 1 MB PNGs; the thumbnails are 3-4 KB
+ * each. Over the LAN that is a nicety, over Tailscale it is the difference
+ * between a gallery and a progress bar.
+ */
+export const fsThumbUrl = (root: string, path: string, name: string) =>
+  `${BASE}/fs/thumb?${fsQuery(root, path, name)}`;
 
 export const createFsFolder = (root: string, path: string, name: string) =>
   send<{ ok: boolean }>(`/fs/folder?${fsQuery(root, path, name)}`, 'POST');

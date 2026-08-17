@@ -4,14 +4,16 @@ import {
   Popconfirm, Progress, Segmented, Space, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
-  DeleteOutlined, DownOutlined, FolderAddOutlined, FolderOutlined,
-  PlusOutlined, QuestionOutlined, StopOutlined, UploadOutlined,
+  AppstoreOutlined, DeleteOutlined, DownloadOutlined, DownOutlined,
+  FileOutlined, FolderAddOutlined, FolderOutlined, PlusOutlined,
+  QuestionOutlined, StopOutlined, UnorderedListOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import {
   createFsFolder, deleteFsEntry, fetchFsListing, fetchFsRoots, fetchFsSize,
-  uploadFsFile,
+  fsRawUrl, fsThumbUrl, uploadFsFile,
   type FsEntry, type FsRoot,
 } from '../api';
+import FilePreview from '../components/FilePreview';
 import { MONO } from '../theme';
 
 const { Text } = Typography;
@@ -59,6 +61,23 @@ interface Transfer {
 /** A directory's recursive size, once somebody has asked for it. */
 type Measured = { files: number; bytes: number } | 'working';
 
+/**
+ * Whether the grid is worth offering here.
+ *
+ * A grid of filenames is a worse list, so it only earns its place where there
+ * are pictures. Two of them is enough to mean "this is an output folder" and
+ * few enough that one stray screenshot in a directory of scripts does not
+ * change the view on somebody.
+ */
+function looksVisual(entries: FsEntry[]): boolean {
+  let seen = 0;
+  for (const entry of entries) {
+    if (entry.media === 'image' || entry.media === 'video') seen += 1;
+    if (seen >= 2) return true;
+  }
+  return false;
+}
+
 export default function Files() {
   const { message } = AntApp.useApp();
   const [roots, setRoots] = useState<FsRoot[]>([]);
@@ -71,6 +90,10 @@ export default function Files() {
   const [loading, setLoading] = useState(false);
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [view, setView] = useState<'list' | 'grid'>('list');
+  // An index into `entries` rather than the entry itself, so the arrows inside
+  // the panel can walk the directory without the page handing it a new object.
+  const [previewing, setPreviewing] = useState<number | null>(null);
   // Keyed by the full location so that navigating away and back does not throw
   // away a measurement that cost a walk of the tree.
   const [sizes, setSizes] = useState<Record<string, Measured>>({});
@@ -102,7 +125,25 @@ export default function Files() {
   useEffect(() => {
     fetchFsRoots().then((d) => setRoots(d.roots)).catch(() => undefined);
   }, []);
-  useEffect(() => { void load(root, path, hidden); }, [root, path, hidden, load]);
+  useEffect(() => {
+    // The open panel is holding an index into a listing that is about to be
+    // replaced. Closing it is the only honest option.
+    setPreviewing(null);
+    void load(root, path, hidden);
+  }, [root, path, hidden, load]);
+
+  // Offered where there are pictures, but never taken away once chosen: a
+  // deliberate switch to the grid should survive stepping into a subfolder.
+  const visual = looksVisual(entries);
+  const gridding = view === 'grid' && visual;
+
+  const open = (entry: FsEntry) => {
+    if (entry.kind === 'dir') {
+      setPath(path ? `${path}/${entry.name}` : entry.name);
+      return;
+    }
+    if (entry.kind === 'file') setPreviewing(entries.indexOf(entry));
+  };
 
   const measure = async (name: string) => {
     const key = at(name);
@@ -261,6 +302,17 @@ export default function Files() {
                 新建 <DownOutlined style={{ fontSize: 9 }} />
               </Button>
             </Dropdown>
+            {visual && (
+              <Segmented
+                size="small"
+                value={view}
+                onChange={(v) => setView(v as 'list' | 'grid')}
+                options={[
+                  { value: 'list', icon: <UnorderedListOutlined /> },
+                  { value: 'grid', icon: <AppstoreOutlined /> },
+                ]}
+              />
+            )}
             <Button size="small" onClick={() => void load(root, path, hidden)}>重新整理</Button>
           </Space>
         }
@@ -307,6 +359,9 @@ export default function Files() {
             </div>
           ))}
 
+          {gridding ? (
+            <Grid entries={entries} root={root} path={path} onOpen={open} />
+          ) : (
           <Table<FsEntry>
             size="small"
             loading={loading}
@@ -332,19 +387,22 @@ export default function Files() {
                       : row.kind === 'other'
                         ? <QuestionOutlined style={{ fontSize: 11, opacity: 0.35 }} />
                         : <span style={{ display: 'inline-block', width: 11 }} />}
-                    {row.kind === 'dir' ? (
-                      <a
-                        style={{ fontSize: 12, fontFamily: MONO }}
-                        onClick={() => setPath(path ? `${path}/${row.name}` : row.name)}
-                      >
-                        {row.name}
-                      </a>
-                    ) : (
+                    {row.kind === 'other' ? (
                       <Text
-                        style={{ fontSize: 12, fontFamily: MONO, opacity: row.hidden ? 0.55 : 1 }}
+                        style={{ fontSize: 12, fontFamily: MONO, opacity: 0.55 }}
                       >
                         {row.name}
                       </Text>
+                    ) : (
+                      <a
+                        style={{
+                          fontSize: 12, fontFamily: MONO,
+                          opacity: row.hidden ? 0.6 : 1,
+                        }}
+                        onClick={() => open(row)}
+                      >
+                        {row.name}
+                      </a>
                     )}
                     {row.partial && <Tag color="gold" style={{ fontSize: 10 }}>未完成</Tag>}
                     {row.kind === 'other' && (
@@ -404,24 +462,49 @@ export default function Files() {
               },
               {
                 title: '',
-                width: 44,
+                width: 78,
                 align: 'right',
                 render: (_, row) => (
-                  <Popconfirm
-                    title={`刪除 ${row.name}？`}
-                    description={row.kind === 'dir' ? '資料夾必須是空的' : undefined}
-                    okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
-                    onConfirm={() => void onDelete(row)}
-                  >
-                    <Button size="small" type="text" danger icon={<DeleteOutlined />}
-                            disabled={!writable} />
-                  </Popconfirm>
+                  <Space size={0}>
+                    {row.kind === 'file' && !row.partial && (
+                      <Tooltip title="下載">
+                        {/* An anchor rather than a fetch: the browser's own
+                            download manager handles a 20 GB file, and nothing
+                            has to hold it in memory to offer it. */}
+                        <Button
+                          size="small" type="text" icon={<DownloadOutlined />}
+                          href={fsRawUrl(root, path, row.name, true)}
+                        />
+                      </Tooltip>
+                    )}
+                    <Popconfirm
+                      title={`刪除 ${row.name}？`}
+                      description={row.kind === 'dir' ? '資料夾必須是空的' : undefined}
+                      okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
+                      onConfirm={() => void onDelete(row)}
+                    >
+                      <Button size="small" type="text" danger icon={<DeleteOutlined />}
+                              disabled={!writable} />
+                    </Popconfirm>
+                  </Space>
                 ),
               },
             ]}
           />
+          )}
         </div>
       </Card>
+
+      {previewing !== null && (
+        <FilePreview
+          root={root}
+          path={path}
+          entries={entries}
+          index={previewing}
+          onIndex={setPreviewing}
+          onClose={() => setPreviewing(null)}
+        />
+      )}
 
       <Modal
         open={newFolder !== null}
@@ -443,5 +526,78 @@ export default function Files() {
         </Text>
       </Modal>
     </Space>
+  );
+}
+
+/**
+ * The same listing as pictures.
+ *
+ * Auto-fill rather than a fixed column count: this panel is the width of the
+ * window minus a sidebar that collapses, and a grid that reflows is the whole
+ * reason to use one.
+ */
+function Grid({ entries, root, path, onOpen }: {
+  entries: FsEntry[];
+  root: string;
+  path: string;
+  onOpen: (entry: FsEntry) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))',
+        gap: 12,
+        maxHeight: 520,
+        overflowY: 'auto',
+      }}
+    >
+      {entries.map((entry) => (
+        <div
+          key={`${entry.kind}:${entry.name}`}
+          onClick={() => onOpen(entry)}
+          style={{
+            cursor: entry.kind === 'other' ? 'default' : 'pointer',
+            border: '1px solid rgba(255,255,255,0.08)',
+            borderRadius: 6,
+            overflow: 'hidden',
+            background: 'rgba(255,255,255,0.02)',
+          }}
+        >
+          <div
+            style={{
+              height: 116, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', background: 'rgba(0,0,0,0.25)',
+            }}
+          >
+            {entry.media === 'image' && !entry.partial ? (
+              // Lazy so that a folder of four hundred renders costs four
+              // hundred requests only if somebody scrolls that far.
+              <img
+                src={fsThumbUrl(root, path, entry.name)}
+                alt={entry.name}
+                loading="lazy"
+                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+              />
+            ) : entry.kind === 'dir' ? (
+              <FolderOutlined style={{ fontSize: 30, opacity: 0.3 }} />
+            ) : (
+              <FileOutlined style={{ fontSize: 26, opacity: 0.25 }} />
+            )}
+          </div>
+          <div style={{ padding: '6px 8px' }}>
+            <Text
+              ellipsis={{ tooltip: entry.name }}
+              style={{ fontSize: 11, fontFamily: MONO, display: 'block' }}
+            >
+              {entry.name}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 10, fontFamily: MONO }}>
+              {entry.kind === 'dir' ? '資料夾' : bytes(entry.size ?? 0)}
+            </Text>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }

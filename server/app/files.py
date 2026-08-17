@@ -69,6 +69,7 @@ import re
 import shutil
 import struct
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import AsyncIterator, Iterator
 
@@ -392,9 +393,14 @@ def listing(root_key: str, path: str = "", hidden: bool = False) -> dict:
                 kind = "other"
 
             partial = kind == "file" and name.endswith(PART_SUFFIX)
+            shown = name[: -len(PART_SUFFIX)] if partial else name
             entries.append({
-                "name": name[: -len(PART_SUFFIX)] if partial else name,
+                "name": shown,
                 "kind": kind,
+                # Classified here rather than in the browser so that one list of
+                # extensions decides both what gets a thumbnail and what the
+                # preview panel draws. Two copies would drift.
+                "media": None if kind != "file" else media_kind(shown),
                 # A directory's size on disk is its own inode, which is never
                 # what anybody means by it. Sent as null so the column stays
                 # empty until somebody asks for the real number.
@@ -812,6 +818,90 @@ def peek(root_key: str, path: str, name: str) -> dict:
         }
 
     return {"kind": "binary", "size": size}
+
+
+# --------------------------------------------------------------------------
+# Thumbnails
+# --------------------------------------------------------------------------
+
+# Extensions worth trying. Pillow decides for itself what it can open, so this
+# only exists to avoid handing it a 20 GB safetensors to find out.
+IMAGE_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif",
+}
+VIDEO_SUFFIXES = {".mp4", ".webm", ".mkv", ".mov", ".m4v", ".avi"}
+AUDIO_SUFFIXES = {".mp3", ".wav", ".flac", ".ogg", ".opus", ".m4a", ".aac"}
+
+THUMB_SIZE = 320
+THUMB_DIR = paths.STATE_DIR / "thumbs"
+
+
+def can_thumbnail(name: str) -> bool:
+    return Path(name).suffix.lower() in IMAGE_SUFFIXES
+
+
+def media_kind(name: str) -> str | None:
+    """What the preview panel should draw for this name, or None for nothing.
+
+    Extension rather than content, because the answer decides what element to
+    render and being wrong costs a broken `<video>` rather than a security
+    problem -- and because reading the first bytes of every file in a directory
+    to find out would put an open() in the listing loop.
+    """
+    suffix = Path(name).suffix.lower()
+    if suffix in IMAGE_SUFFIXES or suffix == ".svg":
+        return "image"
+    if suffix in VIDEO_SUFFIXES:
+        return "video"
+    if suffix in AUDIO_SUFFIXES:
+        return "audio"
+    # Only the two formats peek() can actually read a header from. A `.ckpt` is
+    # a pickle and a `.bin` is anything at all; claiming them here would promise
+    # a panel that then has nothing to put in it.
+    if suffix in (".safetensors", ".gguf"):
+        return "model"
+    if suffix in TEXT_SUFFIXES:
+        return "text"
+    return None
+
+
+def thumbnail(root_key: str, path: str, name: str) -> Path:
+    """A small WebP of an image, made once and kept.
+
+    A grid of ComfyUI's outputs is forty 1 MB PNGs. Sending them whole so the
+    browser can draw them at 160 px is 40 MB for 300 KB of visible pixels --
+    tolerable over the LAN and not at all tolerable over Tailscale, which is
+    where this console is actually used from.
+
+    The cache key includes size and mtime, so a file replaced under the same
+    name produces a different key rather than a stale picture. Nothing evicts:
+    these are a few kilobytes each, and a thumbnail directory that grows to a
+    megabyte over a year is not a problem worth code.
+    """
+    from PIL import Image, ImageOps
+
+    target, size = open_file(root_key, path, name)
+    stat = target.stat()
+    key = f"{target}:{size}:{stat.st_mtime_ns}:{THUMB_SIZE}"
+    cached = THUMB_DIR / (sha256(key.encode()).hexdigest()[:32] + ".webp")
+    if cached.exists():
+        return cached
+
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    with Image.open(target) as image:
+        # EXIF orientation is why phone photos arrive sideways; Pillow does not
+        # apply it unless asked.
+        image = ImageOps.exif_transpose(image)
+        image.thumbnail((THUMB_SIZE, THUMB_SIZE))
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+        # Written beside and renamed: two browsers opening the same folder race
+        # here, and a half-written WebP served to one of them is a broken image
+        # that survives in the cache.
+        staging = cached.with_suffix(f".{os.getpid()}.tmp")
+        image.save(staging, "WEBP", quality=80, method=4)
+        staging.replace(cached)
+    return cached
 
 
 def free_bytes(path: Path) -> int:
