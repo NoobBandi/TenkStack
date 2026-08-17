@@ -121,6 +121,10 @@
   display: block;
   width: 100%;
   height: 100%;
+  /* Fills the stack when it is inside one, where a percentage would depend on
+     the parent having resolved its own height first. */
+  flex: 1;
+  min-height: 0;
   border: 0;
   /* White, because that is what a page with no background of its own assumes.
      Inheriting the console's near-black would make ordinary black-on-transparent
@@ -144,9 +148,22 @@
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
 
-/* The frame and whatever is waiting over it share one box. */
+/* The frame and whatever is waiting over it share one box.
+ *
+ * A flex column rather than a percentage height. This div was inserted between
+ * the panel and the frame, and a percentage resolves against whatever the
+ * parent's height turns out to be -- which for a flex item is decided during
+ * layout and is exactly the kind of chain that ends in a zero. The frame grows
+ * to fill instead, which needs nothing resolved.
+ *
+ * It matters more here than it looks: a page inside sizes its canvas from the
+ * viewport it is given, and a frame of no height gives it a canvas of no
+ * height, which fails at the first drawImage rather than merely looking wrong.
+ */
 .md-preview-stack {
   position: relative;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
 }

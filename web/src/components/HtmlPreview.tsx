@@ -119,8 +119,17 @@ const STORAGE_SHIM = `<script>(function(){
 
 /** A light ground, so a preview that sets no background is not a dark void. */
 const BASE = `<style>
-  html, body { margin: 0; padding: 0; }
-  body { background: #ffffff; color: #111; font: 14px/1.5 system-ui, sans-serif; padding: 12px; }
+  /* Height as well as margin. A fragment that draws into a canvas sized from
+     its container gets zero without it -- the container being body, and body
+     having no height of its own unless html has one. That failure is not a
+     layout that looks wrong but a drawImage that throws on a 0-by-0 canvas.
+     Only fragments get this; a whole document the model wrote owns its own
+     styles and is not overridden. */
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #ffffff; color: #111; font: 14px/1.5 system-ui, sans-serif;
+    padding: 12px; box-sizing: border-box;
+  }
 </style>`;
 
 /**
@@ -132,7 +141,64 @@ const BASE = `<style>
  * Chinese text is the difference between a preview and a screen of mojibake.
  * A second charset later in the document is harmless; the first one wins.
  */
-const PREAMBLE = `<meta charset="utf-8">${META}${STORAGE_SHIM}`;
+/**
+ * Runtime errors, on every preview rather than only on React's.
+ *
+ * A page that throws used to be a blank white rectangle, with the reason in a
+ * console nobody opens -- and blank is also what a page looks like when it
+ * worked and drew nothing, so the two were indistinguishable from outside.
+ *
+ * A bar over the page, not in place of it. The React builder replaces the body
+ * because a component that failed to mount rendered nothing worth keeping;
+ * here the opposite is usual. A simulation draws for a while and then throws
+ * inside its animation loop, and what it managed to draw before it stopped is
+ * the most useful thing on the screen.
+ *
+ * The first error is the one that gets read. A loop that throws once throws
+ * sixty times a second, so the rest are counted rather than printed.
+ */
+const ERROR_REPORTER = `<script>
+  (function () {
+    var bar = null, count = 0;
+    function report(kind, detail) {
+      count += 1;
+      if (bar) {
+        bar.querySelector('[data-more]').textContent =
+          count > 1 ? '（另有 ' + (count - 1) + ' 次，已略過）' : '';
+        return;
+      }
+      bar = document.createElement('div');
+      bar.style.cssText =
+        'position:fixed;left:0;right:0;bottom:0;z-index:2147483647;max-height:45%;' +
+        'overflow:auto;padding:10px 12px;background:#fff5f5;color:#b23;' +
+        'border-top:3px solid #e05c5c;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;' +
+        'white-space:pre-wrap;word-break:break-word;box-shadow:0 -4px 16px rgba(0,0,0,0.12)';
+      var close = document.createElement('button');
+      close.textContent = '×';
+      close.style.cssText =
+        'position:absolute;top:4px;right:8px;border:0;background:none;color:#b23;' +
+        'font-size:18px;line-height:1;cursor:pointer';
+      close.onclick = function () { bar.remove(); bar = null; };
+      var text = document.createElement('div');
+      text.textContent = kind + '\\n' + detail;
+      var more = document.createElement('div');
+      more.setAttribute('data-more', '');
+      more.style.cssText = 'margin-top:4px;opacity:0.6';
+      bar.appendChild(close); bar.appendChild(text); bar.appendChild(more);
+      (document.body || document.documentElement).appendChild(bar);
+    }
+    // Doubled: this whole block is a template literal, so a single escape here
+    // becomes a real newline and leaves an unterminated string in the frame.
+    addEventListener('error', function (e) {
+      report('執行時錯誤', (e.message || '') + (e.filename ? '\\n' + e.filename + ':' + e.lineno : ''));
+    });
+    addEventListener('unhandledrejection', function (e) {
+      report('未處理的 Promise', String((e.reason && e.reason.stack) || e.reason));
+    });
+  })();
+<\/script>`;
+
+const PREAMBLE = `<meta charset="utf-8">${META}${STORAGE_SHIM}${ERROR_REPORTER}`;
 
 /**
  * Everything a React block needs to become a page, injected around it.
@@ -186,8 +252,8 @@ const REACT_BOOTSTRAP = `<script type="module">
     box.textContent = kind + '\\n\\n' + detail;
     document.body.appendChild(box);
   };
-  window.addEventListener('error', (e) => show('執行時錯誤', e.message));
-  window.addEventListener('unhandledrejection', (e) => show('未處理的 Promise', String(e.reason)));
+  // Runtime errors are reported by the preamble's bar, which every preview
+  // gets. What stays here is the cases only this builder can name.
 
   try {
     const source = document.getElementById('__source').textContent;
