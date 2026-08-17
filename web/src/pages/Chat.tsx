@@ -394,6 +394,15 @@ function ChatInner() {
                         padding: exchange.user ? '0 0 18px' : '18px 0',
                         borderTop: exchange.user || index === 0
                           ? 'none' : `1px solid ${LINE.faint}`,
+                        // Measured, not full width. This ran to whatever the
+                        // window gave it on the reasoning that code and tables
+                        // need the room; on a wide screen that put prose on
+                        // 160-character lines, which is roughly twice what is
+                        // comfortable to read. 820px is about 90 characters at
+                        // this size. Code and tables keep their own horizontal
+                        // scroll inside it rather than setting the width of
+                        // everything around them.
+                        maxWidth: 820,
                       }}>
                         <Text style={{
                           fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,

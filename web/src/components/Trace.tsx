@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Image, Segmented, Typography } from 'antd';
-import { RightOutlined } from '@ant-design/icons';
+import { Image, Typography } from 'antd';
 import type { Turn } from '../chat';
 import { ACCENT, LINE, MONO } from '../theme';
 import './thinking.css';
@@ -12,30 +11,73 @@ const { Text } = Typography;
  *
  * A turn that used the sandbox used to render as a chain of separate
  * disclosures down the thread -- a thinking block, a code block, another
- * thinking block, another code block -- each with its own chevron and its own
- * open state. Four widgets for one answer, and no way to see the shape of what
+ * thinking block, another code block. Four widgets for one answer, each with
+ * its own chevron and its own open state, and no way to see the shape of what
  * had happened without opening all of them.
  *
- * So one container, with the steps inside it. Collapsed it is a single line
- * saying what it did and what it cost; expanded it separates the two kinds of
- * thing it did, because they are read for different reasons. Reasoning is read
- * to follow the argument; code is read to check the work.
+ * One container now, and one list inside it. An earlier attempt put tabs across
+ * the top -- Steps, Reasoning, Coding -- which came from misreading the
+ * reference: those are the names of four *variants* of its component, switched
+ * by the page demonstrating them, not tabs within one. The component itself is
+ * a single list of rows, which is also the better design: a run alternates
+ * between thinking and doing, and splitting them into separate views destroys
+ * the one thing the order was carrying.
  *
- * Open while it runs and collapsible after. Showing the tool and its result at
- * the moment of the decision, rather than filing them in a log to be opened
- * later, is the difference between an auditable answer and one taken on faith.
+ * Structure and motion follow beautifului.dev's Thinking primitive. The colours
+ * do not -- see thinking.css.
+ *
+ * Open while it runs, and closed once it settles, unless the reader said
+ * otherwise. Showing the tool and its result at the moment of the decision
+ * rather than filing them in a log is the difference between an auditable
+ * answer and one taken on faith; keeping them open afterwards would bury the
+ * answer under the working.
  */
 
 export interface Step {
   kind: 'reasoning' | 'code';
   /** The thinking text, or the Python source. */
   text: string;
-  /** Present on a code step once it has run. */
+  /** Present on a code step; carries the result once it has run. */
   turn?: Turn;
   ms?: number;
 }
 
-type View = 'steps' | 'reasoning' | 'code';
+/** The four-point star the reference uses. Not a lightbulb or a brain: this
+ *  marks a machine's working, and the metaphors for human thought overclaim. */
+function Sparkle({ lit }: { lit: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden
+         fill={lit ? 'rgba(242,242,242,0.7)' : 'rgba(242,242,242,0.32)'}
+         style={{ flexShrink: 0, transition: 'fill 300ms' }}>
+      <path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" />
+    </svg>
+  );
+}
+
+function Chevron({ open }: { open: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden
+         stroke="currentColor" strokeWidth="2.2"
+         strokeLinecap="round" strokeLinejoin="round"
+         style={{
+           flexShrink: 0, opacity: 0.3,
+           transform: open ? 'rotate(180deg)' : 'none',
+           transition: 'transform 300ms cubic-bezier(0.23, 1, 0.32, 1)',
+         }}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+function Check() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden
+         className="tt-icon" stroke="currentColor" strokeWidth="2.5"
+         strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  );
+}
 
 function Block({ label, value, tone }: { label?: string; value: string; tone?: string }) {
   return (
@@ -55,21 +97,25 @@ function Block({ label, value, tone }: { label?: string; value: string; tone?: s
   );
 }
 
-/** One code step, whole: what was asked for and everything that came back. */
-function CodeStep({ step }: { step: Step }) {
+/** Everything a code step produced, shown when its row is opened. */
+function Detail({ step }: { step: Step }) {
   const result = step.turn?.run?.result;
   return (
-    <div style={{ marginBottom: 12 }}>
-      <Block label="PYTHON" value={step.text} />
+    <div style={{ padding: '2px 6px 10px 27px' }}>
+      <Block value={step.text} />
       {result?.error && <Block label="錯誤" value={result.error} tone={ACCENT.error} />}
       {result?.stdout.trim() && <Block label="輸出" value={result.stdout} />}
       {result?.stderr.trim() && <Block label="STDERR" value={result.stderr} tone={ACCENT.warn} />}
       {result && result.value !== null && (
         <Block label="回傳值" value={result.value} tone="#7fb8d8" />
       )}
+      {/* Capped rather than filling the measure. A matplotlib figure is 640 by
+          480 at this dpi, and stretching it past that is bigger, blurrier and
+          no more readable. Click opens it full size. */}
       {result?.images.map((src, i) => (
-        <Image key={i} src={src} width="100%"
-               style={{ marginTop: 8, borderRadius: 4, background: '#fff' }} />
+        <Image key={i} src={src}
+               style={{ marginTop: 8, borderRadius: 4, background: '#fff',
+                        maxWidth: '100%', width: 460 }} />
       ))}
       {result
         && !result.error
@@ -80,40 +126,32 @@ function CodeStep({ step }: { step: Step }) {
           沒有輸出
         </Text>
       )}
-      {!result && (
-        <Text className="tt-shimmer" style={{ fontSize: 11, opacity: 0.5, display: 'block', marginTop: 6 }}>
-          執行中…
-        </Text>
-      )}
     </div>
   );
 }
 
 export default function Trace({ steps, live }: { steps: Step[]; live: boolean }) {
-  // Open while it runs, and whatever the reader chose after that. Closing
-  // itself under someone who is reading would be worse than staying open.
   const [manual, setManual] = useState<boolean | null>(null);
-  const [view, setView] = useState<View>('steps');
+  const [openStep, setOpenStep] = useState<number | null>(null);
   const open = manual ?? live;
 
   if (!steps.length) return null;
 
-  const runs = steps.filter((s) => s.kind === 'code');
-  const failures = runs.filter((s) => s.turn?.run?.result?.error).length;
-  const total = steps.reduce((sum, s) => sum + (s.ms ?? 0), 0);
+  const runs = steps.filter((s) => s.kind === 'code').length;
+  const failures = steps.filter((s) => s.turn?.run?.result?.error).length;
+  const total = steps.reduce(
+    (sum, s) => sum + (s.turn?.run?.result?.elapsed_ms ?? s.ms ?? 0), 0,
+  );
 
-  // What it did, in one line, for the collapsed state. A count of code runs is
-  // the part that distinguishes this turn from an ordinary one.
-  const summary = live
-    ? (runs.length ? `執行中・已跑 ${runs.length} 段程式碼` : '思考中')
+  // Past tense once it has settled, the way the reference says "Thought for 4
+  // seconds" -- a label that still reads "thinking" beside a finished answer is
+  // the interface disagreeing with itself.
+  const label = live
+    ? (runs ? '執行中' : '思考中')
     : [
-        runs.length ? `${runs.length} 段程式碼` : '思考過程',
+        runs ? `執行了 ${runs} 段程式碼` : '思考完成',
         failures ? `${failures} 次失敗` : null,
       ].filter(Boolean).join('・');
-
-  // The tabs are only worth their row when there is more than one kind of
-  // thing to switch between.
-  const tabbed = runs.length > 0 && steps.some((s) => s.kind === 'reasoning');
 
   return (
     <div style={{ marginBottom: 12 }}>
@@ -123,90 +161,69 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
         aria-expanded={open}
         onClick={() => setManual(!open)}
       >
-        <RightOutlined className={`tt-chevron${open ? ' tt-chevron-open' : ''}`} />
-        <span className={live ? 'tt-label tt-shimmer' : 'tt-label'}>{summary}</span>
+        <Sparkle lit={live} />
+        <span className={live ? 'tt-label tt-shimmer' : 'tt-label'}>{label}</span>
         {!live && total > 0 && (
           <span className="tt-meta">{(total / 1000).toFixed(1)}s</span>
         )}
+        <Chevron open={open} />
       </button>
 
-      {open && (
-        <div style={{ paddingLeft: 18, paddingTop: 4 }}>
-          {tabbed && (
-            <Segmented
-              size="small"
-              value={view}
-              onChange={(v) => setView(v as View)}
-              style={{ marginBottom: 8 }}
-              options={[
-                { label: '步驟', value: 'steps' },
-                { label: '推理', value: 'reasoning' },
-                { label: '程式碼', value: 'code' },
-              ]}
-            />
-          )}
+      {/* A 0fr -> 1fr grid row animates to the content's real height, where a
+          max-height only approximates it -- and a trace can be three lines or
+          eighty. */}
+      <div className={open ? 'tt-body tt-body-open' : 'tt-body'}>
+        <div className="tt-clip">
+          <div className="tt-rail">
+            {steps.map((step, i) => {
+              const result = step.turn?.run?.result;
+              const running = step.kind === 'code' && !result;
+              // Staggered, so the rows arrive as a sequence rather than as a
+              // block appearing at once.
+              const delay = { animationDelay: `${Math.min(i, 6) * 90}ms` };
 
-          {/* Steps: the shape of what happened, one line each. Read to find
-              the step worth opening, not to read the step. */}
-          {(!tabbed || view === 'steps') && (
-            <div>
-              {steps.map((step, i) => (
-                <div key={i} style={{
-                  display: 'flex', gap: 10, alignItems: 'baseline',
-                  padding: '3px 0', borderBottom: `1px solid ${LINE.faint}`,
-                }}>
-                  <Text style={{ fontSize: 10, opacity: 0.3, fontFamily: MONO, width: 16 }}>
-                    {i + 1}
-                  </Text>
-                  <Text style={{ fontSize: 11, opacity: 0.75, flex: 1, minWidth: 0 }} ellipsis>
-                    {step.kind === 'reasoning'
-                      ? step.text.trim().split('\n')[0] || '思考'
-                      : step.text.trim().split('\n')[0]}
-                  </Text>
-                  <Text style={{
-                    fontSize: 10, fontFamily: MONO,
-                    color: step.turn?.run?.result?.error ? ACCENT.error : undefined,
-                    opacity: step.turn?.run?.result?.error ? 1 : 0.35,
-                  }}>
-                    {step.kind === 'code'
-                      ? (step.turn?.run?.result
-                          ? `${(step.turn.run.result.elapsed_ms / 1000).toFixed(2)}s`
-                          : '…')
-                      : step.ms ? `${(step.ms / 1000).toFixed(1)}s` : ''}
-                  </Text>
+              if (step.kind === 'reasoning') {
+                return (
+                  <div key={i} className="tt-row" style={delay}>
+                    <Check />
+                    <span className="tt-prose">{step.text.trim()}</span>
+                  </div>
+                );
+              }
+
+              const first = step.text.trim().split('\n')[0] || 'python';
+              const lines = step.text.trim().split('\n').length;
+              return (
+                <div key={i}>
+                  <button
+                    type="button"
+                    className="tt-row"
+                    style={delay}
+                    aria-pressed={openStep === i}
+                    onClick={() => setOpenStep(openStep === i ? null : i)}
+                  >
+                    {running ? <span className="tt-spin" /> : <Check />}
+                    <span className="tt-primary" style={{ flex: 'none' }}>Python</span>
+                    <span className="tt-primary" style={{
+                      fontFamily: MONO, fontWeight: 400, opacity: 0.5,
+                    }}>
+                      {first}
+                    </span>
+                    <span className="tt-secondary" style={{
+                      color: result?.error ? ACCENT.error : undefined,
+                    }}>
+                      {result
+                        ? `${lines} 行・${(result.elapsed_ms / 1000).toFixed(2)}s`
+                        : `${lines} 行`}
+                    </span>
+                  </button>
+                  {openStep === i && <Detail step={step} />}
                 </div>
-              ))}
-            </div>
-          )}
-
-          {tabbed && view === 'reasoning' && (
-            <div style={{ fontSize: 12, lineHeight: 1.7, opacity: 0.75, whiteSpace: 'pre-wrap' }}>
-              {steps.filter((s) => s.kind === 'reasoning').map((s) => s.text).join('\n\n')}
-            </div>
-          )}
-
-          {(tabbed ? view === 'code' : false) && (
-            <div>{runs.map((s, i) => <CodeStep key={i} step={s} />)}</div>
-          )}
-
-          {/* Untabbed and code-only: nowhere else for it to go. */}
-          {!tabbed && runs.length > 0 && (
-            <div style={{ marginTop: 8 }}>
-              {runs.map((s, i) => <CodeStep key={i} step={s} />)}
-            </div>
-          )}
-
-          {/* Untabbed and reasoning-only: the ordinary thinking block. */}
-          {!tabbed && !runs.length && (
-            <div style={{
-              fontSize: 12, lineHeight: 1.7, opacity: 0.75, whiteSpace: 'pre-wrap',
-              marginTop: 6,
-            }}>
-              {steps.map((s) => s.text).join('\n\n')}
-            </div>
-          )}
+              );
+            })}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
