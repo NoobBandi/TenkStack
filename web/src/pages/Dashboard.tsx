@@ -142,23 +142,37 @@ export default function Dashboard() {
         />
       )}
 
-      {/* The cards share a grid; the machine gets a row to itself below them.
-          One grid for all three had them competing: at two columns the system
-          block landed in the second row at half width, which squeezed three
-          dials into the space meant for one card's four readings. Two
-          containers means each is laid out against the width it actually has. */}
+      {/*
+        One grid, and the machine's own block widens to fill whatever the cards
+        leave.
+
+        The second GPU can come out of this machine at any time, and the page
+        has to read as though it was always meant for however many are in it.
+        With two cards they take a row and the system spans the one below;
+        with one, that row is half empty, so the system moves up beside it.
+        Which is what `1 / -1` says -- span every column -- applied only when
+        there is a card to sit next to.
+
+        460px is the column minimum because it is what the contents need: four
+        readings at 108px with their gaps and the card's padding come to 500,
+        three dials at 140px come to 452. Below two of those the grid drops to
+        one column and every block gets the full width, which is roomier than
+        two cramped ones -- at 340px it split at 1024px into columns too narrow
+        for either.
+      */}
       <div style={{
-        display: 'grid', gap: 16,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
+        display: 'grid', gap: 16, alignItems: 'start',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))',
       }}>
         {gpus.length === 0 ? (
           <StatTile label="GPU" value="—" footnote="偵測不到顯示卡" />
         ) : (
           gpus.map((g) => <GpuBlock key={g.index} gpu={g} showTemp={showTemp} />)
         )}
+        <div style={{ gridColumn: gpus.length > 1 ? '1 / -1' : undefined, minWidth: 0 }}>
+          <SystemStats sample={system} throughput={throughput} />
+        </div>
       </div>
-
-      <SystemStats sample={system} throughput={throughput} />
 
       {/* Rendered bare rather than in a Row: antd gives a gutter Row negative
           inline margins, which made this block sit 6px wider on each side than
