@@ -5,15 +5,17 @@ import {
 } from 'antd';
 import {
   AppstoreOutlined, DeleteOutlined, DownloadOutlined, DownOutlined,
-  FileOutlined, FolderAddOutlined, FolderOutlined, PlusOutlined,
-  QuestionOutlined, StopOutlined, UnorderedListOutlined, UploadOutlined,
+  DragOutlined, EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined,
+  MoreOutlined, PlusOutlined, QuestionOutlined, StopOutlined,
+  UnorderedListOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import {
   createFsFolder, deleteFsEntry, fetchFsListing, fetchFsRoots, fetchFsSize,
-  fsRawUrl, fsThumbUrl, uploadFsFile,
+  fsRawUrl, fsThumbUrl, moveFsEntry, renameFsEntry, uploadFsFile,
   type FsEntry, type FsRoot,
 } from '../api';
 import FilePreview from '../components/FilePreview';
+import FolderPicker from '../components/FolderPicker';
 import { MONO } from '../theme';
 
 const { Text } = Typography;
@@ -79,7 +81,7 @@ function looksVisual(entries: FsEntry[]): boolean {
 }
 
 export default function Files() {
-  const { message } = AntApp.useApp();
+  const { message, modal } = AntApp.useApp();
   const [roots, setRoots] = useState<FsRoot[]>([]);
   const [root, setRoot] = useState('models');
   const [path, setPath] = useState('');
@@ -91,6 +93,12 @@ export default function Files() {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [view, setView] = useState<'list' | 'grid'>('list');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
+  // The names a move applies to. One entry from a row menu, several from the
+  // selection -- the dialog and the loop do not need to know which.
+  const [moving, setMoving] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
   // An index into `entries` rather than the entry itself, so the arrows inside
   // the panel can walk the directory without the page handing it a new object.
   const [previewing, setPreviewing] = useState<number | null>(null);
@@ -127,8 +135,10 @@ export default function Files() {
   }, []);
   useEffect(() => {
     // The open panel is holding an index into a listing that is about to be
-    // replaced. Closing it is the only honest option.
+    // replaced, and the selection names entries that are about to be gone.
+    // Clearing both is the only honest option.
     setPreviewing(null);
+    setSelected([]);
     void load(root, path, hidden);
   }, [root, path, hidden, load]);
 
@@ -218,6 +228,65 @@ export default function Files() {
     } catch (error) {
       message.error((error as Error).message);
     }
+  };
+
+  const chosen = entries.filter((e) => selected.includes(`${e.kind}:${e.name}`));
+
+  /**
+   * Apply something to several entries, one request each.
+   *
+   * Sequential rather than concurrent, and it does not stop at the first
+   * failure. Half a move that reports "failed" while having moved nine of ten
+   * files is worse than one that says which one did not go: the directory is
+   * in a state either way, and only the itemised answer describes it.
+   */
+  const each = async (
+    items: FsEntry[],
+    verb: string,
+    run: (entry: FsEntry) => Promise<unknown>,
+  ) => {
+    setBusy(true);
+    const failed: string[] = [];
+    for (const entry of items) {
+      try {
+        await run(entry);
+      } catch (error) {
+        failed.push(`${entry.name}：${(error as Error).message}`);
+      }
+    }
+    setBusy(false);
+    setSelected([]);
+    const done = items.length - failed.length;
+    if (done) message.success(`${done} 項已${verb}`);
+    if (failed.length) {
+      message.error(
+        { content: `${failed.length} 項失敗 — ${failed[0]}`, duration: 6 },
+      );
+    }
+    void load(root, path, hidden);
+  };
+
+  const onRename = async () => {
+    if (!renaming) return;
+    const to = renaming.to.trim();
+    if (!to || to === renaming.entry.name) { setRenaming(null); return; }
+    try {
+      await renameFsEntry(root, path, renaming.entry.name, to);
+      setRenaming(null);
+      void load(root, path, hidden);
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const onMove = async (toRoot: string, toPath: string) => {
+    const names = moving ?? [];
+    setMoving(null);
+    await each(
+      entries.filter((e) => names.includes(e.name)),
+      '移動',
+      (entry) => moveFsEntry(root, path, entry.name, toRoot, toPath),
+    );
   };
 
   return (
@@ -359,6 +428,38 @@ export default function Files() {
             </div>
           ))}
 
+          {chosen.length > 0 && (
+            <Space
+              size={8}
+              style={{
+                width: '100%', marginBottom: 10, padding: '6px 10px',
+                background: 'rgba(255,255,255,0.04)', borderRadius: 4,
+              }}
+            >
+              <Text style={{ fontSize: 12 }}>已選 {chosen.length} 項</Text>
+              <Button
+                size="small" icon={<DragOutlined />} disabled={!writable || busy}
+                onClick={() => setMoving(chosen.map((e) => e.name))}
+              >
+                移動
+              </Button>
+              <Popconfirm
+                title={`刪除這 ${chosen.length} 項？`}
+                description="資料夾必須是空的"
+                okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
+                onConfirm={() => void each(
+                  chosen, '刪除',
+                  (entry) => deleteFsEntry(root, path, entry.name, entry.partial),
+                )}
+              >
+                <Button size="small" danger icon={<DeleteOutlined />} disabled={!writable || busy}>
+                  刪除
+                </Button>
+              </Popconfirm>
+              <Button size="small" type="text" onClick={() => setSelected([])}>取消選取</Button>
+            </Space>
+          )}
+
           {gridding ? (
             <Grid entries={entries} root={root} path={path} onOpen={open} />
           ) : (
@@ -367,6 +468,13 @@ export default function Files() {
             loading={loading}
             dataSource={entries}
             rowKey={(row) => `${row.kind}:${row.name}`}
+            rowSelection={{
+              selectedRowKeys: selected,
+              onChange: (keys) => setSelected(keys as string[]),
+              // Devices and sockets have no operation that would apply to them.
+              getCheckboxProps: (row) => ({ disabled: row.kind === 'other' }),
+              columnWidth: 36,
+            }}
             pagination={false}
             scroll={{ y: 460 }}
             locale={{
@@ -477,15 +585,46 @@ export default function Files() {
                         />
                       </Tooltip>
                     )}
-                    <Popconfirm
-                      title={`刪除 ${row.name}？`}
-                      description={row.kind === 'dir' ? '資料夾必須是空的' : undefined}
-                      okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
-                      onConfirm={() => void onDelete(row)}
+                    <Dropdown
+                      trigger={['click']}
+                      disabled={row.kind === 'other'}
+                      menu={{
+                        items: [
+                          {
+                            key: 'rename',
+                            label: '重新命名',
+                            icon: <EditOutlined />,
+                            disabled: !writable || row.partial,
+                            onClick: () => setRenaming({ entry: row, to: row.name }),
+                          },
+                          {
+                            key: 'move',
+                            label: '移動到…',
+                            icon: <DragOutlined />,
+                            disabled: !writable || row.partial,
+                            onClick: () => setMoving([row.name]),
+                          },
+                          { type: 'divider' },
+                          {
+                            key: 'delete',
+                            label: '刪除',
+                            icon: <DeleteOutlined />,
+                            danger: true,
+                            disabled: !writable,
+                            onClick: () => modal.confirm({
+                              title: `刪除 ${row.name}？`,
+                              content: row.kind === 'dir' ? '資料夾必須是空的' : undefined,
+                              okText: '刪除',
+                              cancelText: '取消',
+                              okButtonProps: { danger: true },
+                              onOk: () => onDelete(row),
+                            }),
+                          },
+                        ],
+                      }}
                     >
-                      <Button size="small" type="text" danger icon={<DeleteOutlined />}
-                              disabled={!writable} />
-                    </Popconfirm>
+                      <Button size="small" type="text" icon={<MoreOutlined />} />
+                    </Dropdown>
                   </Space>
                 ),
               },
@@ -525,6 +664,37 @@ export default function Files() {
           建立在 {activeRoot?.label}{path ? ` / ${path}` : ''} 底下
         </Text>
       </Modal>
+
+      <Modal
+        open={renaming !== null}
+        title="重新命名"
+        okText="更名" cancelText="取消"
+        onOk={() => void onRename()}
+        onCancel={() => setRenaming(null)}
+        destroyOnHidden
+      >
+        <Input
+          autoFocus
+          value={renaming?.to ?? ''}
+          onChange={(e) => setRenaming((prev) => (prev ? { ...prev, to: e.target.value } : prev))}
+          onPressEnter={() => void onRename()}
+        />
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          只是換個名字，位置不變。同名的東西已經存在時會拒絕。
+        </Text>
+      </Modal>
+
+      {moving && (
+        <FolderPicker
+          roots={roots}
+          fromRoot={root}
+          fromPath={path}
+          moving={moving}
+          title={moving.length === 1 ? `移動 ${moving[0]}` : `移動 ${moving.length} 項`}
+          onPick={(toRoot, toPath) => void onMove(toRoot, toPath)}
+          onCancel={() => setMoving(null)}
+        />
+      )}
     </Space>
   );
 }
