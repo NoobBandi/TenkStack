@@ -115,6 +115,15 @@ export function describeResult(result: RunResult): string {
   if (result.stdout.trim()) parts.push(`stdout:\n${result.stdout}`);
   if (result.stderr.trim()) parts.push(`stderr:\n${result.stderr}`);
   if (result.value !== null) parts.push(`最後一個運算式的值: ${result.value}`);
+  if (result.images.length) {
+    // Described, not attached. A tool message carries text, so the picture goes
+    // to the screen and the model gets told it exists -- enough to talk about
+    // what it drew without pretending it can see it.
+    parts.push(
+      `已產生 ${result.images.length} 張圖表，已經顯示給使用者看了。`
+      + '不需要再存檔或重畫，直接說明圖上呈現了什麼即可。',
+    );
+  }
 
   if (!parts.length) {
     parts.push('程式碼執行完成，但沒有任何輸出。要看到結果請用 print()。');

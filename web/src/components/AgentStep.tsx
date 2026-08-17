@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { RightOutlined } from '@ant-design/icons';
-import { Typography } from 'antd';
+import { Image, Typography } from 'antd';
 import type { Turn } from '../chat';
 import { ACCENT, LINE, MONO } from '../theme';
 import './thinking.css';
@@ -83,9 +83,22 @@ export default function AgentStep({ turn, live }: { turn: Turn; live: boolean })
           {result && result.value !== null && (
             <Line label="回傳值" value={result.value} tone="#7fb8d8" />
           )}
+          {/* The figures the code drew. Shown here rather than only described,
+              because a plot is the answer to the question that asked for it --
+              the model is told one exists but cannot be handed it, so this is
+              the only place it can be seen. */}
+          {result?.images.map((src, i) => (
+            <Image
+              key={i}
+              src={src}
+              style={{ marginTop: 8, borderRadius: 4, background: '#fff' }}
+              width="100%"
+            />
+          ))}
           {result
             && !result.error
             && !result.stdout.trim()
+            && !result.images.length
             && result.value === null && (
             <Text style={{ fontSize: 11, opacity: 0.4, display: 'block', marginTop: 6 }}>
               沒有輸出

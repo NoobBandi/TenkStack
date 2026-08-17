@@ -53,6 +53,10 @@ export interface RunResult {
   value: string | null;
   /** Formatted traceback when the code raised. */
   error: string | null;
+  /** Figures the code drew, as PNG data URIs. Harvested rather than shown in
+   *  place: this frame is zero by zero and hidden, so anything matplotlib
+   *  rendered into it would be drawn where nobody is looking. */
+  images: string[];
   elapsed_ms: number;
   timed_out: boolean;
   truncated: boolean;
@@ -82,17 +86,47 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
     post({ kind: 'failed', detail: String(error?.message || error) });
   }
 
+  /**
+   * Collect whatever was drawn, as PNGs.
+   *
+   * Agg rather than the interactive canvas backend the visible preview uses:
+   * that one appends a canvas to the document, which here is a hidden frame of
+   * zero size. Agg renders to memory, which is the only place worth rendering
+   * to when the picture has to travel to somebody else's screen.
+   *
+   * Figures are closed afterwards so the next call starts empty rather than
+   * re-sending the last one.
+   */
+  const HARVEST = [
+    'import base64 as _b64, io as _io',
+    'import matplotlib.pyplot as _plt',
+    '_out = []',
+    'for _num in _plt.get_fignums():',
+    '    _buf = _io.BytesIO()',
+    "    _plt.figure(_num).savefig(_buf, format='png', dpi=110, bbox_inches='tight')",
+    '    _out.append(_b64.b64encode(_buf.getvalue()).decode())',
+    "_plt.close('all')",
+    '_out',
+  ].join('\\n');
+
   addEventListener('message', async (event) => {
     const { kind, id, code } = event.data || {};
     if (kind !== 'run' || !pyodide) return;
 
     out = []; err = [];
     const started = performance.now();
-    let value = null, failure = null;
+    let value = null, failure = null, images = [];
+    // Doubled backslashes because this whole document is a template literal:
+    // one backslash before a b is an escape for backspace, so a word-boundary
+    // regex written the ordinary way arrives here as a control character.
+    const draws = /\\bmatplotlib\\b|\\bpyplot\\b|\\bseaborn\\b/.test(code);
     try {
       // Packages come from the code's own imports, so "import numpy" works
       // without anyone having declared numpy anywhere.
       await pyodide.loadPackagesFromImports(code);
+      // Set before the code runs: pyplot fixes its backend on import, and
+      // choosing one afterwards is quietly ignored.
+      if (draws) await pyodide.runPythonAsync('import matplotlib; matplotlib.use("agg")');
       const result = await pyodide.runPythonAsync(code);
       if (result !== undefined && result !== null) value = String(result);
     } catch (error) {
@@ -100,11 +134,25 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
       // the traceback is the part a model needs to fix its own code.
       failure = String(error?.message || error);
     }
+
+    // Attempted even after a failure: code that plotted and then raised still
+    // drew something worth seeing.
+    if (draws) {
+      try {
+        const figures = await pyodide.runPythonAsync(HARVEST);
+        const list = figures?.toJs ? figures.toJs() : [];
+        images = list.map((b64) => 'data:image/png;base64,' + b64);
+        figures?.destroy?.();
+      } catch {
+        // A figure that cannot be saved is not worth failing the run over.
+      }
+    }
+
     post({
       kind: 'result', id,
       stdout: out.join('\\n'),
       stderr: err.join('\\n'),
-      value, error: failure,
+      value, error: failure, images,
       elapsed_ms: Math.round(performance.now() - started),
     });
   });
@@ -175,6 +223,7 @@ export function PythonRuntimeProvider({ children }: { children: React.ReactNode 
         stdout, stderr,
         value: data.value ?? null,
         error: data.error ?? null,
+        images: Array.isArray(data.images) ? data.images : [],
         elapsed_ms: data.elapsed_ms ?? 0,
         timed_out: false,
         truncated: cutOut || cutErr,
@@ -193,7 +242,7 @@ export function PythonRuntimeProvider({ children }: { children: React.ReactNode 
     for (const [, waiting] of pending.current) {
       window.clearTimeout(waiting.timer);
       waiting.resolve({
-        stdout: '', stderr: '', value: null,
+        stdout: '', stderr: '', value: null, images: [],
         error: '執行環境已重設', elapsed_ms: 0, timed_out: true, truncated: false,
       });
     }
@@ -226,7 +275,7 @@ export function PythonRuntimeProvider({ children }: { children: React.ReactNode 
     await boot();
     if (!frame.current?.contentWindow) {
       return {
-        stdout: '', stderr: '', value: null,
+        stdout: '', stderr: '', value: null, images: [],
         error: '執行環境無法啟動', elapsed_ms: 0, timed_out: true, truncated: false,
       };
     }
@@ -239,7 +288,7 @@ export function PythonRuntimeProvider({ children }: { children: React.ReactNode 
         // pays for a fresh boot, which is the price of an infinite loop.
         teardown();
         resolve({
-          stdout: '', stderr: '', value: null,
+          stdout: '', stderr: '', value: null, images: [],
           error: `執行超過 ${RUN_TIMEOUT_MS / 1000} 秒，已中止`,
           elapsed_ms: RUN_TIMEOUT_MS, timed_out: true, truncated: false,
         });

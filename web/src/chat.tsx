@@ -315,7 +315,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           const result: RunResult = 'error' in parsed
             // A malformed argument is the model's mistake and a fixable one, so
             // it goes back as a result rather than ending the turn.
-            ? { stdout: '', stderr: '', value: null, error: parsed.error,
+            ? { stdout: '', stderr: '', value: null, images: [],
+                error: parsed.error,
                 elapsed_ms: 0, timed_out: false, truncated: false }
             : await sandbox.run(parsed.code);
 
