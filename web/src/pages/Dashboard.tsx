@@ -143,35 +143,37 @@ export default function Dashboard() {
       )}
 
       {/*
-        One grid, and the machine's own block widens to fill whatever the cards
-        leave.
+        Two columns: the cards stacked on the left, the machine on the right.
 
-        The second GPU can come out of this machine at any time, and the page
-        has to read as though it was always meant for however many are in it.
-        With two cards they take a row and the system spans the one below;
-        with one, that row is half empty, so the system moves up beside it.
-        Which is what `1 / -1` says -- span every column -- applied only when
-        there is a card to sit next to.
+        The machine used to span a row of its own under the cards, which at
+        2560px spread three dials across 1664px with the gaps doing the
+        spreading. A column beside them uses that width for a second card
+        instead, and the dials keep a sensible size in what is left.
 
-        460px is the column minimum because it is what the contents need: four
-        readings at 108px with their gaps and the card's padding come to 500,
-        three dials at 140px come to 452. Below two of those the grid drops to
-        one column and every block gets the full width, which is roomier than
-        two cramped ones -- at 340px it split at 1024px into columns too narrow
-        for either.
+        auto-fit does the responsive part: below two columns' worth the whole
+        thing becomes one, and the stack and the machine follow each other down
+        the page. 460px is what the contents need -- four readings at 108px with
+        their gaps and padding come to 500, three dials at 140px to 452 -- so
+        the split happens exactly when both sides can use it.
+
+        The columns will not be the same height. Two cards come to about 320px
+        and the machine to about 220, so there is space under the right-hand one
+        at two cards and under the left at one. Aligned to the top, which leaves
+        that space at the bottom where it reads as margin, rather than stretched,
+        which would put it inside a card as a void.
       */}
       <div style={{
         display: 'grid', gap: 16, alignItems: 'start',
         gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))',
       }}>
-        {gpus.length === 0 ? (
-          <StatTile label="GPU" value="—" footnote="偵測不到顯示卡" />
-        ) : (
-          gpus.map((g) => <GpuBlock key={g.index} gpu={g} showTemp={showTemp} />)
-        )}
-        <div style={{ gridColumn: gpus.length > 1 ? '1 / -1' : undefined, minWidth: 0 }}>
-          <SystemStats sample={system} throughput={throughput} />
+        <div style={{ display: 'grid', gap: 16, minWidth: 0 }}>
+          {gpus.length === 0 ? (
+            <StatTile label="GPU" value="—" footnote="偵測不到顯示卡" />
+          ) : (
+            gpus.map((g) => <GpuBlock key={g.index} gpu={g} showTemp={showTemp} />)
+          )}
         </div>
+        <SystemStats sample={system} throughput={throughput} />
       </div>
 
       {/* Rendered bare rather than in a Row: antd gives a gutter Row negative

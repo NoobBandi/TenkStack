@@ -134,14 +134,15 @@ export default function SystemStats(
         )
       }
     >
-      {/* Three across, on one row. This card has the full width of the page
-          now, so 140px each is met from about 450px upward and the dials only
-          stack on a phone -- which is the one width where stacking is right.
-          They are 112px wide, so each sits centred in a column wider than
-          itself rather than being stretched. */}
+      {/* Three across, on one row, and capped. A dial is 112px wide and does
+          not grow, so past about 500px the columns only add gap between them --
+          which on a wide screen pushed the three so far apart they stopped
+          reading as one group. The cap holds them together and centres the set
+          in whatever it is given. */}
       <div style={{
         display: 'grid', gap: 16, justifyItems: 'center',
         gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+        maxWidth: 520, marginInline: 'auto',
       }}>
         <Dial
           title="CPU"
