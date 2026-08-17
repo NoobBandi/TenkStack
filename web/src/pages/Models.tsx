@@ -260,29 +260,40 @@ export default function Models() {
                 const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
                 const missing = weights.filter((w) => !w.exists);
                 return (
-                  <div style={{ minWidth: 0 }}>
-                    <Tooltip title={main.filename}>
-                      <Text style={{ fontSize: 12, fontFamily: MONO }} ellipsis>
+                  // One flex row rather than a block with things under it.
+                  // `Text` with `ellipsis` renders a span, so anything after it
+                  // sits on the same line -- previously against it, with no gap
+                  // at all.
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    {/* The size is on the tooltip rather than the row. The
+                        column is here to tell two quantisations of one model
+                        apart, and the filename does that on its own; a number
+                        beside every row is weight the row does not need, and
+                        the expanded view and the file list both carry it. */}
+                    <Tooltip title={`${main.filename}　${gib(total)}`}>
+                      <Text
+                        style={{ fontSize: 12, fontFamily: MONO, flex: 1, minWidth: 0 }}
+                        ellipsis
+                      >
                         {main.basename}
                       </Text>
                     </Tooltip>
-                    <Space size={6} style={{ marginTop: 2 }}>
-                      <Text type="secondary" style={{ fontSize: 11 }}>{gib(total)}</Text>
-                      {weights.some((w) => w.role === 'mmproj') && (
-                        <Tooltip title="含視覺投影檔，一起佔用顯存">
-                          <Tag color="purple" style={{ fontSize: 10, marginInlineEnd: 0 }}>
-                            + 視覺
-                          </Tag>
-                        </Tooltip>
-                      )}
-                      {missing.length > 0 && (
-                        <Tooltip title={missing.map((w) => w.filename).join('，')}>
-                          <Tag color="error" style={{ fontSize: 10, marginInlineEnd: 0 }}>
-                            檔案不見了
-                          </Tag>
-                        </Tooltip>
-                      )}
-                    </Space>
+                    {weights.some((w) => w.role === 'mmproj') && (
+                      <Tooltip title="含視覺投影檔，一起佔用顯存">
+                        <Tag color="purple"
+                             style={{ fontSize: 10, marginInlineEnd: 0, flex: 'none' }}>
+                          + 視覺
+                        </Tag>
+                      </Tooltip>
+                    )}
+                    {missing.length > 0 && (
+                      <Tooltip title={missing.map((w) => w.filename).join('，')}>
+                        <Tag color="error"
+                             style={{ fontSize: 10, marginInlineEnd: 0, flex: 'none' }}>
+                          檔案不見了
+                        </Tag>
+                      </Tooltip>
+                    )}
                   </div>
                 );
               },
