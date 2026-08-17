@@ -264,7 +264,7 @@ export default function Models() {
                   // `Text` with `ellipsis` renders a span, so anything after it
                   // sits on the same line -- previously against it, with no gap
                   // at all.
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                     {/* The size is on the tooltip rather than the row. The
                         column is here to tell two quantisations of one model
                         apart, and the filename does that on its own; a number
@@ -272,7 +272,11 @@ export default function Models() {
                         the expanded view and the file list both carry it. */}
                     <Tooltip title={`${main.filename}　${gib(total)}`}>
                       <Text
-                        style={{ fontSize: 12, fontFamily: MONO, flex: 1, minWidth: 0 }}
+                        // `0 1 auto`, not `1`: growing would pin the tag to the
+                        // far edge of the column with a gap of whatever is left
+                        // over. The name takes what it needs, the tag follows
+                        // it, and only a name too long for the column shrinks.
+                        style={{ fontSize: 12, fontFamily: MONO, flex: '0 1 auto', minWidth: 0 }}
                         ellipsis
                       >
                         {main.basename}
