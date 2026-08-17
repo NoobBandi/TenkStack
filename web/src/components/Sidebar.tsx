@@ -125,10 +125,13 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models }: Props) 
             src="/logo.webp"
             alt="TenkStack"
             /* The file carries transparent padding, so only 83% of this height
-               is ink -- 32 here reads as about 26. Width follows at 3.83:1,
-               which is 122 of the 159px the header has once the status dot and
-               its gap are taken out. */
-            style={{ height: 32, width: 'auto', display: 'block' }}
+               is ink -- 36 here reads as about 30. Width follows at 3.83:1,
+               which is 138 of the 159px the header has once the status dot and
+               its gap are taken out, and leaves 10px above and below inside a
+               56px header. That 21px of horizontal slack is the ceiling: 40
+               would come within 6px of the padding, which stops looking like a
+               margin and starts looking like a mistake. */
+            style={{ height: 36, width: 'auto', display: 'block' }}
           />
         )}
       </Link>
