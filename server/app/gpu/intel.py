@@ -84,6 +84,25 @@ DETAIL_GROUPS = [
 _UNKNOWN = {"", "N/A", "unknown", "0", 4294967295, "4294967295"}
 
 
+# Fields xpu-smi reports in a form nobody reads.
+#
+# `max_mem_alloc_size_byte` comes back as 32530182144, which is a number you
+# have to divide by 1024 three times before it says anything, and it sits two
+# rows under a capacity already given in MiB. `driver_version` is 17012470,
+# which is not a version anybody quotes -- it is the i915/xe build id packed
+# into an integer, and the useful thing to say about it is the number itself
+# with no pretence that it is comparable to 595.84 on the card beside it.
+def _readable(key: str, value: object) -> str:
+    text = str(value)
+    if key == "max_mem_alloc_size_byte":
+        number = to_float(text)
+        if number:
+            return f"{number / 1024 ** 3:.2f} GiB"
+    if key == "core_clock_rate" and text.isdigit():
+        return f"{text} MHz"
+    return text
+
+
 async def _json(*args: str) -> dict | list | None:
     code, out = await run(BIN, *args)
     if code:
@@ -247,7 +266,7 @@ class Intel:
                 value = raw.get(key)
                 if value is None or value in _UNKNOWN:
                     continue
-                rows.append({"key": key, "label": label, "value": str(value)})
+                rows.append({"key": key, "label": label, "value": _readable(key, value)})
             if rows:
                 groups.append({"title": title, "rows": rows})
 
