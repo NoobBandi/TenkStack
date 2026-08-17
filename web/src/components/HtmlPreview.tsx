@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import Loading from './Loading';
 
 /**
  * Runs a model-written HTML document in an isolated frame.
@@ -422,12 +423,33 @@ interface Props {
 
 export default function HtmlPreview({ source, language, runId }: Props) {
   const doc = useMemo(() => buildDocument(source, language), [source, language]);
+  // Reset on runId, not on mount: pressing run again replaces the frame and
+  // the wait starts over, and a stale `true` would hide the second load.
+  const [painted, setPainted] = useState(false);
+  useEffect(() => setPainted(false), [runId]);
 
   return (
+    <div className="md-preview-stack">
+      {/* Over the frame until it loads, not instead of it. A blank white
+          rectangle is what a preview looks like both while it is arriving and
+          when the code that built it did nothing, and those are very different
+          situations to be looking at. Python says so explicitly, because that
+          one really is a twelve-megabyte download the first time. */}
+      {!painted && (
+        <div className="md-preview-wait">
+          <Loading
+            label={language === 'python' || language === 'py'
+              ? '正在載入 Python 執行環境'
+              : '正在建立預覽'}
+            pattern={language === 'python' || language === 'py' ? 'orbit' : 'drive'}
+          />
+        </div>
+      )}
     <iframe
       key={runId}
       className="md-preview-frame"
       srcDoc={doc}
+      onLoad={() => setPainted(true)}
       // allow-scripts runs the code and allow-modals lets alert/confirm work,
       // which a lot of generated demos rely on.
       //
@@ -447,5 +469,6 @@ export default function HtmlPreview({ source, language, runId }: Props) {
       referrerPolicy="no-referrer"
       title="預覽"
     />
+    </div>
   );
 }

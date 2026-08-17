@@ -1,0 +1,81 @@
+/* The pixel-grid loader.
+ *
+ * Structure and motion follow beautifului.dev's Loading State primitive. The
+ * colours do not: it lights its cells with an ink token against a light
+ * surface, and this console is white-on-near-black, so the cells are white at
+ * the same two opacities its dim and lit states use.
+ */
+
+.lg-root {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+}
+
+.lg-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 4px);
+  gap: 1.5px;
+  flex-shrink: 0;
+}
+
+.lg-cell {
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: #f2f2f2;
+}
+
+.lg-cell-round { border-radius: 50%; }
+
+/* Dim to lit and back. The animation carries the opacity rather than a colour
+ * change, so a cell that is between waves is still the same cell. */
+@keyframes lg-on {
+  0%, 100% { opacity: 0.15; }
+  40% { opacity: 0.9; }
+}
+
+/* The same sweep the trace header uses on its label: the text is transparent
+ * and a gradient moves behind it, so the motion reads as the words being alive
+ * rather than as a second indicator competing with the grid. */
+.lg-label {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  background-image: linear-gradient(
+    90deg,
+    rgba(242, 242, 242, 0.3) 0%,
+    rgba(242, 242, 242, 0.3) 40%,
+    rgba(242, 242, 242, 0.95) 50%,
+    rgba(242, 242, 242, 0.3) 60%,
+    rgba(242, 242, 242, 0.3) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: lg-shimmer 1.8s linear infinite;
+}
+
+.lg-elapsed {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(242, 242, 242, 0.3);
+}
+
+/* Its own keyframe rather than the trace's, so this component carries
+ * everything it needs and can be used on a page the chat never loads. */
+@keyframes lg-shimmer {
+  0% { background-position: 150%; }
+  100% { background-position: -50%; }
+}
+
+/* The grid freezes to its dim state and the label stops sweeping. The timer
+ * keeps counting, because it is the part that says the wait is progressing and
+ * a still number would say the opposite. */
+@media (prefers-reduced-motion: reduce) {
+  .lg-cell { animation: none !important; opacity: 0.2 !important; }
+  .lg-label { animation: none; color: rgba(242, 242, 242, 0.6); }
+}

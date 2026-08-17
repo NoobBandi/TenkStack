@@ -143,3 +143,29 @@
 .hljs-deletion { color: #e06c75; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
+
+/* The frame and whatever is waiting over it share one box. */
+.md-preview-stack {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The waiting state sits on the frame's own white, because that is the colour
+ * the frame will be: fading from a dark placeholder into a white page is a
+ * flash, and a flash on every preview is worse than a plain wait. */
+.md-preview-wait {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: #0f0f10;
+  border-radius: inherit;
+  z-index: 1;
+  animation: md-wait-out 200ms ease both;
+}
+
+@keyframes md-wait-out {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

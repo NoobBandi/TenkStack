@@ -11,7 +11,7 @@ import ChatSettings from '../components/ChatSettings';
 import PreviewPanel from '../components/PreviewPanel';
 import { PreviewProvider, usePreview } from '../components/preview';
 import ChatHistory from '../components/ChatHistory';
-import Markdown from '../components/Markdown';
+import Markdown, { lastVisualBlock } from '../components/Markdown';
 import Trace from '../components/Trace';
 import { useStream } from '../stream';
 import { foldExchanges, useChat, type Turn } from '../chat';
@@ -101,6 +101,7 @@ function ChatInner() {
   // Folded once here rather than pattern-matched inside the renderer.
   const exchanges = useMemo(() => foldExchanges(turns), [turns]);
 
+
   const screens = useBreakpoint();
   // Below lg the conversation cannot afford a docked column: subtracting the
   // nav and a 232px panel from a narrow window leaves ~200px, which is less
@@ -113,6 +114,32 @@ function ChatInner() {
 
   // Non-null: ChatInner is always rendered inside the provider below.
   const preview = usePreview()!;
+
+  /**
+   * Open the preview by itself when a reply finishes with something to show.
+   *
+   * Waiting for the run button meant the common case -- ask for a page, get a
+   * page, look at it -- took a click that only ever had one answer. It fires
+   * once per reply, keyed on the answer's identity, so re-rendering or
+   * scrolling does not reopen a panel the reader closed.
+   *
+   * Only for the visual languages. Python's output is text and belongs in the
+   * conversation where it was asked for; opening a panel to print a number
+   * would move the answer away from the question.
+   */
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (streaming || !preview) return;
+    const last = exchanges[exchanges.length - 1]?.answer;
+    if (!last?.content) return;
+
+    const key = `${exchanges.length}:${last.content.length}`;
+    if (opened.current === key) return;
+    opened.current = key;
+
+    const block = lastVisualBlock(last.content);
+    if (block) preview.open(block.source, block.language);
+  }, [exchanges, streaming, preview]);
 
   const [atBottom, setAtBottom] = useState(true);
   // Both panels are remembered: whether they sit beside the conversation is a
@@ -187,8 +214,13 @@ function ChatInner() {
    * iframe while dragging, and a frame from another origin swallows the events
    * that would otherwise reach a listener on window -- the drag would stick.
    */
+  // Set while the edge is being dragged, so the panel's width transition can
+  // stand down. An eased width fights the cursor and lags behind it.
+  const resizing = useRef(false);
+
   const startResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    resizing.current = true;
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
     const startX = event.clientX;
@@ -201,6 +233,7 @@ function ChatInner() {
       setPreviewWidth(Math.max(PREVIEW_MIN, Math.min(next, window.innerWidth - 360)));
     };
     const stop = () => {
+      resizing.current = false;
       handle.releasePointerCapture(event.pointerId);
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', stop);
@@ -537,13 +570,28 @@ function ChatInner() {
         </div>
       )}
 
-      {roomForPanel && preview.target && (
+      {/* Width, not display. The panel arrives by growing from nothing and
+          leaves by shrinking back, so the conversation beside it moves rather
+          than jumping -- which matters more now that it can open by itself and
+          the reader did not ask for the layout to change. `overflow: hidden`
+          holds the contents at full size while the box around them animates,
+          so nothing reflows on the way. */}
+      {roomForPanel && (
         <div style={{
-          width: previewWidth + PREVIEW_GUTTER,
+          width: preview.target ? previewWidth + PREVIEW_GUTTER : 0,
+          opacity: preview.target ? 1 : 0,
           flexShrink: 0, overflow: 'hidden',
-          paddingInlineStart: PREVIEW_GUTTER,
-          marginInlineStart: PANEL_MARGIN,
+          paddingInlineStart: preview.target ? PREVIEW_GUTTER : 0,
+          marginInlineStart: preview.target ? PANEL_MARGIN : 0,
           display: 'flex',
+          transition: resizing.current
+            // Not while a pointer is dragging the edge: an eased width fights
+            // the cursor and the panel lags behind where it is being put.
+            ? 'none'
+            : 'width 320ms cubic-bezier(0.23,1,0.32,1),'
+              + ' opacity 220ms ease,'
+              + ' padding-inline-start 320ms cubic-bezier(0.23,1,0.32,1),'
+              + ' margin-inline-start 320ms cubic-bezier(0.23,1,0.32,1)',
         }}>
           {/* The grab strip sits outside the panel's own border so the cursor
               changes over empty space rather than over the preview itself. */}
@@ -557,11 +605,13 @@ function ChatInner() {
             }}
           />
           <div style={{ width: previewWidth, height: '100%' }}>
-            <PreviewPanel
-              target={preview.target}
-              onRerun={preview.rerun}
-              onClose={preview.close}
-            />
+            {preview.target && (
+              <PreviewPanel
+                target={preview.target}
+                onRerun={preview.rerun}
+                onClose={preview.close}
+              />
+            )}
           </div>
         </div>
       )}

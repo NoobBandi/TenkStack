@@ -197,3 +197,34 @@ function Markdown({ children }: { children: string }) {
 // Re-rendered on every streamed token otherwise. Parsing is linear in the text,
 // so skipping renders where the string is unchanged keeps a long reply cheap.
 export default memo(Markdown, (prev, next) => prev.children === next.children);
+
+/**
+ * The last block in a reply that is worth showing rather than reading.
+ *
+ * Used to open the preview without being asked. Only the visual languages:
+ * Python's output is text and belongs in the conversation where the question
+ * was, so opening a panel to print a number would move the answer away from
+ * what asked for it.
+ *
+ * The last rather than the first, because a reply that shows a wrong version
+ * and then a corrected one means the second, and a reply that builds up in
+ * pieces means the whole.
+ */
+const VISUAL = new Set(['html', 'svg', 'jsx', 'tsx']);
+
+export function lastVisualBlock(
+  markdown: string,
+): { source: string; language: string } | null {
+  // Fences with a language, non-greedy to the closing fence. A block that is
+  // never closed is a reply still arriving, and this only runs on finished
+  // ones.
+  const fence = /```([A-Za-z][\w+-]*)\n([\s\S]*?)```/g;
+  let found: { source: string; language: string } | null = null;
+  let match: RegExpExecArray | null;
+
+  while ((match = fence.exec(markdown)) !== null) {
+    const language = match[1].toLowerCase();
+    if (VISUAL.has(language)) found = { source: match[2], language };
+  }
+  return found;
+}

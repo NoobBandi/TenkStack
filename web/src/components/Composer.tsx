@@ -436,13 +436,22 @@ export default function Composer({
           </Tooltip>
           {capabilities?.tools && (
             <Tooltip title={agent
-              ? '沙箱已開啟：模型可以自己寫 Python 執行並讀取結果'
-              : '開啟沙箱：讓模型能寫 Python 執行來回答需要計算的問題'}>
+              ? 'Agent 已開啟：模型可以自己寫 Python 執行、讀結果，再決定下一步'
+              : '開啟 Agent：讓模型能寫 Python 執行來回答需要計算的問題'}>
+              {/* Named rather than iconic. This is the one control here that
+                  changes what a reply costs and how long it takes, and a bare
+                  glyph makes that a guess. */}
               <Button
                 type="text" size="small" icon={<CodeOutlined />}
                 onClick={() => onAgentChange(!agent)}
-                style={{ opacity: agent ? 1 : 0.45, color: agent ? ACCENT.ok : undefined }}
-              />
+                style={{
+                  opacity: agent ? 1 : 0.5,
+                  color: agent ? ACCENT.ok : undefined,
+                  paddingInline: 6,
+                }}
+              >
+                <span style={{ fontSize: 11, letterSpacing: 0.3 }}>Agent</span>
+              </Button>
             </Tooltip>
           )}
           <Tooltip title="開始新對話">
