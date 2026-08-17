@@ -15,6 +15,7 @@ import json
 import logging
 import mimetypes
 import socket
+import tomllib
 from pathlib import Path
 from typing import AsyncIterator
 from urllib.parse import quote
@@ -54,7 +55,20 @@ COMFYUI_PUBLIC_OFFSET = 8444 - 8188
 GPU_POLL_SECONDS = 2.0
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
-app = FastAPI(title="TenkStack", version="0.2.0")
+# Read rather than repeated. This was a third copy of the version, and the
+# copies had already drifted: pyproject said 0.1.0 while this and the frontend
+# said 0.2.0. Each half of the project now states it once, in the file that
+# owns it.
+def _version() -> str:
+    try:
+        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as f:
+            return tomllib.load(f)["project"]["version"]
+    except Exception:
+        # A version is not worth failing to start over.
+        return "0"
+
+
+app = FastAPI(title="TenkStack", version=_version())
 
 app.add_middleware(
     CORSMiddleware,
