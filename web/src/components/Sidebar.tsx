@@ -22,6 +22,7 @@ export const NAV_GROUPS = [
       { key: '/', icon: <DashboardOutlined />, label: '總覽' },
       { key: '/chat', icon: <MessageOutlined />, label: '對話' },
       { key: '/comfyui', icon: <PictureOutlined />, label: '圖像生成' },
+      { key: '/files', icon: <FolderOpenOutlined />, label: '檔案' },
     ],
   },
   {
@@ -29,7 +30,6 @@ export const NAV_GROUPS = [
     items: [
       { key: '/models', icon: <AppstoreOutlined />, label: '模型' },
       { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
-      { key: '/files', icon: <FolderOpenOutlined />, label: '檔案' },
       { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
       { key: '/connections', icon: <ApiOutlined />, label: '連線' },
       { key: '/logs', icon: <FileTextOutlined />, label: '日誌' },
