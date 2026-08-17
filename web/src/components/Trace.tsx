@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Image, Typography } from 'antd';
+import { Typography } from 'antd';
 import type { Turn } from '../chat';
 import { ACCENT, LINE, MONO } from '../theme';
 import './thinking.css';
@@ -109,19 +109,13 @@ function Detail({ step }: { step: Step }) {
       {result && result.value !== null && (
         <Block label="回傳值" value={result.value} tone="#7fb8d8" />
       )}
-      {/* Capped rather than filling the measure. A matplotlib figure is 640 by
-          480 at this dpi, and stretching it past that is bigger, blurrier and
-          no more readable. Click opens it full size. */}
-      {result?.images.map((src, i) => (
-        <Image key={i} src={src}
-               style={{ marginTop: 8, borderRadius: 4, background: '#fff',
-                        maxWidth: '100%', width: 460 }} />
-      ))}
+      {/* No figures here. They are shown with the answer, where what was
+          asked for belongs, rather than inside the working that produced it. */}
       {result
         && !result.error
         && !result.stdout.trim()
-        && !result.images.length
-        && result.value === null && (
+        && result.value === null
+        && !result.images.length && (
         <Text style={{ fontSize: 11, opacity: 0.4, display: 'block', marginTop: 6 }}>
           沒有輸出
         </Text>
@@ -183,10 +177,38 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
               const delay = { animationDelay: `${Math.min(i, 6) * 90}ms` };
 
               if (step.kind === 'reasoning') {
+                const body = step.text.trim();
+                const opened = openStep === i;
+                // A reasoning block runs to hundreds of words. Printed whole,
+                // three of them bury the two code rows between them and the
+                // trace stops being a trace. The first line is the topic
+                // sentence often enough to serve as the label, and the rest is
+                // one click away.
+                const head = body.split('\n').find((l) => l.trim()) ?? '思考';
+                const more = body.length > head.length;
                 return (
-                  <div key={i} className="tt-row" style={delay}>
-                    <Check />
-                    <span className="tt-prose">{step.text.trim()}</span>
+                  <div key={i}>
+                    <button
+                      type="button"
+                      className="tt-row"
+                      style={delay}
+                      aria-pressed={opened}
+                      disabled={!more}
+                      onClick={() => setOpenStep(opened ? null : i)}
+                    >
+                      <Check />
+                      <span className="tt-primary" style={{ fontWeight: 400, opacity: 0.62 }}>
+                        {head}
+                      </span>
+                      {step.ms ? (
+                        <span className="tt-secondary">{(step.ms / 1000).toFixed(1)}s</span>
+                      ) : null}
+                    </button>
+                    {opened && (
+                      <div className="tt-prose" style={{ padding: '0 6px 10px 27px' }}>
+                        {body}
+                      </div>
+                    )}
                   </div>
                 );
               }

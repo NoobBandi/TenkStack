@@ -204,3 +204,10 @@ button.tt-row[aria-pressed='true'] { background: rgba(255, 255, 255, 0.06); }
   .tt-row { animation: none; }
   .tt-spin { animation-duration: 3s; }
 }
+
+/* A reasoning row short enough to have nothing behind it. Still a button, so
+ * the rows stay the same shape, but it should not offer a pointer. */
+button.tt-row:disabled {
+  cursor: default;
+  background: transparent;
+}

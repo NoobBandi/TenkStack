@@ -51,6 +51,11 @@ export interface Exchange {
   user: Turn | null;
   steps: Step[];
   answer: Turn | null;
+  /** Every figure the run drew, lifted out of the steps that produced them.
+   *  A plot is the answer to the question that asked for one, not evidence of
+   *  how the answer was reached -- leaving it inside a collapsed code row means
+   *  the thing that was asked for is the one thing not shown. */
+  figures: string[];
 }
 
 export function foldExchanges(turns: Turn[]): Exchange[] {
@@ -59,17 +64,18 @@ export function foldExchanges(turns: Turn[]): Exchange[] {
 
   for (const turn of turns) {
     if (turn.role === 'user') {
-      current = { user: turn, steps: [], answer: null };
+      current = { user: turn, steps: [], answer: null, figures: [] };
       out.push(current);
       continue;
     }
     if (!current) {
-      current = { user: null, steps: [], answer: null };
+      current = { user: null, steps: [], answer: null, figures: [] };
       out.push(current);
     }
 
     if (turn.role === 'tool') {
       current.steps.push({ kind: 'code', text: turn.run?.code ?? '', turn });
+      current.figures.push(...(turn.run?.result?.images ?? []));
       continue;
     }
 

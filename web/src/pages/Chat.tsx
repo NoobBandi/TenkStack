@@ -417,6 +417,21 @@ function ChatInner() {
 
                         {answer?.content ? <Markdown>{answer.content}</Markdown> : null}
 
+                        {/* The figures the run drew, with the answer rather
+                            than inside the working. Asked for a chart, the
+                            chart is the reply; it should not need a code row
+                            opened to be seen. */}
+                        {exchange.figures.map((src, i) => (
+                          <Image
+                            key={i}
+                            src={src}
+                            style={{
+                              marginTop: 10, borderRadius: 6, background: '#fff',
+                              maxWidth: '100%', width: 560,
+                            }}
+                          />
+                        ))}
+
                         {tracing && !exchange.steps.length && (
                           <Space size={8}>
                             <Text style={{ fontSize: 12, opacity: 0.4 }}>
