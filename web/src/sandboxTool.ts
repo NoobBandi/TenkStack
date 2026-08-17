@@ -29,9 +29,17 @@ export const SANDBOX_TOOL: ToolSpec = {
       'simulation, parsing, or checking something rather than recalling it.',
       '',
       'The environment:',
-      '- The standard library, plus numpy, pandas, matplotlib, scipy, sympy and',
-      '  the other packages Pyodide ships. Imports are installed automatically;',
-      '  just import what you need.',
+      '- The standard library plus about 350 prebuilt packages: numpy, pandas,',
+      '  matplotlib, scipy, sympy, pillow, scikit-learn, networkx, statsmodels,',
+      '  lxml, opencv and so on. Imports load automatically; just import what',
+      '  you need.',
+      '- That set is fixed. There is no pip and no micropip install: PyPI does',
+      '  not permit downloads from a sandboxed page. If something is missing,',
+      '  use a package that is present or write it yourself.',
+      '- Nothing with a window: no tkinter, turtle, pygame or any other GUI.',
+      '  There is no display here at all, so this is not a missing package but',
+      '  an impossible one. To show something visually, draw it with matplotlib',
+      '  -- its output is rendered.',
       '- No filesystem, no network, no access to the host machine, its GPUs, its',
       '  models or its files. Do not try to open a path or fetch a URL.',
       '- Each call starts from a clean namespace. Nothing carries over from the',
@@ -54,6 +62,28 @@ export const SANDBOX_TOOL: ToolSpec = {
 };
 
 /**
+ * Packages a model reaches for that cannot exist here, with the reason.
+ *
+ * "Not installed" invites "then install it", which is a wasted step and then a
+ * second wasted step when pip turns out not to exist either. Saying there is no
+ * display ends the line and points somewhere that works.
+ */
+const IMPOSSIBLE: Record<string, string> = {
+  tkinter: '這個環境沒有顯示裝置，GUI 一定跑不起來',
+  turtle: '這個環境沒有顯示裝置，GUI 一定跑不起來',
+  pygame: '這個環境沒有顯示裝置，GUI 一定跑不起來',
+  tkinterdnd2: '這個環境沒有顯示裝置，GUI 一定跑不起來',
+  subprocess: '這個環境沒有作業系統可以呼叫',
+  socket: '這個環境不能開網路連線',
+};
+
+/** The module name out of a ModuleNotFoundError, or null. */
+function missingModule(error: string): string | null {
+  const match = /No module named ['"]([\w.]+)['"]/.exec(error);
+  return match ? match[1].split('.')[0] : null;
+}
+
+/**
  * The result, as the model reads it.
  *
  * Plain labelled text rather than JSON. The traceback is the part that matters
@@ -68,7 +98,20 @@ export const SANDBOX_TOOL: ToolSpec = {
 export function describeResult(result: RunResult): string {
   const parts: string[] = [];
 
-  if (result.error) parts.push(`錯誤:\n${result.error}`);
+  if (result.error) {
+    parts.push(`錯誤:\n${result.error}`);
+    const missing = missingModule(result.error);
+    if (missing) {
+      const why = IMPOSSIBLE[missing];
+      parts.push(
+        why
+          ? `${missing} 在這裡不可用：${why}。請改用別的方式，不要再嘗試安裝。`
+          : `這個環境沒有 ${missing}，而且沒有 pip 或 micropip 可以安裝`
+            + '（PyPI 不允許沙箱頁面下載）。請改用內建的 350 個套件之一，'
+            + '或自己實作需要的部分。',
+      );
+    }
+  }
   if (result.stdout.trim()) parts.push(`stdout:\n${result.stdout}`);
   if (result.stderr.trim()) parts.push(`stderr:\n${result.stderr}`);
   if (result.value !== null) parts.push(`最後一個運算式的值: ${result.value}`);
