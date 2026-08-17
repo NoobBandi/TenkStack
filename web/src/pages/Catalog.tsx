@@ -38,6 +38,21 @@ function sizeOptions(total: number) {
   ];
 }
 
+/**
+ * The page-size control, with its text cursor taken away.
+ *
+ * antd hardcodes `showSearch: true` on this Select, which turns a list of four
+ * fixed choices into a text field. There is nothing to search -- the options
+ * fit on screen -- and a caret invites typing a number that will not be
+ * accepted, since anything not matching an option simply filters the list to
+ * nothing. Passing it back is enough: the props given here are spread after
+ * antd's own.
+ */
+const sizeChanger = (total: number) => ({
+  options: sizeOptions(total),
+  showSearch: false,
+});
+
 /** Locale for every paginator here, so "第 1-10 筆，共 100 筆" reads the same. */
 const pageTotal = (total: number, range: [number, number]) =>
   `第 ${range[0]}-${range[1]} 筆，共 ${total} 筆`;
@@ -409,7 +424,7 @@ export default function Catalog() {
               pageSize={pageSize}
               total={repos.length}
               onChange={(p, size) => { setPage(p); setPageSize(size); }}
-              showSizeChanger={{ options: sizeOptions(repos.length) }}
+              showSizeChanger={sizeChanger(repos.length)}
               showTotal={pageTotal}
               size="small"
             />
@@ -512,7 +527,7 @@ export default function Catalog() {
                 pageSize={filePageSize}
                 total={files.length}
                 onChange={(p, size) => { setFilePage(p); setFilePageSize(size); }}
-                showSizeChanger={{ options: sizeOptions(files.length) }}
+                showSizeChanger={sizeChanger(files.length)}
                 showTotal={pageTotal}
                 size="small"
               />
