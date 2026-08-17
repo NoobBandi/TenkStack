@@ -30,6 +30,26 @@ export interface ModelInfo {
    *  this console does -- so the panel seeds itself from these instead, and the
    *  config and the interface cannot say different things. */
   sampling?: Partial<ChatParams> | null;
+  /** The files this entry is made of. Two entries differing only in
+   *  quantisation carry the same name and the same everything else, so this is
+   *  what tells them apart -- and what says how much of the card each wants. */
+  weights?: ModelWeight[];
+}
+
+export interface ModelWeight {
+  /** Relative to the models directory: `<owner>/<repo>/<name>`. */
+  filename: string;
+  basename: string;
+  repo: string;
+  /** From the flag it appears under, not from the name. `mmproj` in a filename
+   *  is a convention that holds until somebody renames a file. */
+  role: 'model' | 'mmproj';
+  exists: boolean;
+  size_bytes: number;
+  /** Other entries pointing at this same file. Not a problem: one BF16
+   *  projector serves every quantisation of its model, so two entries sharing
+   *  one is the design rather than a collision. */
+  shared_with: string[];
 }
 
 export interface ModelCapabilities {

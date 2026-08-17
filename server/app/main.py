@@ -229,6 +229,7 @@ async def read_models():
     props = dict(zip(proxies.keys(), props_list))
 
     sampling = config.sampling_defaults()
+    weights = config.weights()
 
     result = []
     for m in models:
@@ -245,6 +246,11 @@ async def read_models():
             # What this model was configured to be sampled with. The panel seeds
             # itself from this so the config and the interface cannot disagree.
             "sampling": sampling.get(model_id) or None,
+            # Which files this entry is made of. Two entries differing only in
+            # quantisation are otherwise indistinguishable in a list -- same
+            # name, same everything -- and they compete for the same card, so
+            # the sizes belong next to them.
+            "weights": weights.get(model_id, []),
             "capabilities": {
                 "vision": bool(modalities.get("vision")) if live else declared.get(model_id, False),
                 "audio": bool(modalities.get("audio")) if live else False,

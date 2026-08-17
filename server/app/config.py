@@ -274,6 +274,64 @@ def declared_vision() -> dict[str, bool]:
     }
 
 
+def weights() -> dict[str, list[dict]]:
+    """Every model's GGUF files, with sizes and who else points at them.
+
+    One pass over the whole config rather than files_for_model called per
+    model, because the interesting question is global: sharing is a property of
+    the set of entries, not of one of them. A vision projector is the ordinary
+    case now -- unsloth ships one mmproj for all fourteen quants of a model, and
+    it is BF16 and unquantised, so two entries differing only in quant point at
+    the same file by design. Answering that once keeps the answers consistent.
+
+    The role comes from the flag rather than the filename. `mmproj` in a name is
+    a convention that holds until somebody renames a file.
+    """
+    try:
+        models = _load().get("models") or {}
+    except Exception:
+        logger.exception("could not read the config while listing weights")
+        return {}
+
+    references: dict[str, list[str]] = {}
+    for model_id, spec in models.items():
+        for name in _files_in_cmd(spec.get("cmd")):
+            references.setdefault(name, []).append(model_id)
+
+    out: dict[str, list[dict]] = {}
+    for model_id, spec in models.items():
+        cmd = str(spec.get("cmd") or "")
+        projectors = {
+            _MACRO.sub("", token) for token in _MMPROJ_FILES.findall(cmd)
+        }
+        entries = []
+        for name in sorted(_files_in_cmd(cmd)):
+            path = _resolve_model_path(name)
+            exists = bool(path and path.is_file())
+            entries.append({
+                "filename": name,
+                "basename": Path(name).name,
+                "repo": str(Path(name).parent) if "/" in name else "",
+                "role": "mmproj" if name in projectors else "model",
+                "exists": exists,
+                "size_bytes": path.stat().st_size if exists else 0,
+                # Not a warning. Two quants sharing a projector is the design;
+                # this is here so deleting one entry does not look like it
+                # takes the file with it.
+                "shared_with": sorted(
+                    other for other in references.get(name, []) if other != model_id
+                ),
+            })
+        # The weights first, then the projector: that is the order they are
+        # loaded in and the order the sizes add up in.
+        entries.sort(key=lambda e: (e["role"] != "model", e["basename"]))
+        out[model_id] = entries
+    return out
+
+
+_MMPROJ_FILES = re.compile(r"--mmproj\s+(\S+\.gguf)")
+
+
 def context_sizes() -> dict[str, int]:
     """Each model's --ctx-size, so the UI can show context used against its real
     limit instead of a number the user has to remember."""

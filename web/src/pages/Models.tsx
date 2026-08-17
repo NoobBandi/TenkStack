@@ -11,8 +11,10 @@ import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchModelFiles, fetchModelSpec, fetchPartials,
   loadModel, modelFileRefs, saveModel, unloadAll, unloadModel,
-  type ModelFile, type ModelFileRef, type ModelInfo, type ModelSpec, type PartialFile,
+  type ModelFile, type ModelFileRef, type ModelInfo, type ModelSpec, type ModelWeight,
+  type PartialFile,
 } from '../api';
+import { MONO } from '../theme';
 
 const { Text, Paragraph } = Typography;
 
@@ -31,6 +33,47 @@ const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
  *  separating two files that are otherwise identically named. */
 const fileLabel = (f: ModelFile) =>
   `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''} (${f.size_gib} GiB)`;
+
+/**
+ * What one entry is made of.
+ *
+ * The shared marker is the point of this. A vision projector is BF16 and
+ * unquantised, so one of them serves every quantisation of its model -- two
+ * entries pointing at the same mmproj is the intended arrangement, not a
+ * mistake. Saying so here is what stops removing one entry from looking like
+ * it takes the other's projector with it, which is also exactly what the
+ * delete dialog refuses to do.
+ */
+function WeightList({ weights }: { weights: ModelWeight[] }) {
+  if (weights.length === 0) return <Text type="secondary">—</Text>;
+  const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
+  return (
+    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+      {weights.map((w) => (
+        <Space key={w.filename} size={8} wrap>
+          <Tag style={{ fontSize: 10, marginInlineEnd: 0 }}
+               color={w.role === 'mmproj' ? 'purple' : 'default'}>
+            {w.role === 'mmproj' ? '視覺投影' : '權重'}
+          </Tag>
+          <Text style={{ fontSize: 12, fontFamily: MONO }}>{w.filename}</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {w.exists ? gib(w.size_bytes) : '檔案不存在'}
+          </Text>
+          {w.shared_with.length > 0 && (
+            <Tooltip title={`也被 ${w.shared_with.join('、')} 使用。移除任一個模型都不會刪掉它。`}>
+              <Tag color="blue" style={{ fontSize: 10, marginInlineEnd: 0 }}>
+                與 {w.shared_with.length} 個模型共用
+              </Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ))}
+      <Text type="secondary" style={{ fontSize: 11 }}>
+        合計 {gib(total)} —— 載入時大致就是這些進顯存，再加上 KV 快取
+      </Text>
+    </Space>
+  );
+}
 
 export default function Models() {
   const { message } = AntApp.useApp();
@@ -185,9 +228,12 @@ export default function Models() {
           locale={{ emptyText: '設定檔中沒有模型' }}
           expandable={{
             expandedRowRender: (row) => (
-              <Descriptions size="small" column={1} style={{ maxWidth: 720 }}>
+              <Descriptions size="small" column={1} style={{ maxWidth: 860 }}>
                 <Descriptions.Item label="說明">{row.description || '—'}</Descriptions.Item>
                 <Descriptions.Item label="上游">{row.proxy || '未載入'}</Descriptions.Item>
+                <Descriptions.Item label="檔案">
+                  <WeightList weights={row.weights ?? []} />
+                </Descriptions.Item>
               </Descriptions>
             ),
           }}
@@ -200,6 +246,46 @@ export default function Models() {
                   <Text type="secondary" style={{ fontSize: 12 }}>{row.id}</Text>
                 </div>
               ),
+            },
+            {
+              // The one column that separates two entries of the same model at
+              // different quantisations, which is now an ordinary thing to
+              // have: the name, the description and the capabilities are all
+              // identical between them, and only the file is not.
+              title: '模型檔', width: 300,
+              render: (_, row) => {
+                const weights = row.weights ?? [];
+                if (weights.length === 0) return <Text type="secondary">—</Text>;
+                const main = weights.find((w) => w.role === 'model') ?? weights[0];
+                const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
+                const missing = weights.filter((w) => !w.exists);
+                return (
+                  <div style={{ minWidth: 0 }}>
+                    <Tooltip title={main.filename}>
+                      <Text style={{ fontSize: 12, fontFamily: MONO }} ellipsis>
+                        {main.basename}
+                      </Text>
+                    </Tooltip>
+                    <Space size={6} style={{ marginTop: 2 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>{gib(total)}</Text>
+                      {weights.some((w) => w.role === 'mmproj') && (
+                        <Tooltip title="含視覺投影檔，一起佔用顯存">
+                          <Tag color="purple" style={{ fontSize: 10, marginInlineEnd: 0 }}>
+                            + 視覺
+                          </Tag>
+                        </Tooltip>
+                      )}
+                      {missing.length > 0 && (
+                        <Tooltip title={missing.map((w) => w.filename).join('，')}>
+                          <Tag color="error" style={{ fontSize: 10, marginInlineEnd: 0 }}>
+                            檔案不見了
+                          </Tag>
+                        </Tooltip>
+                      )}
+                    </Space>
+                  </div>
+                );
+              },
             },
             {
               title: '狀態', dataIndex: 'state', width: 110,
