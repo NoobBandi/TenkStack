@@ -46,8 +46,6 @@ export const SERIES = {
   temp: '#6fd0c4',
 };
 
-/** Per-device traces, in device order. */
-export const DEVICE_SERIES = ['#6ea8fe', '#c79bf0', '#6fd0c4', '#e08bb0'];
 
 /**
  * Log sources.

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Card, Empty, Segmented, Space, Typography } from 'antd';
+import { Card, Empty, Segmented, Select, Space, Typography } from 'antd';
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
   type MouseHandlerDataParam,
 } from 'recharts';
 import { fetchGpuHistory, type GpuPoint, type GpuSample } from '../api';
-import { DEVICE_SERIES, LINE, MONO, SERIES } from '../theme';
+import { LINE, MONO, SERIES } from '../theme';
 import {
-  maxCeiling, powerCeiling, tempCeiling, vramAxisMax, vramAxisTicks,
+  deviceTag, maxCeiling, powerCeiling, tempCeiling, vramAxisMax, vramAxisTicks,
 } from '../hardware';
 
 const { Text } = Typography;
@@ -31,17 +31,7 @@ const WINDOWS = [
   { label: '2 時', value: 7200 },
 ];
 
-const METRICS = [
-  { label: '功耗', value: 'power', unit: 'W', axis: (v: number) => `${v.toFixed(0)}` },
-  { label: '顯存', value: 'vram', unit: 'GiB', axis: (v: number) => `${(v / 1024).toFixed(0)}G` },
-  { label: '溫度', value: 'temp', unit: '°C', axis: (v: number) => `${v.toFixed(0)}` },
-] as const;
 
-type Metric = (typeof METRICS)[number]['value'];
-
-/** Dash patterns in the order devices are drawn. Solid reads as "the first
- *  one", which on a single-card machine is the only one. */
-const DASHES = ['0', '4 3', '1 3', '6 3 1 3'];
 
 /**
  * Plot geometry, needed because the highlight below works out which trace the
@@ -64,11 +54,10 @@ const REACH = 0.12;
 /**
  * One drawn series.
  *
- * The single-card and multi-card layouts used to be two separate blocks of JSX
- * with a third, separate block building the legend from the same facts. They
- * are one list now because the highlight needs a single answer to "what is
- * drawn, in what colour, against which ceiling" -- the ceiling being what turns
- * a reading into a height on screen.
+ * Three of them, one card at a time. The highlight needs a single answer to
+ * "what is drawn, in what colour, against which ceiling" -- the ceiling being
+ * what turns a reading into a height on screen -- so the legend, the paths and
+ * the hit-testing all read from this one list.
  */
 interface Trace {
   key: string;
@@ -103,7 +92,9 @@ function clock(t: number): string {
 
 export default function GpuChart({ latest }: Props) {
   const [seconds, setSeconds] = useState(900);
-  const [metric, setMetric] = useState<Metric>('power');
+  // Which card is plotted. Null until the first listing arrives, then the
+  // lowest index -- device 0, which is the one serving the language models.
+  const [device, setDevice] = useState<string | null>(null);
   const [series, setSeries] = useState<Record<string, GpuPoint[]>>({});
   const [loading, setLoading] = useState(true);
   /** dataKey of the trace under the cursor, or null. */
@@ -186,8 +177,10 @@ export default function GpuChart({ latest }: Props) {
     return out;
   }, [series, indices]);
 
-  const multi = indices.length > 1;
-  const active = METRICS.find((m) => m.value === metric) ?? METRICS[0];
+  // The selected card, falling back to the first while nothing is chosen and
+  // if the chosen one disappears -- a driver unloading should not blank the
+  // chart.
+  const plotted = device && indices.includes(device) ? device : indices[0];
 
   /**
    * The VRAM axis runs 0 to the card's capacity and stays there.
@@ -206,48 +199,39 @@ export default function GpuChart({ latest }: Props) {
   // stay comparable on one axis.
   const powerMax = maxCeiling(latest, powerCeiling);
   const tempMax = maxCeiling(latest, tempCeiling);
-  const activeMax = active.value === 'vram' ? vramMax
-    : active.value === 'power' ? powerMax : tempMax;
 
   const stats = useMemo(() => {
-    if (!rows.length || !indices.length) return null;
-    const first = indices[0];
-    const powers = rows.map((r) => r[`power${first}`] ?? 0);
-    const vrams = rows.map((r) => r[`vram${first}`] ?? 0);
+    if (!rows.length || !plotted) return null;
+    const powers = rows.map((r) => r[`power${plotted}`] ?? 0);
+    const vrams = rows.map((r) => r[`vram${plotted}`] ?? 0);
     return {
       peakPower: Math.max(...powers),
       avgPower: powers.reduce((a, b) => a + b, 0) / powers.length,
       peakVram: Math.max(...vrams),
     };
-  }, [rows, indices]);
+  }, [rows, plotted]);
 
+  /**
+   * One card's three quantities, always.
+   *
+   * There used to be a second shape: with more than one GPU the chart switched
+   * to one quantity across every device, chosen from a row of buttons. It
+   * answered a question nobody was asking -- two cards doing unrelated work do
+   * not get compared watt for watt -- and it cost the thing the chart is for,
+   * which is seeing power, memory and temperature move together on one card.
+   * Picking the card from a list restores that and removes the branch.
+   */
   const traces = useMemo<Trace[]>(() => {
-    if (!indices.length) return [];
-    if (multi) {
-      // Every device is showing the same quantity here, so they share a format.
-      const fmt = active.value === 'vram'
-        ? (v: number) => `${(v / 1024).toFixed(2)} GiB`
-        : (v: number) => `${v.toFixed(0)} ${active.unit}`;
-      return indices.map((i, n) => ({
-        key: `${metric}${i}`,
-        name: `xpu:${i}`,
-        colour: DEVICE_SERIES[n % DEVICE_SERIES.length],
-        axis: 'vram' as const,
-        max: activeMax,
-        dash: DASHES[n % DASHES.length],
-        format: fmt,
-      }));
-    }
-    const i = indices[0];
+    if (!plotted) return [];
     return [
-      { key: `vram${i}`, name: '顯存', colour: SERIES.vram, axis: 'vram', max: vramMax, filled: true,
-        format: (v) => `${(v / 1024).toFixed(2)} GiB` },
-      { key: `power${i}`, name: '功耗', colour: SERIES.power, axis: 'power', max: powerMax,
+      { key: `vram${plotted}`, name: '顯存', colour: SERIES.vram, axis: 'vram', max: vramMax,
+        filled: true, format: (v) => `${(v / 1024).toFixed(2)} GiB` },
+      { key: `power${plotted}`, name: '功耗', colour: SERIES.power, axis: 'power', max: powerMax,
         format: (v) => `${v.toFixed(0)} W` },
-      { key: `temp${i}`, name: '溫度', colour: SERIES.temp, axis: 'temp', max: tempMax, dash: '3 3',
-        format: (v) => `${v.toFixed(0)} °C` },
+      { key: `temp${plotted}`, name: '溫度', colour: SERIES.temp, axis: 'temp', max: tempMax,
+        dash: '3 3', format: (v) => `${v.toFixed(0)} °C` },
     ];
-  }, [indices, multi, metric, active, activeMax, vramMax, powerMax, tempMax]);
+  }, [plotted, vramMax, powerMax, tempMax]);
 
   const byKey = useMemo(() => new Map(traces.map((t) => [t.key, t])), [traces]);
 
@@ -297,22 +281,38 @@ export default function GpuChart({ latest }: Props) {
       size="small"
       title={
         <Space size={12} wrap>
-          <span style={{ fontFamily: MONO, letterSpacing: 0.8, fontSize: 12 }}>
-            GPU{multi ? ` ×${indices.length}` : ''}
-          </span>
-          {stats && !multi && (
+          <span style={{ fontFamily: MONO, letterSpacing: 0.8, fontSize: 12 }}>GPU</span>
+          {/* A list, not a row of buttons. Buttons are right for the time
+              window -- four fixed choices, all worth seeing at once -- and
+              wrong for the cards, which are named rather than ordered and
+              whose count is a property of the machine. */}
+          {indices.length > 1 && (
+            <Select
+              size="small"
+              value={plotted}
+              onChange={setDevice}
+              style={{ minWidth: 168 }}
+              options={indices.map((i) => {
+                const card = latest.find((g) => String(g.index) === i);
+                return {
+                  value: i,
+                  label: (
+                    <span style={{ fontFamily: MONO, fontSize: 11 }}>
+                      {deviceTag(card?.vendor, Number(i))}
+                      <span style={{ opacity: 0.45, marginLeft: 6 }}>
+                        {card?.name ?? ''}
+                      </span>
+                    </span>
+                  ),
+                };
+              })}
+            />
+          )}
+          {stats && (
             <Text style={{ fontSize: 11, opacity: 0.5, fontFamily: MONO }}>
               PEAK {stats.peakPower.toFixed(0)}W ・ AVG {stats.avgPower.toFixed(0)}W ・
               VRAM {(stats.peakVram / 1024).toFixed(1)}G
             </Text>
-          )}
-          {multi && (
-            <Segmented
-              size="small"
-              value={metric}
-              onChange={(v) => setMetric(v as Metric)}
-              options={METRICS.map((m) => ({ label: m.label, value: m.value }))}
-            />
           )}
         </Space>
       }
@@ -377,9 +377,9 @@ export default function GpuChart({ latest }: Props) {
                 yAxisId="vram"
                 stroke={LINE.soft}
                 tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: MONO }}
-                tickFormatter={multi ? active.axis : (v: number) => `${(v / 1024).toFixed(0)}G`}
-                domain={multi ? [0, activeMax] : [0, vramMax]}
-                ticks={multi && active.value !== 'vram' ? undefined : vramTicks}
+                tickFormatter={(v: number) => `${(v / 1024).toFixed(0)}G`}
+                domain={[0, vramMax]}
+                ticks={vramTicks}
                 allowDataOverflow
                 width={44}
               />
@@ -406,7 +406,7 @@ export default function GpuChart({ latest }: Props) {
                   const shown = hover
                     ? payload.filter((p) => p.dataKey === hover)
                     : payload;
-                  if (!shown.length) return null;
+                  if (!plotted.length) return null;
                   return (
                     <div style={{
                       background: '#141414', border: `1px solid ${LINE.soft}`,
@@ -468,7 +468,7 @@ export default function GpuChart({ latest }: Props) {
                     dot={false}
                     activeDot={lit && { r: 4, fill: '#141414', stroke: t.colour, strokeWidth: 2 }}
                     isAnimationActive={false}
-                    connectNulls={multi}
+                    connectNulls={false}
                   />
                 );
               })}

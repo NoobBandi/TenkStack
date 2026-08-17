@@ -154,12 +154,11 @@ export default function Dashboard() {
         ) : (
           gpus.map((g) => <GpuBlock key={g.index} gpu={g} showTemp={showTemp} />)
         )}
-        {/* Machine-wide, not per card: llama-swap reports one figure however
-            many devices are serving it. */}
-        <StatTile
-          label="THROUGHPUT" value={(throughput?.tokens_per_second ?? 0).toFixed(1)} unit="t/s"
-          footnote={throughput ? `最近 ${throughput.tokens} tokens` : '尚無資料'}
-        />
+        {/* The machine itself, alongside its cards rather than in a band of
+            its own below them. It is the same kind of thing -- a set of live
+            readings against ceilings -- and the row it used to sit under was a
+            single tile wide, which left most of that row empty. */}
+        <SystemStats sample={system} throughput={throughput} />
       </div>
 
       {/* Rendered bare rather than in a Row: antd gives a gutter Row negative
@@ -167,8 +166,6 @@ export default function Dashboard() {
           the tiles above it. Full width now that the log has its own page, so
           the two line up. */}
       <GpuChart latest={gpus} />
-
-      <SystemStats sample={system} />
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
         <div style={{ flex: '2 1 420px', minWidth: 0 }}>

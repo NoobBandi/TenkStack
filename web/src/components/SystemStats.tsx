@@ -1,6 +1,6 @@
 import { Card, Progress, Space, Tooltip, Typography } from 'antd';
 import { ACCENT, LINE, MONO } from '../theme';
-import type { SystemSample } from '../api';
+import type { SystemSample, Throughput } from '../api';
 
 const { Text } = Typography;
 
@@ -66,7 +66,6 @@ function Dial({ title, percent, reading, note, noteTitle }: {
 
   return (
     <div style={{ textAlign: 'center', minWidth: 0 }}>
-      <Text style={{ fontSize: 10, letterSpacing: 1.2, opacity: 0.45 }}>{title}</Text>
       <Progress
         type="dashboard"
         percent={value}
@@ -101,14 +100,21 @@ function Dial({ title, percent, reading, note, noteTitle }: {
         )}
         style={{ marginTop: 2 }}
       />
-      <div style={{ marginTop: -2 }}>
+      {/* Under the dial, not above it. A caption to one side of a circle has
+          nothing to align to and reads as though it belongs to whatever is
+          left of it; centred beneath, the dial and its name are obviously one
+          object. */}
+      <div style={{ marginTop: -4 }}>
+        <Text style={{ fontSize: 11, letterSpacing: 0.6, display: 'block' }}>{title}</Text>
         {noteTitle ? <Tooltip title={noteTitle}>{body}</Tooltip> : body}
       </div>
     </div>
   );
 }
 
-export default function SystemStats({ sample }: { sample: SystemSample | null }) {
+export default function SystemStats(
+  { sample, throughput }: { sample: SystemSample | null; throughput: Throughput | null },
+) {
   const cpu = sample?.cpu;
   const mem = sample?.memory;
   const swap = sample?.swap;
@@ -116,8 +122,10 @@ export default function SystemStats({ sample }: { sample: SystemSample | null })
 
   return (
     <Card
-      title="系統"
+      title={<span style={{ fontSize: 12, opacity: 0.75 }}>系統</span>}
       size="small"
+      style={{ height: '100%' }}
+      styles={{ body: { padding: '14px 16px 10px' } }}
       extra={
         sample && (
           <Text type="secondary" style={{ fontSize: 12 }}>
@@ -168,6 +176,25 @@ export default function SystemStats({ sample }: { sample: SystemSample | null })
         ) : (
           <Dial title="磁碟" percent={null} reading="—" note="—" />
         )}
+      </div>
+
+      {/* Throughput as a line, not a fourth dial: it is a rate with no ceiling
+          to fill, and a dial with nothing to fill is a circle pretending to be
+          a measurement. */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        marginTop: 12, paddingTop: 9, borderTop: `1px solid ${LINE.faint}`,
+      }}>
+        <Text style={{ fontSize: 10, letterSpacing: 1.2, opacity: 0.45 }}>THROUGHPUT</Text>
+        <Space size={8} align="baseline">
+          <Text style={{ fontSize: 15, fontFamily: MONO, fontVariantNumeric: 'tabular-nums' }}>
+            {(throughput?.tokens_per_second ?? 0).toFixed(1)}
+            <span style={{ fontSize: 10, opacity: 0.45, marginLeft: 3 }}>t/s</span>
+          </Text>
+          <Text type="secondary" style={{ fontSize: 10 }}>
+            {throughput ? `最近 ${throughput.tokens} tokens` : '尚無資料'}
+          </Text>
+        </Space>
       </div>
 
       {/* Any disk beyond the first, as a line rather than a dial: a second
