@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react';
 import { Alert, Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
 import { PictureOutlined } from '@ant-design/icons';
 import GpuChart from '../components/GpuChart';
-import StatTile from '../components/StatTile';
+import StatTile, { StatBody } from '../components/StatTile';
 import SystemStats from '../components/SystemStats';
 import Versions from '../components/Versions';
 import { useStream } from '../stream';
 import {
   fetchComfyInstances, unloadAll, type ComfyInstance, type GpuSample, type ModelInfo,
 } from '../api';
-import { MONO } from '../theme';
-import { clockCeiling, powerCeiling, tempCeiling } from '../hardware';
+import { ACCENT, LINE, MONO } from '../theme';
+import { clockCeiling, deviceTag, powerCeiling, tempCeiling } from '../hardware';
 
 const { Text } = Typography;
 
@@ -18,101 +18,88 @@ const STATE_COLOURS: Record<string, string> = {
   ready: 'green', starting: 'processing', stopping: 'orange', stopped: 'default',
 };
 
-/**
- * A row of tiles that fills its width whatever the count.
- *
- * Flex rather than the 24-column grid: a grid needs spans chosen up front, so
- * three tiles at span 8 filled the row while two at span 6 left a quarter of it
- * blank. Flex items share out the remainder instead, so any number of tiles
- * ends up flush, and they rewrap as the window narrows.
- */
-function TileRow({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
-      {children}
-    </div>
-  );
-}
+
 
 /**
- * Basis, not a fixed width: below it the row wraps, above it the tiles grow to
- * share what is left.
+ * One GPU, as one block.
  *
- * 150px keeps all six tiles on one line from 1280px of window upward, which
- * covers every screen this is read on. Narrower than that they wrap, and a tile
- * left alone on the last line stretches across it -- still preferable to the
- * fixed grid, which left a quarter of the row blank at every width.
- */
-function Tile({ children }: { children: React.ReactNode }) {
-  return <div style={{ flex: '1 1 150px', minWidth: 0 }}>{children}</div>;
-}
-
-/**
- * One card's counters.
+ * The readings used to be four separate bordered tiles in a row with a caption
+ * above them. With two cards in the machine that came out as eight boxes and
+ * two captions, and nothing about the arrangement said which four belonged
+ * together -- the only thing joining them was a line of small text that scrolled
+ * away. One card per GPU, with the readings as cells inside it, makes the
+ * grouping structural rather than something the reader has to remember.
  *
- * Repeated per device rather than aggregated: a total tells you the machine is
- * busy but not which card is, and with models pinned to particular devices that
- * is the question actually being asked. The label is dropped when there is only
- * one card, where naming it says nothing.
+ * Repeated per device rather than aggregated: a total says the machine is busy
+ * but not which card is, and with models pinned to particular devices that is
+ * the question actually being asked.
  */
-function gpuTiles(gpu: GpuSample, showTemp: boolean) {
+function GpuBlock({ gpu, showTemp }: { gpu: GpuSample; showTemp: boolean }) {
   const used = gpu.memory_used_mib ?? 0;
   const total = gpu.memory_total_mib ?? 0;
   const vramPercent = total ? Math.round((used / total) * 100) : 0;
   const temp = gpu.temperature_c;
 
   return (
-    <>
-      <Tile>
-        <StatTile
+    <Card
+      size="small"
+      style={{ height: '100%' }}
+      styles={{ body: { padding: '14px 16px 8px' } }}
+      title={
+        <Space size={9}>
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%',
+            background: gpu.busy ? ACCENT.ok : LINE.strong,
+            boxShadow: gpu.busy ? `0 0 8px ${ACCENT.ok}b3` : 'none',
+            display: 'inline-block', transition: 'background 300ms, box-shadow 300ms',
+          }} />
+          <Text style={{ fontSize: 12 }} ellipsis>{gpu.name}</Text>
+          {/* Was hardcoded `xpu:{index}`, which went on saying xpu after an
+              NVIDIA card went in beside the Arc. */}
+          <Tag style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>
+            {deviceTag(gpu.vendor, gpu.index)}
+          </Tag>
+        </Space>
+      }
+      extra={gpu.busy && <Text style={{ fontSize: 10, opacity: 0.5 }}>運算中</Text>}
+    >
+      {/* Two by two at this width, four across when the block has the row to
+          itself. auto-fit rather than a fixed count, so one card and two cards
+          both come out square. */}
+      <div style={{
+        display: 'grid', gap: 14,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+      }}>
+        <StatBody
           label="POWER" value={(gpu.power_w ?? 0).toFixed(0)} unit="W"
           percent={((gpu.power_w ?? 0) / powerCeiling(gpu)) * 100}
           footnote={`上限 ${powerCeiling(gpu).toFixed(0)} W`}
         />
-      </Tile>
-      <Tile>
-        <StatTile
+        <StatBody
           label="VRAM" value={(used / 1024).toFixed(1)}
           unit={`/ ${(total / 1024).toFixed(0)} GiB`}
           percent={vramPercent} warn={vramPercent > 92}
           footnote={`剩餘 ${((total - used) / 1024).toFixed(1)} GiB`}
         />
-      </Tile>
-      <Tile>
-        <StatTile
+        <StatBody
           label="CLOCK" value={(gpu.frequency_mhz ?? 0).toFixed(0)} unit="MHz"
           percent={((gpu.frequency_mhz ?? 0) / clockCeiling(gpu)) * 100}
           footnote={`上限 ${clockCeiling(gpu).toFixed(0)} MHz`}
         />
-      </Tile>
-      {/* Omitted entirely when no card reports a temperature: a tile that can
-          only ever read "—" is worse than one tile fewer. This B70 does report
-          one, through sysfs rather than xpu-smi. */}
-      {showTemp && (
-        <Tile>
-          <StatTile
+        {/* Omitted entirely when no card reports a temperature: a cell that can
+            only ever read "—" is worse than one cell fewer. */}
+        {showTemp && (
+          <StatBody
             label="TEMP"
             value={temp === null ? '—' : temp.toFixed(0)}
             unit={temp === null ? undefined : '°C'}
             percent={temp === null ? undefined : (temp / tempCeiling(gpu)) * 100}
             warn={temp !== null && temp > tempCeiling(gpu) * 0.85}
-            footnote={temp === null ? '此卡未回報'
-              : `臨界 ${tempCeiling(gpu).toFixed(0)} °C`}
+            footnote={temp === null ? '此卡未回報' : `臨界 ${tempCeiling(gpu).toFixed(0)} °C`}
           />
-        </Tile>
-      )}
-    </>
-  );
-}
-
-/** The card's name, shown only when there is more than one to tell apart. */
-function GpuLabel({ gpu }: { gpu: GpuSample }) {
-  return (
-    <Space size={8} style={{ marginBottom: 8 }}>
-      <Tag style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>xpu:{gpu.index}</Tag>
-      <Text style={{ fontSize: 11, opacity: 0.4 }}>{gpu.name}</Text>
-      {gpu.busy && <Text style={{ fontSize: 10, opacity: 0.5 }}>運算中</Text>}
-    </Space>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -141,21 +128,7 @@ export default function Dashboard() {
     }
   };
 
-  const multiple = gpus.length > 1;
   const showTemp = gpus.some((g) => g.temperature_c !== null);
-
-  /** Machine-wide, not per card: llama-swap reports one figure however many
-   *  devices are serving it. */
-  const globalTiles = (
-    <>
-      <Tile>
-        <StatTile
-          label="THROUGHPUT" value={(throughput?.tokens_per_second ?? 0).toFixed(1)} unit="t/s"
-          footnote={throughput ? `最近 ${throughput.tokens} tokens` : '尚無資料'}
-        />
-      </Tile>
-    </>
-  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -168,30 +141,26 @@ export default function Dashboard() {
         />
       )}
 
-      {/* One card: everything shares a row, so five tiles come out evenly and
-          nothing is left hanging. Two or more: each card keeps its own labelled
-          row, because tiles from different cards side by side cannot be told
-          apart, and the machine-wide figures follow in a row of their own. */}
-      {multiple ? (
-        <>
-          {gpus.map((g) => (
-            <div key={g.index}>
-              <GpuLabel gpu={g} />
-              <TileRow>{gpuTiles(g, showTemp)}</TileRow>
-            </div>
-          ))}
-          <TileRow>{globalTiles}</TileRow>
-        </>
-      ) : (
-        <TileRow>
-          {gpus.length === 0 ? (
-            <Tile><StatTile label="GPU" value="—" footnote="偵測不到顯示卡" /></Tile>
-          ) : (
-            gpuTiles(gpus[0], showTemp)
-          )}
-          {globalTiles}
-        </TileRow>
-      )}
+      {/* One block per card, plus one for the figures that belong to the
+          machine rather than to any card. auto-fit: one GPU and the throughput
+          share a row, two GPUs and the throughput wrap to two, and the widths
+          follow from the content instead of from spans chosen up front. */}
+      <div style={{
+        display: 'grid', gap: 16,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+      }}>
+        {gpus.length === 0 ? (
+          <StatTile label="GPU" value="—" footnote="偵測不到顯示卡" />
+        ) : (
+          gpus.map((g) => <GpuBlock key={g.index} gpu={g} showTemp={showTemp} />)
+        )}
+        {/* Machine-wide, not per card: llama-swap reports one figure however
+            many devices are serving it. */}
+        <StatTile
+          label="THROUGHPUT" value={(throughput?.tokens_per_second ?? 0).toFixed(1)} unit="t/s"
+          footnote={throughput ? `最近 ${throughput.tokens} tokens` : '尚無資料'}
+        />
+      </div>
 
       {/* Rendered bare rather than in a Row: antd gives a gutter Row negative
           inline margins, which made this block sit 6px wider on each side than

@@ -11,6 +11,9 @@ export interface GpuSample {
   power_cap_w: number | null;
   frequency_max_mhz: number | null;
   temperature_crit_c: number | null;
+  /** Which telemetry provider produced this reading. Present on every sample so
+   *  a mixed machine can label its cards without a second request. */
+  vendor: string;
   busy: boolean;
 }
 

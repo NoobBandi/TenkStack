@@ -47,3 +47,23 @@ export function vramAxisTicks(maxMib: number): number[] {
   for (let v = 0; v <= maxMib; v += step) out.push(v);
   return out;
 }
+
+/**
+ * What each vendor's own tooling calls a card.
+ *
+ * `xpu:0` and `cuda:0` are the strings that appear in ComfyUI's device list, in
+ * torch, and in the llama.cpp device selector, so a tag showing one matches
+ * what you would type elsewhere rather than inventing a third naming scheme.
+ *
+ * Here rather than in a page, because the dashboard had `xpu:{index}` written
+ * into it and went on saying xpu after an NVIDIA card went in beside the Arc.
+ */
+const DEVICE_NAMESPACE: Record<string, string> = {
+  intel: 'xpu', nvidia: 'cuda', amd: 'hip',
+};
+
+/** Falls back to the provider key, so an unknown vendor is labelled rather
+ *  than mislabelled. */
+export function deviceTag(vendor: string | undefined, index: number): string {
+  return `${DEVICE_NAMESPACE[vendor ?? ''] ?? vendor ?? 'gpu'}:${index}`;
+}
