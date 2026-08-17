@@ -91,6 +91,35 @@ def _key(repo_id: str, filename: str) -> str:
     return f"{repo_id}/{filename}"
 
 
+def local_path(repo_id: str, filename: str) -> Path:
+    """Where a repo's file lands: `<models>/<owner>/<repo>/<name>`.
+
+    It used to land on its basename alone, which treated a filename as an
+    identity. It is not one. Two repos publishing the same quant of the same
+    model under the same name is ordinary -- unsloth and bartowski both ship
+    `Qwen3.8-27B-Q4_K_M.gguf` -- and flattening them meant the second was
+    reported as already downloaded, or, worse, resumed into the first one's
+    part file and finished as a mixture of two.
+
+    The repo's own directories are kept rather than flattened away. Unsloth
+    serves `BF16/Qwen3.8-27B-BF16-00001-of-00002.gguf`, and reducing that to its
+    basename would reintroduce the same defect one level down -- two quant
+    directories in one repo publishing the same name. Mirroring the repo is also
+    simply easier to reason about. llama.cpp finds the remaining parts of a
+    split model beside the first, which holds at any depth.
+    """
+    segments = [*repo_id.split("/"), *Path(filename).parts]
+    return MODELS_DIR.joinpath(*(_safe(s) for s in segments if s))
+
+
+def _safe(segment: str) -> str:
+    """A repo and file name are somebody else's strings, and they become
+    directories here. Traversal and separators out; everything else stays, so
+    the path on disk still reads like the one on Hugging Face."""
+    cleaned = segment.replace("/", "_").replace("\\", "_").replace("\x00", "").strip(". ")
+    return cleaned or "_"
+
+
 async def search(query: str, limit: int = 100) -> list[dict]:
     """Search for GGUF repos.
 
@@ -153,14 +182,14 @@ async def list_files(repo_id: str) -> list[dict]:
         if not name.lower().endswith(".gguf"):
             continue
         raw.append((name, sibling.get("size") or 0))
-    return _group_splits(raw)
+    return _group_splits(raw, repo_id)
 
 
 # A model too large for one file is uploaded as `…-00001-of-00003.gguf`.
 _SPLIT = re.compile(r"^(?P<stem>.+)-(?P<index>\d{5})-of-(?P<count>\d{5})\.gguf$", re.I)
 
 
-def _group_splits(raw: list[tuple[str, int]]) -> list[dict]:
+def _group_splits(raw: list[tuple[str, int]], repo_id: str) -> list[dict]:
     """One entry per model, not per file.
 
     Large models arrive split across several files, and every part is needed:
@@ -190,10 +219,16 @@ def _group_splits(raw: list[tuple[str, int]]) -> list[dict]:
         groups[key]["parts"].append(name)
         groups[key]["size_bytes"] += size
 
+    # Walked once for the whole listing rather than once per row: a repo with
+    # twenty quants would otherwise walk the models directory twenty times.
+    on_disk_by_name = _index_by_name()
+
     out = []
     for key in order:
         group = groups[key]
         parts = sorted(group["parts"])
+        local = [local_path(repo_id, p) for p in parts]
+        mine = local[0].relative_to(MODELS_DIR).as_posix()
         out.append({
             # The first part: pointing a model entry at any other one fails.
             "filename": parts[0],
@@ -204,9 +239,38 @@ def _group_splits(raw: list[tuple[str, int]]) -> list[dict]:
             "is_mmproj": group["is_mmproj"],
             # Every part, not just the first: two of three on disk is not a
             # model, and calling it one would hide the missing third.
-            "on_disk": all((MODELS_DIR / Path(p).name).exists() for p in parts),
+            "on_disk": all(p.exists() for p in local),
+            # Where it will go, so the UI can say it rather than imply it. This
+            # is also what a model entry's --model has to point at.
+            "local_path": mine,
+            # The same filename already here under a different repo, or loose
+            # from before the layout existed. Not a refusal -- the two files
+            # cannot collide any more -- but worth saying, because downloading
+            # a second copy of something you already have is usually a mistake
+            # and occasionally the entire point.
+            "elsewhere": [
+                where for where in on_disk_by_name.get(local[0].name, []) if where != mine
+            ],
         })
-    return sorted(out, key=lambda f: f["size_bytes"])
+    return sorted(out, key=lambda f: f["size_bytes"], reverse=True)
+
+
+def _index_by_name() -> dict[str, list[str]]:
+    """Every GGUF on disk, grouped by basename.
+
+    Built by walking rather than by globbing each name: a filename is somebody
+    else's string, and `rglob` would read a `[` in it as a character class.
+    """
+    index: dict[str, list[str]] = {}
+    if not MODELS_DIR.is_dir():
+        return index
+    for path in MODELS_DIR.rglob("*.gguf"):
+        if path.is_file():
+            index.setdefault(path.name, []).append(
+                path.relative_to(MODELS_DIR).as_posix())
+    for names in index.values():
+        names.sort()
+    return index
 
 
 async def _total_size(client: httpx.AsyncClient, url: str) -> int:
@@ -289,7 +353,8 @@ async def _fetch_segment(
 
 async def _download(entry: Download) -> None:
     url = f"https://huggingface.co/{entry.repo_id}/resolve/main/{entry.filename}"
-    target = MODELS_DIR / Path(entry.filename).name
+    target = local_path(entry.repo_id, entry.filename)
+    target.parent.mkdir(parents=True, exist_ok=True)
     partial = target.with_suffix(target.suffix + ".part")
     state_path = partial.with_suffix(partial.suffix + ".state")
 

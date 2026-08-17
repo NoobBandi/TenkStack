@@ -185,7 +185,13 @@ export function subscribe(
 // ---------------------------------------------------------------------------
 
 export interface ModelFile {
+  /** Relative to the models directory. Downloads land under `<owner>/<repo>/`,
+   *  so this is a path; files predating that layout are bare names. */
   filename: string;
+  /** The repo it came from, empty for a file put there by hand or downloaded
+   *  before the layout existed. Two repos ship the same quant under the same
+   *  filename often enough that the name alone does not identify one. */
+  repo: string;
   size_bytes: number;
   size_gib: number;
   modified: number;
@@ -280,8 +286,17 @@ export interface CatalogFile {
   size_bytes: number;
   size_gib: number;
   is_mmproj: boolean;
-  /** True only when every part is present. Two of three is not a model. */
+  /** True only when every part is present. Two of three is not a model.
+   *  Checked under this repo's own directory, so another repo's file of the
+   *  same name no longer reads as this one already being here. */
   on_disk: boolean;
+  /** Where it will land, relative to the models directory. Also what a model
+   *  entry's --model has to point at. */
+  local_path: string;
+  /** Copies of this filename already on disk from somewhere else. Not a
+   *  refusal -- they cannot collide any more -- but downloading a second copy
+   *  of something you have is usually a mistake and occasionally the point. */
+  elsewhere: string[];
 }
 
 export interface DownloadStatus {

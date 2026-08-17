@@ -27,6 +27,11 @@ const EMPTY: ModelSpec = {
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
+/** Basename first, then which repo it came from -- which is the only thing
+ *  separating two files that are otherwise identically named. */
+const fileLabel = (f: ModelFile) =>
+  `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''} (${f.size_gib} GiB)`;
+
 export default function Models() {
   const { message } = AntApp.useApp();
   const { models, refreshModels } = useStream();
@@ -250,7 +255,21 @@ export default function Models() {
           pagination={false}
           locale={{ emptyText: '~/ai/models 中沒有 GGUF 檔' }}
           columns={[
-            { title: '檔名', dataIndex: 'filename' },
+            {
+              title: '檔名',
+              dataIndex: 'filename',
+              // The name on one line and its repo under it, rather than one
+              // long path: the name is what identifies the quant and the repo
+              // is what disambiguates two of them.
+              render: (name: string, row) => (
+                <div style={{ minWidth: 0 }}>
+                  <div>{name.split('/').pop()}</div>
+                  {row.repo && (
+                    <Text type="secondary" style={{ fontSize: 11 }}>{row.repo}</Text>
+                  )}
+                </div>
+              ),
+            },
             { title: '大小', dataIndex: 'size_gib', width: 110, render: (v: number) => `${v} GiB` },
             {
               title: '使用中的模型', dataIndex: 'used_by', width: 220,
@@ -406,8 +425,13 @@ export default function Models() {
             <Select
               showSearch
               placeholder="從 ~/ai/models 選擇"
+              // The basename first, the repo after it: with weights under
+              // <owner>/<repo>/ the path leads with a directory, and a list of
+              // twenty quants would sort and read by publisher rather than by
+              // what the file is. A string rather than a node because Select's
+              // search matches against the label.
               options={ggufFiles.map((f) => ({
-                value: f.filename, label: `${f.filename} (${f.size_gib} GiB)`,
+                value: f.filename, label: fileLabel(f),
               }))}
             />
           </Form.Item>
@@ -417,7 +441,7 @@ export default function Models() {
               allowClear
               placeholder="無"
               options={mmprojFiles.map((f) => ({
-                value: f.filename, label: `${f.filename} (${f.size_gib} GiB)`,
+                value: f.filename, label: fileLabel(f),
               }))}
             />
           </Form.Item>

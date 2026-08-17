@@ -159,12 +159,45 @@ async def upsert_model(
     logger.info("upserted model %s (group=%s)", model_id, group)
 
 
-# Pulls the GGUF basename out of a cmd block, whatever macro prefixes the path.
-_FILE_FLAGS = re.compile(r"--(?:model|mmproj)\s+\S*?([^/\s]+\.gguf)")
+# Pulls GGUF paths out of a cmd block. The whole token, not just the basename:
+# weights downloaded from Hugging Face now land under `<owner>/<repo>/`, because
+# two repos publishing the same quant of the same model under the same filename
+# is the normal case rather than a collision worth ignoring. A basename is no
+# longer an identity.
+_FILE_FLAGS = re.compile(r"--(?:model|mmproj)\s+(\S+\.gguf)")
+
+# `${models-dir}/…`, which is llama-swap's macro for exactly this directory.
+_MACRO = re.compile(r"^\$\{[^}]+\}/")
 
 
 def _files_in_cmd(cmd: Any) -> set[str]:
-    return set(_FILE_FLAGS.findall(str(cmd or "")))
+    """Every GGUF a model entry references, relative to the models directory.
+
+    A path that is neither relative nor under the macro belongs to somebody's
+    own arrangement -- weights on another mount, say -- and is reduced to its
+    basename, which is what this returned for everything before. It will not
+    resolve to a file here, and that is the honest answer: this module cannot
+    manage what it was not given.
+    """
+    out = set()
+    for token in _FILE_FLAGS.findall(str(cmd or "")):
+        relative = _MACRO.sub("", token)
+        out.add(Path(relative).name if relative.startswith("/") else relative)
+    return out
+
+
+def _resolve_model_path(relative: str) -> Path | None:
+    """`MODELS_DIR / relative`, or None if that escapes the directory.
+
+    Now that these are paths rather than names, `..` has to be refused
+    somewhere, and refusing it here covers deletion, listing and reference
+    counting at once.
+    """
+    candidate = (MODELS_DIR / relative).resolve()
+    base = MODELS_DIR.resolve()
+    if candidate != base and base not in candidate.parents:
+        return None
+    return candidate
 
 
 _CTX_FLAG = re.compile(r"--ctx-size\s+(\d+)")
@@ -277,11 +310,12 @@ def files_for_model(model_id: str) -> list[dict]:
             other_id for other_id, other in models.items()
             if other_id != model_id and filename in _files_in_cmd(other.get("cmd"))
         )
-        path = MODELS_DIR / filename
+        path = _resolve_model_path(filename)
+        exists = bool(path and path.is_file())
         result.append({
             "filename": filename,
-            "exists": path.exists(),
-            "size_bytes": path.stat().st_size if path.exists() else 0,
+            "exists": exists,
+            "size_bytes": path.stat().st_size if exists else 0,
             "shared_with": others,
         })
     return result
@@ -313,9 +347,13 @@ async def delete_model(model_id: str, delete_files: bool = False) -> dict | None
             kept.append({"filename": entry["filename"],
                          "reason": f"仍被 {', '.join(entry['shared_with'])} 使用"})
             continue
-        path = MODELS_DIR / entry["filename"]
+        path = _resolve_model_path(entry["filename"])
+        if path is None:
+            kept.append({"filename": entry["filename"], "reason": "路徑不在模型目錄底下"})
+            continue
         try:
             path.unlink()
+            _prune_empty(path.parent)
             deleted.append({"filename": entry["filename"], "size_bytes": entry["size_bytes"]})
             logger.info("deleted %s (%.1f GiB)", path.name, entry["size_bytes"] / 1024**3)
         except FileNotFoundError:
@@ -330,17 +368,20 @@ async def delete_model(model_id: str, delete_files: bool = False) -> dict | None
 
 def delete_file(filename: str) -> dict:
     """Delete one GGUF from disk, refusing if a model still points at it."""
-    # Basename only: a caller must not be able to reach outside the models
-    # directory by sending a path.
-    name = Path(filename).name
-    path = MODELS_DIR / name
-    if not path.exists():
+    # A relative path now, not a basename, since weights sit under
+    # `<owner>/<repo>/`. Containment is checked on the resolved path rather than
+    # by stripping directories -- which is what used to keep this safe and would
+    # now delete the wrong file, given two repos may publish the same name.
+    path = _resolve_model_path(filename)
+    if path is None:
+        return {"ok": False, "reason": "路徑不在模型目錄底下"}
+    if not path.is_file():
         return {"ok": False, "reason": "檔案不存在"}
 
     data = _load()
     users_of_file = sorted(
         model_id for model_id, spec in (data.get("models") or {}).items()
-        if name in _files_in_cmd(spec.get("cmd"))
+        if filename in _files_in_cmd(spec.get("cmd"))
     )
     if users_of_file:
         return {"ok": False, "reason": f"仍被 {', '.join(users_of_file)} 使用"}
@@ -348,10 +389,28 @@ def delete_file(filename: str) -> dict:
     size = path.stat().st_size
     try:
         path.unlink()
+        _prune_empty(path.parent)
     except OSError as exc:
         return {"ok": False, "reason": str(exc)}
-    logger.info("deleted orphan file %s (%.1f GiB)", name, size / 1024**3)
-    return {"ok": True, "filename": name, "size_bytes": size}
+    logger.info("deleted orphan file %s (%.1f GiB)", filename, size / 1024**3)
+    return {"ok": True, "filename": filename, "size_bytes": size}
+
+
+def _prune_empty(directory: Path) -> None:
+    """Remove the repo directories a deleted file leaves behind.
+
+    Only empty ones, and never the models directory itself. Without this, a
+    year of trying quants leaves a tree of empty `<owner>/<repo>` folders that
+    look like models that failed to download.
+    """
+    base = MODELS_DIR.resolve()
+    current = directory.resolve()
+    while current != base and base in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
 
 
 # The two group names the UI offers carry meaning, and creating either with the
@@ -419,15 +478,24 @@ def list_gguf_files() -> list[dict]:
             references.setdefault(filename, []).append(model_id)
 
     files = []
-    for path in sorted(MODELS_DIR.glob("*.gguf")):
+    # Recursive since downloads land under `<owner>/<repo>/`. Files sitting
+    # loose at the top level are still found -- everything downloaded before
+    # this is one, and moving them would break the config entries pointing at
+    # them for no gain.
+    for path in sorted(MODELS_DIR.rglob("*.gguf")):
         stat = path.stat()
+        relative = path.relative_to(MODELS_DIR).as_posix()
         files.append({
-            "filename": path.name,
+            "filename": relative,
+            # The repo it came from, or empty for a file that predates the
+            # layout or was put there by hand. The interface needs to be able
+            # to say which of two identically-named quants this is.
+            "repo": str(Path(relative).parent) if "/" in relative else "",
             "size_bytes": stat.st_size,
             "size_gib": round(stat.st_size / 1024**3, 2),
             "modified": stat.st_mtime,
             "is_mmproj": path.name.lower().startswith("mmproj"),
-            "used_by": sorted(references.get(path.name, [])),
+            "used_by": sorted(references.get(relative, [])),
         })
     return files
 
@@ -439,32 +507,34 @@ def list_partials() -> list[dict]:
         return []
     return [
         {
-            "filename": path.name,
+            "filename": path.relative_to(MODELS_DIR).as_posix(),
             "size_bytes": path.stat().st_size,
             "size_gib": round(path.stat().st_size / 1024**3, 2),
         }
-        for path in sorted(MODELS_DIR.glob("*.part"))
+        for path in sorted(MODELS_DIR.rglob("*.part"))
     ]
 
 
 def delete_partial(filename: str) -> dict:
-    name = Path(filename).name
-    if not name.endswith(".part"):
+    if not filename.endswith(".part"):
         return {"ok": False, "reason": "只能刪除 .part 檔"}
-    path = MODELS_DIR / name
-    if not path.exists():
+    path = _resolve_model_path(filename)
+    if path is None:
+        return {"ok": False, "reason": "路徑不在模型目錄底下"}
+    if not path.is_file():
         return {"ok": False, "reason": "檔案不存在"}
     size = path.stat().st_size
     try:
         path.unlink()
+        _prune_empty(path.parent)
     except OSError as exc:
         return {"ok": False, "reason": str(exc)}
-    return {"ok": True, "filename": name, "size_bytes": size}
+    return {"ok": True, "filename": filename, "size_bytes": size}
 
 
 _ARG_PATTERNS = {
-    "model_file": re.compile(r"--model\s+\S*?([^/\s]+\.gguf)"),
-    "mmproj": re.compile(r"--mmproj\s+\S*?([^/\s]+\.gguf)"),
+    "model_file": re.compile(r"--model\s+(?:\$\{[^}]+\}/)?(\S+\.gguf)"),
+    "mmproj": re.compile(r"--mmproj\s+(?:\$\{[^}]+\}/)?(\S+\.gguf)"),
     "ctx_size": re.compile(r"--ctx-size\s+(\d+)"),
     "n_gpu_layers": re.compile(r"--n-gpu-layers\s+(\d+)"),
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Space, Table,
-  Tag, Typography,
+  Tag, Tooltip, Typography,
 } from 'antd';
 import {
   CloseOutlined, CloudDownloadOutlined, InfoCircleOutlined, StopOutlined,
@@ -462,6 +462,18 @@ export default function Catalog() {
                       )}
                       {row.is_mmproj && <Tag color="purple" style={{ flex: 'none' }}>視覺投影</Tag>}
                       {row.on_disk && <Tag color="green" style={{ flex: 'none' }}>已在磁碟</Tag>}
+                      {!row.on_disk && row.elsewhere.length > 0 && (
+                        /* Not a warning. The files no longer collide -- each
+                           repo has its own directory -- so this only says that
+                           a file of this name is already here from somewhere
+                           else, which is sometimes exactly what you are
+                           checking and sometimes a download you can skip. */
+                        <Tooltip
+                          title={<>已有同名檔案：<br />{row.elsewhere.join('，')}</>}
+                        >
+                          <Tag color="default" style={{ flex: 'none' }}>另有同名</Tag>
+                        </Tooltip>
+                      )}
                     </div>
                   ),
                 },
