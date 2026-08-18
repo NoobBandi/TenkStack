@@ -38,6 +38,11 @@ const PREVIEW_GUTTER = 16;
 /** Space outside each panel's rule. Carried by the panel, not by a flex gap on
  *  the row, so a closed panel collapses to nothing instead of leaving a gap. */
 const PANEL_MARGIN = 20;
+
+/** How much prose it takes to believe the answer has started, in a run that
+ *  used the sandbox. A line written on the way to a tool call is a hand-off --
+ *  "let me work this out" -- and stops there; an answer keeps going. */
+const ANSWER_CHARS = 120;
 const PANEL_TRANSITION = 'width 220ms cubic-bezier(0.4,0,0.2,1), opacity 160ms ease,'
   + ' padding 220ms cubic-bezier(0.4,0,0.2,1), margin 220ms cubic-bezier(0.4,0,0.2,1)';
 
@@ -371,17 +376,22 @@ function ChatInner() {
               exchanges.map((exchange, index) => {
                 const isLast = index === exchanges.length - 1;
                 const answer = exchange.answer;
-                // The trace is live while this exchange is the one being
-                // produced. Content usually means the answer has started and
-                // the working can fold away -- but not in a run that has used
-                // the sandbox. There a model writes a line, runs something,
-                // writes another line, and which of those was the answer is
-                // only known from a finish_reason that arrives after the fact.
-                // Folding on the first one shut the trace mid-run and reopened
-                // it on the next call. So once something has been executed the
-                // trace stays open until the streaming stops.
+                // The trace is live while this exchange is being produced, and
+                // folds once the answer starts.
+                //
+                // Knowing when that is takes a guess in a run that used the
+                // sandbox: a model writes a line, runs something, writes
+                // another line, and which of those was the answer is only known
+                // from a finish_reason that arrives after the text does. Folding
+                // on the first word shut the working on every hand-off line and
+                // reopened it on the next call; waiting for the stream to stop
+                // left it propped open over an answer already being read.
+                //
+                // So length decides, and a run that executed nothing needs no
+                // guess at all -- it folds on the first word, as it always did.
                 const ran = exchange.steps.some((step) => step.kind === 'code');
-                const tracing = isLast && streaming && (ran || !answer?.content);
+                const written = answer?.content?.length ?? 0;
+                const tracing = isLast && streaming && written <= (ran ? ANSWER_CHARS : 0);
 
                 return (
                   <div key={index}>
