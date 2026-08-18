@@ -324,22 +324,28 @@ async def remove_model(model_id: str, delete_files: bool = False):
     return {"ok": True, **result}
 
 
-@app.delete("/api/files/{filename}")
-async def remove_file(filename: str):
-    result = config.delete_file(filename)
-    if not result["ok"]:
-        raise HTTPException(status_code=409, detail=result["reason"])
-    return result
-
-
+# Ahead of the catch-all below, and both of them matching a path rather than a
+# name. A weight lives at `<owner>/<repo>/<file>` now, so what arrives here has
+# slashes in it -- and a single-segment parameter simply did not match, which
+# the SPA route then reported as a 405 because it matches every path there is
+# and only answers GET. Order matters once these accept slashes: the general
+# one would otherwise claim `partials/...` first.
 @app.get("/api/files/partials")
 async def read_partials():
     return config.list_partials()
 
 
-@app.delete("/api/files/partials/{filename}")
+@app.delete("/api/files/partials/{filename:path}")
 async def remove_partial(filename: str):
     result = config.delete_partial(filename)
+    if not result["ok"]:
+        raise HTTPException(status_code=409, detail=result["reason"])
+    return result
+
+
+@app.delete("/api/files/{filename:path}")
+async def remove_file(filename: str):
+    result = config.delete_file(filename)
     if not result["ok"]:
         raise HTTPException(status_code=409, detail=result["reason"])
     return result
