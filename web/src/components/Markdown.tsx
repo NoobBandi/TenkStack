@@ -10,7 +10,7 @@ import { usePreview } from './preview';
 import './markdown.css';
 
 /** Languages the preview frame can render. */
-const RUNNABLE = new Set(['html', 'svg', 'jsx', 'tsx', 'python', 'py']);
+const RUNNABLE = new Set(['html', 'svg', 'jsx', 'tsx', 'python', 'py', 'md', 'markdown']);
 
 /** Fence language to file extension, where they differ or are ambiguous. */
 const EXTENSIONS: Record<string, string> = {
@@ -210,7 +210,7 @@ export default memo(Markdown, (prev, next) => prev.children === next.children);
  * and then a corrected one means the second, and a reply that builds up in
  * pieces means the whole.
  */
-const VISUAL = new Set(['html', 'svg', 'jsx', 'tsx']);
+const VISUAL = new Set(['html', 'svg', 'jsx', 'tsx', 'md', 'markdown']);
 
 export function lastVisualBlock(
   markdown: string,

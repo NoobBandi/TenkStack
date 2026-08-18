@@ -1,14 +1,18 @@
 import {
-  createContext, useCallback, useContext, useMemo, useRef, useState,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  chatStream, DEFAULT_PARAMS, fetchChat, patchChat, saveChat,
+  chatStream, DEFAULT_PARAMS, fetchChat, patchChat, saveChat, searchAvailable,
+  webRead, webSearch,
   type ModelInfo,
   type ChatMessage, type ChatParams, type Timings, type ToolCall, type Usage,
 } from './api';
 import { usePythonRuntime, type RunResult } from './components/pythonRuntime';
 import type { Step } from './components/Trace';
-import { describeResult, MAX_STEPS, parseCode, SANDBOX_TOOL } from './sandboxTool';
+import {
+  describePage, describeResult, describeSearch, MAX_STEPS, parseCode,
+  SANDBOX_TOOL, SEARCH_TOOLS,
+} from './sandboxTool';
 
 /**
  * The conversation, held above the router.
@@ -23,7 +27,17 @@ export interface Turn extends ChatMessage {
   /** What a `tool` turn actually did, kept beside the text the model reads so
    *  the interface can show the code and its output rather than the prose
    *  summary of them. */
-  run?: { code: string; result?: RunResult };
+  run?: {
+    /** What the tool was asked for: the code, the query, the URL. */
+    code: string;
+    /** Which tool, for the row's label. */
+    tool: string;
+    /** Present for Python, which returns structured output. */
+    result?: RunResult;
+    /** Present for the tools that return text, so the row can show what came
+     *  back without the trace having to know each tool's shape. */
+    output?: string;
+  };
   usage?: Usage;
   timings?: Timings;
   finish_reason?: string;
@@ -157,6 +171,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [agent, setAgent] = useState(false);
   const [step, setStep] = useState(0);
   const sandbox = usePythonRuntime();
+  // Probed once. SearXNG is a container that may not be running, and the
+  // answer decides whether the search tools are offered at all.
+  const [searchable, setSearchable] = useState(false);
+  useEffect(() => {
+    searchAvailable().then((d) => setSearchable(d.available)).catch(() => undefined);
+  }, []);
   const [streamStartedAt, setStreamStartedAt] = useState(0);
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [historyKey, setHistoryKey] = useState(0);
@@ -271,7 +291,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       messages,
       params,
       signal: controller.signal,
-      ...(withTools ? { tools: [SANDBOX_TOOL] } : {}),
+      // Search only when the service answered. A tool that is offered and
+      // then always fails is worse than one never mentioned -- the model
+      // spends a step discovering it and often a second one retrying.
+      ...(withTools
+        ? { tools: [SANDBOX_TOOL, ...(searchable ? SEARCH_TOOLS : [])] }
+        : {}),
     })) {
       if ((delta.content || delta.reasoning) && ttft === undefined) {
         ttft = performance.now() - startedAt;
@@ -303,7 +328,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       role: 'assistant', content, reasoning, tool_calls: calls, ...pending,
       ttft_ms: ttft, thinking_ms: thinkingMs, model: activeModel,
     };
-  }, [params]);
+  }, [params, searchable]);
 
   /**
    * A turn, which may take several completions.
@@ -359,28 +384,59 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
         for (const call of calls) {
           if (controller.signal.aborted) throw new DOMException('aborted', 'AbortError');
-          const parsed = parseCode(call.function.arguments);
-          const code = 'error' in parsed ? call.function.arguments : parsed.code;
+          const name = call.function.name;
 
-          // Shown before it runs, not after. The code is the part worth seeing
-          // while it is happening -- afterwards it is only evidence.
+          // What the row says while it is happening. Named before it is done,
+          // because a step that is running is the one worth being able to see.
+          const heading = name === 'web_search' ? '搜尋'
+            : name === 'read_page' ? '讀取網頁'
+            : 'Python';
+          let shown = call.function.arguments;
+          try {
+            const args = JSON.parse(call.function.arguments);
+            shown = args.code ?? args.query ?? args.url ?? shown;
+          } catch {
+            // Left as the raw arguments, which is what the failure looks like.
+          }
+
           setTurns([...conversation, {
-            role: 'tool', tool_call_id: call.id, content: '', run: { code },
+            role: 'tool', tool_call_id: call.id, content: '',
+            run: { code: shown, tool: heading },
           }]);
 
-          const result: RunResult = 'error' in parsed
-            // A malformed argument is the model's mistake and a fixable one, so
-            // it goes back as a result rather than ending the turn.
-            ? { stdout: '', stderr: '', value: null, images: [],
-                error: parsed.error,
-                elapsed_ms: 0, timed_out: false, truncated: false }
-            : await sandbox.run(parsed.code);
+          let content: string;
+          let result: RunResult | undefined;
+
+          if (name === 'web_search' || name === 'read_page') {
+            // These run on the backend, not in the sandbox: a frame with no
+            // origin cannot reach a search engine, and a proxy that let it
+            // would let any page reach one.
+            try {
+              const args = JSON.parse(call.function.arguments);
+              content = name === 'web_search'
+                ? describeSearch(await webSearch(String(args.query ?? '')))
+                : describePage(await webRead(String(args.url ?? '')));
+            } catch (err) {
+              // A failed search is a fact the model can act on -- try other
+              // words, or answer without it -- so it goes back as a result
+              // rather than ending the turn.
+              content = `這個工具失敗了：${(err as Error).message}`;
+            }
+          } else {
+            const parsed = parseCode(call.function.arguments);
+            result = 'error' in parsed
+              ? { stdout: '', stderr: '', value: null, images: [],
+                  error: parsed.error,
+                  elapsed_ms: 0, timed_out: false, truncated: false }
+              : await sandbox.run(parsed.code);
+            content = describeResult(result);
+          }
 
           conversation = [...conversation, {
             role: 'tool',
             tool_call_id: call.id,
-            content: describeResult(result),
-            run: { code, result },
+            content,
+            run: { code: shown, tool: heading, result, output: result ? undefined : content },
           }];
           setTurns([...conversation]);
         }

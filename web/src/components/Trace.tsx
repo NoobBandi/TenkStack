@@ -103,6 +103,9 @@ function Detail({ step }: { step: Step }) {
   return (
     <div style={{ padding: '2px 6px 10px 27px' }}>
       <Block value={step.text} />
+      {/* The tools that answer in prose -- a result list, a page -- put it
+          here. Python has structure and gets the labelled blocks below. */}
+      {step.turn?.run?.output && <Block value={step.turn.run.output} />}
       {result?.error && <Block label="錯誤" value={result.error} tone={ACCENT.error} />}
       {result?.stdout.trim() && <Block label="輸出" value={result.stdout} />}
       {result?.stderr.trim() && <Block label="STDERR" value={result.stderr} tone={ACCENT.warn} />}
@@ -132,6 +135,7 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
   if (!steps.length) return null;
 
   const runs = steps.filter((s) => s.kind === 'code').length;
+  const searches = steps.filter((s) => s.turn?.run?.tool === '搜尋').length;
   const failures = steps.filter((s) => s.turn?.run?.result?.error).length;
   const total = steps.reduce(
     (sum, s) => sum + (s.turn?.run?.result?.elapsed_ms ?? s.ms ?? 0), 0,
@@ -143,7 +147,8 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
   const label = live
     ? (runs ? '執行中' : '思考中')
     : [
-        runs ? `執行了 ${runs} 段程式碼` : '思考完成',
+        runs ? `${runs} 個步驟` : '思考完成',
+        searches ? `搜了 ${searches} 次` : null,
         failures ? `${failures} 次失敗` : null,
       ].filter(Boolean).join('・');
 
@@ -171,7 +176,8 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
           <div className="tt-rail">
             {steps.map((step, i) => {
               const result = step.turn?.run?.result;
-              const running = step.kind === 'code' && !result;
+              const running = step.kind === 'code'
+                && !result && !step.turn?.run?.output;
               // Staggered, so the rows arrive as a sequence rather than as a
               // block appearing at once.
               const delay = { animationDelay: `${Math.min(i, 6) * 90}ms` };
@@ -213,8 +219,16 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
                 );
               }
 
-              const first = step.text.trim().split('\n')[0] || 'python';
+              const tool = step.turn?.run?.tool ?? 'Python';
+              const first = step.text.trim().split('\n')[0] || tool.toLowerCase();
               const lines = step.text.trim().split('\n').length;
+              // Lines are a measure of code and say nothing about a query or a
+              // URL, which are one line by construction.
+              const measure = step.turn?.run?.result
+                ? `${lines} 行・${(step.turn.run.result.elapsed_ms / 1000).toFixed(2)}s`
+                : step.turn?.run?.output
+                  ? '完成'
+                  : lines > 1 ? `${lines} 行` : '';
               return (
                 <div key={i}>
                   <button
@@ -225,7 +239,7 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
                     onClick={() => setOpenStep(openStep === i ? null : i)}
                   >
                     {running ? <span className="tt-spin" /> : <Check />}
-                    <span className="tt-primary" style={{ flex: 'none' }}>Python</span>
+                    <span className="tt-primary" style={{ flex: 'none' }}>{tool}</span>
                     <span className="tt-primary" style={{
                       fontFamily: MONO, fontWeight: 400, opacity: 0.5,
                     }}>
@@ -234,9 +248,7 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
                     <span className="tt-secondary" style={{
                       color: result?.error ? ACCENT.error : undefined,
                     }}>
-                      {result
-                        ? `${lines} 行・${(result.elapsed_ms / 1000).toFixed(2)}s`
-                        : `${lines} 行`}
+                      {measure}
                     </span>
                   </button>
                   {openStep === i && <Detail step={step} />}

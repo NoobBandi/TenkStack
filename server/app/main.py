@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from . import (
     auth, catalog, channels, chats, config, files, gpu, gpu_history, llamaswap,
-    logs as journal, system, users, versions,
+    logs as journal, search, system, users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -1134,6 +1134,46 @@ async def file_upload(
         # rather than starting the file again.
         return JSONResponse(result, status_code=409)
     return result
+
+
+
+# --------------------------------------------------------------------------
+# The web
+#
+# On this side because the sandbox cannot: its frame has no origin, so every
+# request it makes carries `Origin: null` and reaches only the few hosts that
+# allow that. Search engines do not, and a proxy permissive enough for an
+# opaque origin to call would be permissive enough for any page to call.
+#
+# Behind require_owner for the same reason the filesystem is. An API key is
+# pasted into a chat client and travels; one that also turns this machine into
+# a fetcher of arbitrary URLs hands out more than whoever minted it intended.
+# --------------------------------------------------------------------------
+
+@app.get("/api/search")
+async def web_search(q: str, limit: int = 8, _: dict = Depends(auth.require_owner)):
+    try:
+        return await search.search(q, limit)
+    except search.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/search/read")
+async def web_read(url: str, _: dict = Depends(auth.require_owner)):
+    """One page, as text. Reading is a separate call from searching because a
+    model should choose what to open rather than being handed eight pages it
+    did not ask for."""
+    try:
+        return await search.read(url)
+    except search.Unavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/api/search/available")
+async def web_search_available(_: dict = Depends(auth.require_owner)):
+    """Whether to offer the tool at all. One that is offered and then always
+    fails is worse than one that was never mentioned."""
+    return {"available": await search.available()}
 
 
 # --------------------------------------------------------------------------

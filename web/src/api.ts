@@ -159,6 +159,37 @@ async function get<T>(path: string): Promise<T> {
 }
 
 export const fetchGpu = () => get<GpuSample[]>('/gpu');
+
+// ---------------------------------------------------------------------------
+// Web search
+//
+// On the backend because the sandbox cannot: its frame has no origin, so every
+// request it makes carries `Origin: null`, and search engines -- like almost
+// everything -- do not allow that. These go out from the server, which is not
+// a browser and not subject to CORS.
+// ---------------------------------------------------------------------------
+
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  /** Which engines found it. Two agreeing is a different fact from one. */
+  engines: string[];
+  published: string | null;
+}
+
+export const webSearch = (query: string, limit = 8) =>
+  get<{ query: string; results: SearchResult[]; answers: string[] }>(
+    `/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+
+export const webRead = (url: string) =>
+  get<{
+    url: string; title?: string; content_type: string;
+    text: string; truncated?: boolean; note?: string;
+  }>(`/search/read?url=${encodeURIComponent(url)}`);
+
+export const searchAvailable = () =>
+  get<{ available: boolean }>('/search/available');
 export const fetchModels = () => get<ModelInfo[]>('/models');
 
 export async function unloadAll(): Promise<boolean> {

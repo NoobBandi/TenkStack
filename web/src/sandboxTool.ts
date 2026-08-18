@@ -1,11 +1,11 @@
 import type { RunResult } from './components/pythonRuntime';
-import type { ToolSpec } from './api';
+import type { SearchResult, ToolSpec } from './api';
 
 /**
- * The one tool the model gets: a Python that cannot reach anything.
+ * The tools the model gets.
  *
- * One tool rather than a set, because the interesting property here is not what
- * the tool does but what it cannot do. The interpreter runs in a frame with no
+ * Python is the one that matters, and the interesting property is not what it
+ * does but what it cannot do. The interpreter runs in a frame with no
  * origin -- no filesystem, no host, no session, no way back into this page --
  * which is what makes it defensible to let a model call it without stopping to
  * ask permission each time. A tool that could load a model or delete a file
@@ -18,6 +18,65 @@ import type { ToolSpec } from './api';
  */
 
 export const MAX_STEPS = 8;
+
+/**
+ * Searching and reading, which the sandbox cannot do.
+ *
+ * A frame with no origin sends `Origin: null` on every request, and almost
+ * nothing accepts that -- correctly, since it is what stops a page reading
+ * another site on the reader's behalf. So these two run on the backend, which
+ * is not a browser, and are separate from Python rather than reachable from
+ * inside it.
+ *
+ * Two tools rather than one that does both. A search returns eight links and
+ * most turns need none of them opened: the snippets answer it, or say which
+ * single link is worth the twelve thousand characters. Fetching all eight to
+ * find that out would spend the context on seven pages nobody wanted.
+ */
+export const SEARCH_TOOLS: ToolSpec[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: [
+        'Search the web and get back titles, URLs and snippets.',
+        'Use it for anything that happened recently, anything version-specific,',
+        'and anything you would otherwise be recalling rather than knowing.',
+        'The snippets are often enough on their own; open a page with',
+        'read_page only when they are not.',
+        'Each result lists the engines that found it -- two independent engines',
+        'agreeing is worth more than one.',
+      ].join('\n'),
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'What to search for.' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_page',
+      description: [
+        'Fetch one web page and return its visible text.',
+        'Only for a URL you already have, normally one web_search returned.',
+        'Navigation, scripts and styling are stripped; long pages are cut off',
+        'after about twelve thousand characters, which is the top of the page',
+        'and is where the answer usually is.',
+      ].join('\n'),
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'An http or https URL.' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+];
 
 export const SANDBOX_TOOL: ToolSpec = {
   type: 'function',
@@ -149,4 +208,47 @@ export function parseCode(argumentsJson: string): { code: string } | { error: st
       error: `參數不是合法的 JSON，無法解析：${argumentsJson.slice(0, 200)}`,
     };
   }
+}
+
+/**
+ * A tool result, as the model reads it.
+ *
+ * Labelled text rather than JSON for the same reason the Python one is: what
+ * matters here is prose -- a snippet, a page, a traceback -- and wrapping prose
+ * in JSON escapes every newline in it, making the part worth reading the
+ * hardest part to read.
+ */
+export function describeSearch(
+  data: { query: string; results: SearchResult[]; answers: string[] },
+): string {
+  const parts: string[] = [];
+  if (data.answers.length) {
+    // An engine's own direct answer -- a definition, a conversion, a date.
+    // Worth more than the links, so it goes first.
+    parts.push(`直接答案:\n${data.answers.join('\n')}`);
+  }
+  if (!data.results.length) {
+    parts.push(`「${data.query}」沒有搜到結果。換個關鍵字再試。`);
+    return parts.join('\n\n');
+  }
+  parts.push(data.results.map((r, i) => [
+    `[${i + 1}] ${r.title}`,
+    `    ${r.url}`,
+    r.published ? `    ${r.published.slice(0, 10)}` : null,
+    r.snippet ? `    ${r.snippet}` : null,
+    `    來源引擎: ${r.engines.join(', ') || '未知'}`,
+  ].filter(Boolean).join('\n')).join('\n\n'));
+  return parts.join('\n\n');
+}
+
+export function describePage(
+  page: { url: string; title?: string; text: string; truncated?: boolean; note?: string },
+): string {
+  if (page.note) return `${page.url}\n\n${page.note}`;
+  if (!page.text.trim()) {
+    return `${page.url}\n\n這一頁沒有可讀的文字，可能是靠 JavaScript 產生內容的網站。`;
+  }
+  const parts = [page.title ? `${page.title}\n${page.url}` : page.url, page.text];
+  if (page.truncated) parts.push('（頁面較長，以上是開頭的部分。）');
+  return parts.join('\n\n');
 }

@@ -450,6 +450,86 @@ function buildPythonDocument(source: string): string {
  * produces markup the parser silently discards -- so the policy is spliced into
  * the document it already has instead.
  */
+/**
+ * Markdown, rendered as the document it describes.
+ *
+ * A fenced markdown block is the one kind of code here that is already the
+ * finished thing: a README, a report, a set of notes. Reading it as source is
+ * reading the punctuation instead of the prose, and it was the only runnable
+ * language with no way to see the result.
+ *
+ * Rendered in the frame rather than by the chat's own Markdown component. Two
+ * reasons, and the second is the important one. It should look like the HTML
+ * preview looks -- a white page in the panel -- rather than like another
+ * message in a dark thread. And the isolation is worth keeping: this is model
+ * output, and a renderer that runs beside the session is a renderer whose
+ * every bug is a session-stealing bug. Inside the frame it has no origin to
+ * steal from.
+ *
+ * `marked` from the same CDN the React path uses. It does not sanitise, and it
+ * does not need to: the frame it draws into cannot reach this page, and its
+ * content security policy already refuses inline handlers and every host but
+ * the ones listed.
+ */
+const MARKDOWN_STYLE = `<style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: #ffffff; color: #1a1a1a;
+    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+          "Noto Sans TC", sans-serif;
+    /* A measure, not the frame's width. The panel is resizable and a README
+       read across 900 pixels is the same mistake the chat column made. */
+    max-width: 46rem; margin: 0 auto; padding: 32px 28px 64px;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 { line-height: 1.3; margin: 1.6em 0 0.6em; font-weight: 600; }
+  h1 { font-size: 1.9em; margin-top: 0; }
+  h2 { font-size: 1.45em; padding-bottom: 0.25em; border-bottom: 1px solid #e6e6e8; }
+  h3 { font-size: 1.18em; }
+  p, ul, ol, blockquote, table { margin: 0.85em 0; }
+  li { margin: 0.25em 0; }
+  a { color: #0b62c4; }
+  code {
+    font: 0.87em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #f1f1f3; padding: 0.15em 0.4em; border-radius: 4px;
+  }
+  pre {
+    background: #f6f6f8; border: 1px solid #e6e6e8; border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto;
+  }
+  pre code { background: none; padding: 0; font-size: 0.85em; }
+  blockquote {
+    margin-inline: 0; padding-inline-start: 14px;
+    border-inline-start: 3px solid #dcdce0; color: #55555c;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 0.94em; }
+  th, td { border: 1px solid #e6e6e8; padding: 7px 10px; text-align: start; }
+  th { background: #f6f6f8; font-weight: 600; }
+  img { max-width: 100%; }
+  hr { border: 0; border-top: 1px solid #e6e6e8; margin: 2em 0; }
+  /* Task lists read as lists, not as bullets with a stray box. */
+  li:has(> input[type=checkbox]) { list-style: none; margin-inline-start: -1.2em; }
+</style>`;
+
+function buildMarkdownDocument(source: string): string {
+  // Carried in a script tag rather than interpolated, so nothing in the text
+  // has to be escaped for JavaScript -- only the one sequence that would end
+  // the tag early.
+  const carried = source.replace(/<\/script/gi, '<\\/script');
+  return `<!doctype html><html><head>${PREAMBLE}${MARKDOWN_STYLE}</head><body>`
+    + `<script type="application/x-markdown" id="__source">${carried}<\/script>`
+    + `<script type="module">
+        const { marked } = await import('${ESM}/marked@15');
+        marked.setOptions({ gfm: true, breaks: false });
+        const text = document.getElementById('__source').textContent;
+        const html = await marked.parse(text);
+        const article = document.createElement('article');
+        article.innerHTML = html;
+        document.body.appendChild(article);
+      <\/script>`
+    + `</body></html>`;
+}
+
 function buildDocument(source: string, language: string): string {
   if (language === 'jsx' || language === 'tsx') {
     return buildReactDocument(source);
@@ -457,6 +537,10 @@ function buildDocument(source: string, language: string): string {
 
   if (language === 'python' || language === 'py') {
     return buildPythonDocument(source);
+  }
+
+  if (language === 'md' || language === 'markdown') {
+    return buildMarkdownDocument(source);
   }
 
   if (language === 'svg') {
