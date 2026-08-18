@@ -86,14 +86,24 @@ export const SEARCH_TOOLS: ToolSpec[] = [
       description: [
         'Fetch one web page and return its visible text.',
         'Only for a URL you already have, normally one web_search returned.',
-        'Navigation, scripts and styling are stripped; long pages are cut off',
-        'after about twelve thousand characters, which is the top of the page',
-        'and is where the answer usually is.',
+        'Navigation, scripts and styling are stripped.',
+        '',
+        'Give `query` whenever you know what you are after. The page is then',
+        'cut into passages and only the ones matching it come back, together',
+        'with the opening, which keeps a long page from spending the whole',
+        'context on its own introduction. Matching is on words, not meaning:',
+        'use the words the page itself would use -- a name, an error string, a',
+        'quoted phrase -- rather than a question. Omit it to read from the top,',
+        'which is the right thing for "what is this page about".',
       ].join('\n'),
       parameters: {
         type: 'object',
         properties: {
           url: { type: 'string', description: 'An http or https URL.' },
+          query: {
+            type: 'string',
+            description: 'What to look for in the page. Keywords, not a question.',
+          },
         },
         required: ['url'],
       },
@@ -271,14 +281,33 @@ export function describeSearch(
   return parts.join('\n\n');
 }
 
-export function describePage(
-  page: { url: string; title?: string; text: string; truncated?: boolean; note?: string },
-): string {
+export function describePage(page: {
+  url: string; title?: string; text: string; truncated?: boolean; note?: string;
+  query?: string; matched?: boolean; reason?: string;
+  passages_used?: number; passages_total?: number; chars_total?: number;
+}): string {
   if (page.note) return `${page.url}\n\n${page.note}`;
   if (!page.text.trim()) {
     return `${page.url}\n\n這一頁沒有可讀的文字，可能是靠 JavaScript 產生內容的網站。`;
   }
   const parts = [page.title ? `${page.title}\n${page.url}` : page.url, page.text];
-  if (page.truncated) parts.push('（頁面較長，以上是開頭的部分。）');
+
+  // What came back, and what did not. A model that cannot tell a selection from
+  // a whole page will not think to ask again with different words -- and asking
+  // again is the entire remedy for a lexical match that missed.
+  if (page.query && page.matched) {
+    parts.push(`（全文約 ${page.chars_total} 字，以上是與「${page.query}」最相關的`
+      + ` ${page.passages_used}/${page.passages_total} 段，中間跳過的地方標了 […]。`
+      + '要別的部分就換關鍵詞再讀一次。）');
+  } else if (page.query && page.reason === 'everywhere') {
+    // Rephrasing is the remedy for a miss and a waste of a step for this one.
+    parts.push(`（「${page.query}」在這一頁的每一段都出現，挑不出特別相關的部分，`
+      + '以上是開頭。要更窄的東西請換一個更具體的詞。）');
+  } else if (page.query) {
+    parts.push(`（頁面裡找不到「${page.query}」的字眼，以上是開頭的部分。`
+      + '換成這一頁自己會用的說法再試一次。）');
+  } else if (page.truncated) {
+    parts.push('（頁面較長，以上是開頭的部分。給 query 可以直接取相關段落。）');
+  }
   return parts.join('\n\n');
 }

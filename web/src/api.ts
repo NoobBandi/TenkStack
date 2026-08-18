@@ -182,11 +182,19 @@ export const webSearch = (query: string, limit = 8) =>
   get<{ query: string; results: SearchResult[]; answers: string[] }>(
     `/search?q=${encodeURIComponent(query)}&limit=${limit}`);
 
-export const webRead = (url: string) =>
+export const webRead = (url: string, query = '') =>
   get<{
     url: string; title?: string; content_type: string;
     text: string; truncated?: boolean; note?: string;
-  }>(`/search/read?url=${encodeURIComponent(url)}`);
+    /** Present when a query was given: which passages came back, and whether
+     *  any of them matched it at all. */
+    query?: string; matched?: boolean;
+    /** Why nothing was selected: 'absent' if the page never says it,
+     *  'everywhere' if every passage does. */
+    reason?: string;
+    passages_used?: number; passages_total?: number; chars_total?: number;
+  }>(`/search/read?url=${encodeURIComponent(url)}`
+    + (query ? `&query=${encodeURIComponent(query)}` : ''));
 
 export const searchAvailable = () =>
   get<{ available: boolean }>('/search/available');

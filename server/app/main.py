@@ -1165,12 +1165,15 @@ async def web_search(q: str, limit: int = 8, _: dict = Depends(auth.require_owne
 
 
 @app.get("/api/search/read")
-async def web_read(url: str, _: dict = Depends(auth.require_owner)):
+async def web_read(url: str, query: str = "", _: dict = Depends(auth.require_owner)):
     """One page, as text. Reading is a separate call from searching because a
     model should choose what to open rather than being handed eight pages it
-    did not ask for."""
+    did not ask for.
+
+    `query` narrows it to the passages that answer that, which is most of what
+    keeps a long page from spending the context window on its own introduction."""
     try:
-        return await search.read(url)
+        return await search.read(url, query)
     except search.Unavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

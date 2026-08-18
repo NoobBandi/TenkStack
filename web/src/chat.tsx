@@ -433,7 +433,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 content = describeSearch(found);
                 sources = found.results.map((r) => ({ title: r.title, url: r.url }));
               } else {
-                const page = await webRead(String(args.url ?? ''));
+                const page = await webRead(String(args.url ?? ''), String(args.query ?? ''));
                 content = describePage(page);
                 sources = [{ title: page.title || page.url, url: page.url }];
               }
