@@ -290,17 +290,36 @@ async def _total_size(client: httpx.AsyncClient, url: str) -> int:
     return int(resp.headers.get("content-length", 0))
 
 
-def _load_done(state_path: Path, segment_count: int) -> set[int]:
+def _load_done(state_path: Path, partial: Path, segment_count: int, total: int) -> set[int]:
+    """Segments already fetched -- believed only while the file they describe
+    is still the file on disk.
+
+    The ledger is a set of indices into one particular .part, so it means
+    nothing without it. Discarding a half-finished download used to leave this
+    behind, and the next attempt read it, concluded it had already fetched
+    everything, wrote nothing, and produced a file of the right length made
+    entirely of holes.
+
+    The remote size is recorded for the same reason. Indices are ranges, and a
+    weight republished at a different length makes every one of them point
+    somewhere else.
+    """
+    if not partial.exists():
+        state_path.unlink(missing_ok=True)
+        return set()
     try:
         data = json.loads(state_path.read_text())
-        return {i for i in data.get("done", []) if 0 <= i < segment_count}
     except Exception:
         return set()
+    if data.get("total") != total:
+        state_path.unlink(missing_ok=True)
+        return set()
+    return {i for i in data.get("done", []) if 0 <= i < segment_count}
 
 
-def _save_done(state_path: Path, done: set[int]) -> None:
+def _save_done(state_path: Path, done: set[int], total: int) -> None:
     tmp = state_path.with_suffix(state_path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"done": sorted(done)}))
+    tmp.write_text(json.dumps({"done": sorted(done), "total": total}))
     tmp.replace(state_path)
 
 
@@ -376,7 +395,7 @@ async def _download(entry: Download) -> None:
             # download indistinguishable from a finished one by length alone --
             # so every resume claimed every segment, wrote nothing, and renamed
             # a file full of holes into place.
-            done = _load_done(state_path, segment_count)
+            done = _load_done(state_path, partial, segment_count, total)
             if done:
                 logger.info("resuming %s with %d/%d segments already present",
                             entry.filename, len(done), segment_count)
@@ -418,7 +437,7 @@ async def _download(entry: Download) -> None:
                                 await asyncio.sleep(1 + attempt)
                         async with lock:
                             done.add(index)
-                            _save_done(state_path, done)
+                            _save_done(state_path, done, total)
 
                 await asyncio.gather(*(worker() for _ in range(min(PARALLEL, segment_count))))
             finally:

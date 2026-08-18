@@ -584,6 +584,9 @@ def delete_partial(filename: str) -> dict:
     size = path.stat().st_size
     try:
         path.unlink()
+        # The resume ledger goes with it. Left behind it describes a file that
+        # no longer exists, and the next download believes it.
+        path.with_suffix(path.suffix + ".state").unlink(missing_ok=True)
         _prune_empty(path.parent)
     except OSError as exc:
         return {"ok": False, "reason": str(exc)}

@@ -638,6 +638,10 @@ def delete(root_key: str, path: str, name: str, partial: bool = False) -> dict:
         raise FileNotFoundError(name)
     size = target.stat().st_size if target.is_file() else 0
     target.unlink()
+    if target.name.endswith(PART_SUFFIX):
+        # A download's resume ledger is a set of indices into that .part and
+        # nothing else, so it outlives its meaning the moment the file goes.
+        target.with_name(target.name + ".state").unlink(missing_ok=True)
     return {"ok": True, "freed": size}
 
 
