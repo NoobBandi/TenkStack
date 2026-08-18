@@ -1176,6 +1176,57 @@ async def web_search_available(_: dict = Depends(auth.require_owner)):
     return {"available": await search.available()}
 
 
+
+# --------------------------------------------------------------------------
+# A font the sandbox can reach
+#
+# matplotlib inside Pyodide ships DejaVu Sans and nothing else, so a chart
+# labelled in Chinese comes out as rows of tofu. The fix is a font file, and
+# getting one to the sandbox is the awkward part: that frame has no origin, so
+# it can only fetch what says it may be fetched from anywhere.
+#
+# Hence outside /api and hence the wildcard. Both are deliberate and neither is
+# a hole. The middleware guards /api because those routes answer with this
+# machine's state; this one answers with a font that ships in Ubuntu, is the
+# same for every reader, and reveals nothing by being read. A wildcard on one
+# static file is not the open proxy that a wildcard on a fetch endpoint would
+# have been.
+#
+# Served from the system rather than copied into the repository: it is 3.8 MB,
+# it is already installed, and a second copy is a second thing to keep current.
+# --------------------------------------------------------------------------
+
+CJK_FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+)
+
+
+@app.get("/fonts/cjk.ttf")
+async def cjk_font():
+    """A CJK font, for anything drawing text in a sandbox.
+
+    DroidSansFallback first: 3.8 MB against Noto CJK's 18.6, and a plain TTF
+    rather than a collection, which is what matplotlib's FreeType can open
+    without being told which face it wants.
+    """
+    for candidate in CJK_FONT_CANDIDATES:
+        path = Path(candidate)
+        if path.is_file():
+            return FileResponse(
+                path,
+                media_type="font/ttf",
+                headers={
+                    "access-control-allow-origin": "*",
+                    # A year. The file changes when the distribution changes it,
+                    # which is not something a reader needs re-checked hourly.
+                    "cache-control": "public, max-age=31536000, immutable",
+                },
+            )
+    raise HTTPException(status_code=404, detail="這台機器上沒有找到 CJK 字型")
+
+
 # --------------------------------------------------------------------------
 # Conversation history
 # --------------------------------------------------------------------------

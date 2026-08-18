@@ -69,6 +69,15 @@ export interface RunResult {
  * boot serves every step. stdout and stderr are collected per run instead of
  * being written to a DOM nobody is looking at.
  */
+/**
+ * Where the frame fetches its CJK font from.
+ *
+ * An absolute URL because the frame is `srcdoc` and has no base of its own to
+ * resolve a relative one against. Taken from the page rather than written down,
+ * so it follows the console wherever it is served.
+ */
+const ORIGIN = typeof window === 'undefined' ? '' : window.location.origin;
+
 const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="module">
   const post = (msg) => parent.postMessage(msg, '*');
   let pyodide = null;
@@ -109,6 +118,47 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
     '_out',
   ].join('\\n');
 
+  /**
+   * A CJK font for matplotlib, fetched once and only when something draws.
+   *
+   * Pyodide's matplotlib carries DejaVu Sans and nothing else, so a chart
+   * labelled in Chinese comes out as rows of tofu -- and it does so silently,
+   * which is worse than an error because the picture looks finished.
+   *
+   * Registered rather than substituted: it goes on the front of the sans-serif
+   * list, so DejaVu still answers for Latin and the CJK font only supplies what
+   * DejaVu lacks. unicode_minus is turned off because this font has no U+2212,
+   * and a minus sign is exactly the character a chart cannot afford to lose.
+   *
+   * Four megabytes, once per boot, and never at all for the runs that do not
+   * draw. The browser caches it for a year after that.
+   */
+  let fontReady = null;
+  function ensureFont() {
+    if (fontReady) return fontReady;
+    fontReady = (async () => {
+      const response = await fetch('__ORIGIN__/fonts/cjk.ttf');
+      if (!response.ok) throw new Error('font ' + response.status);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      pyodide.FS.writeFile('/cjk.ttf', bytes);
+      await pyodide.runPythonAsync([
+        'import matplotlib',
+        'from matplotlib import font_manager as _fm',
+        "_fm.fontManager.addfont('/cjk.ttf')",
+        "_name = _fm.FontProperties(fname='/cjk.ttf').get_name()",
+        "matplotlib.rcParams['font.sans-serif'] = [_name] + list(matplotlib.rcParams['font.sans-serif'])",
+        "matplotlib.rcParams['axes.unicode_minus'] = False",
+      ].join('\\n'));
+    })().catch((error) => {
+      // Reported, not fatal. A chart with tofu labels is still a chart, and
+      // failing the run over a font would lose the numbers as well.
+      err.push('[font] ' + String(error?.message || error));
+      // Not retried: a font that failed once will fail the same way, and
+      // trying again per run costs a request each time.
+    });
+    return fontReady;
+  }
+
   addEventListener('message', async (event) => {
     const { kind, id, code } = event.data || {};
     if (kind !== 'run' || !pyodide) return;
@@ -126,7 +176,10 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
       await pyodide.loadPackagesFromImports(code);
       // Set before the code runs: pyplot fixes its backend on import, and
       // choosing one afterwards is quietly ignored.
-      if (draws) await pyodide.runPythonAsync('import matplotlib; matplotlib.use("agg")');
+      if (draws) {
+        await pyodide.runPythonAsync('import matplotlib; matplotlib.use("agg")');
+        await ensureFont();
+      }
       const result = await pyodide.runPythonAsync(code);
       if (result !== undefined && result !== null) value = String(result);
     } catch (error) {
@@ -267,7 +320,7 @@ export function PythonRuntimeProvider({ children }: { children: React.ReactNode 
     // need. No allow-same-origin, ever: that is what keeps the frame from
     // reading this page.
     el.setAttribute('sandbox', 'allow-scripts');
-    el.setAttribute('srcdoc', RUNTIME_DOC);
+    el.setAttribute('srcdoc', RUNTIME_DOC.replace('__ORIGIN__', ORIGIN));
     el.style.cssText = 'position:absolute;width:0;height:0;border:0;visibility:hidden';
     document.body.appendChild(el);
     frame.current = el;
