@@ -108,59 +108,99 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
    */
   const HARVEST = [
     'import base64 as _b64, io as _io',
-    'import matplotlib as _mpl',
     'import matplotlib.pyplot as _plt',
-    // Whatever the code did to the font list, DejaVu goes back on the end of
-    // it. Code that wants Chinese tends to name a CJK font and nothing else,
-    // and that font has no digits -- so the labels arrive and every number on
-    // the axes turns into a box. Appending costs nothing when the list is
-    // already right: a fallback chain is only consulted for what the fonts
-    // ahead of it lack. Here rather than before the run because the font a
-    // glyph is drawn with is decided at savefig, so this still reaches text
-    // that was created earlier.
-    "_fonts = list(_mpl.rcParams['font.sans-serif'])",
-    "if 'DejaVu Sans' not in _fonts:",
-    "    _mpl.rcParams['font.sans-serif'] = _fonts + ['DejaVu Sans']",
+    'from matplotlib.text import Text as _Text',
+    // Only reachable if the preparation step failed outright, and a lost font
+    // is no reason to also lose the figures.
+    'if "_family" not in globals():',
+    '    _family = lambda _value: _value',
     '_out = []',
     'for _num in _plt.get_fignums():',
+    '    _fig = _plt.figure(_num)',
+    // A font named on one label never went near rcParams, so the guard never
+    // saw it. Repairing the artists has to happen here rather than at the
+    // moment they are made: set_family is also what matplotlib calls while
+    // resolving a family of its own, and a guard there re-expands every entry
+    // into the same first match. Late is correct anyway -- the font a glyph is
+    // drawn with is chosen at savefig, not when the text was created.
+    '    for _text in _fig.findobj(_Text):',
+    '        _text.set_fontfamily(_family(_text.get_fontfamily()))',
     '    _buf = _io.BytesIO()',
-    "    _plt.figure(_num).savefig(_buf, format='png', dpi=110, bbox_inches='tight')",
+    "    _fig.savefig(_buf, format='png', dpi=110, bbox_inches='tight')",
     '    _out.append(_b64.b64encode(_buf.getvalue()).decode())',
     "_plt.close('all')",
     '_out',
   ].join('\\n');
 
   /**
-   * A CJK font for matplotlib, fetched once and only when something draws.
+   * Everything matplotlib needs before a run that draws.
    *
    * Pyodide's matplotlib carries DejaVu Sans and nothing else, so a chart
    * labelled in Chinese comes out as rows of tofu -- and it does so silently,
    * which is worse than an error because the picture looks finished.
    *
-   * Registered rather than substituted: it goes on the front of the sans-serif
-   * list, so DejaVu still answers for Latin and the CJK font only supplies what
-   * DejaVu lacks. unicode_minus is turned off because this font has no U+2212,
-   * and a minus sign is exactly the character a chart cannot afford to lose.
+   * The font is registered rather than substituted, and a guard on rcParams
+   * keeps it that way. Code that wants Chinese reaches for a CJK font by name,
+   * and that font holds no Latin at all, so setting it alone costs every digit
+   * on the axes. The guard runs at the moment of assignment because that is the
+   * only point early enough: measuring text draws it, so a tight_layout() in
+   * the middle of a run raises the warnings long before anything is harvested.
+   *
+   * In two parts, so the first still applies when the network does not: the
+   * guard and the silenced show() need nothing fetched, and only the font does.
    *
    * Four megabytes, once per boot, and never at all for the runs that do not
    * draw. The browser caches it for a year after that.
    */
-  let fontReady = null;
-  function ensureFont() {
-    if (fontReady) return fontReady;
-    fontReady = (async () => {
+  const PREPARE = [
+    'import matplotlib',
+    'import matplotlib.pyplot as _pyplot',
+    // show() cannot do anything here and says so, once per call, in a warning
+    // that reads like the figure was lost. It was not: every open figure is
+    // collected afterwards, which is what show() was being asked for.
+    '_pyplot.show = lambda *a, **k: None',
+    '_CJK = None',
+    'def _names(_value):',
+    '    return [_value] if isinstance(_value, str) else list(_value)',
+    // The chain belongs in font.family, which is the only list matplotlib
+    // actually falls through. A generic name in it expands to the FIRST
+    // available entry of font.sans-serif and stops there, so putting the CJK
+    // font at the head of that list does not extend anything -- it makes the
+    // CJK font the one sans-serif, which is how every digit went missing.
+    //
+    // Whatever is assigned keeps its place at the front; the two fonts that
+    // guarantee coverage go on the end. A chain is consulted only for what the
+    // fonts ahead of it lack, so appending changes nothing that already worked.
+    'def _family(_value):',
+    '    _kept = [_n for _n in _names(_value) if _n not in (_CJK, "DejaVu Sans")]',
+    '    return _kept + ([_CJK] if _CJK else []) + ["DejaVu Sans"]',
+    '_assign = matplotlib.RcParams.__setitem__',
+    'def _guard(self, _key, _value):',
+    '    _assign(self, _key, _family(_value) if _key == "font.family" else _value)',
+    'matplotlib.RcParams.__setitem__ = _guard'
+  ].join('\\n');
+
+  const REGISTER = [
+    'from matplotlib import font_manager as _fm',
+    "_fm.fontManager.addfont('/cjk.ttf')",
+    "_CJK = _fm.FontProperties(fname='/cjk.ttf').get_name()",
+    // Assigning the list to itself is what installs the chain: the guard
+    // normalises on the way through, so the ordering lives in one place and
+    // every later assignment gets the same treatment.
+    "matplotlib.rcParams['font.family'] = matplotlib.rcParams['font.family']",
+    "matplotlib.rcParams['axes.unicode_minus'] = False",
+  ].join('\\n');
+
+  let plottingReady = null;
+  function ensurePlotting() {
+    if (plottingReady) return plottingReady;
+    plottingReady = (async () => {
+      await pyodide.runPythonAsync(PREPARE);
       const response = await fetch('__ORIGIN__/fonts/cjk.ttf');
       if (!response.ok) throw new Error('font ' + response.status);
       const bytes = new Uint8Array(await response.arrayBuffer());
       pyodide.FS.writeFile('/cjk.ttf', bytes);
-      await pyodide.runPythonAsync([
-        'import matplotlib',
-        'from matplotlib import font_manager as _fm',
-        "_fm.fontManager.addfont('/cjk.ttf')",
-        "_name = _fm.FontProperties(fname='/cjk.ttf').get_name()",
-        "matplotlib.rcParams['font.sans-serif'] = [_name] + list(matplotlib.rcParams['font.sans-serif'])",
-        "matplotlib.rcParams['axes.unicode_minus'] = False",
-      ].join('\\n'));
+      await pyodide.runPythonAsync(REGISTER);
     })().catch((error) => {
       // Reported, not fatal. A chart with tofu labels is still a chart, and
       // failing the run over a font would lose the numbers as well.
@@ -168,7 +208,7 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
       // Not retried: a font that failed once will fail the same way, and
       // trying again per run costs a request each time.
     });
-    return fontReady;
+    return plottingReady;
   }
 
   addEventListener('message', async (event) => {
@@ -190,7 +230,7 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
       // choosing one afterwards is quietly ignored.
       if (draws) {
         await pyodide.runPythonAsync('import matplotlib; matplotlib.use("agg")');
-        await ensureFont();
+        await ensurePlotting();
       }
       const result = await pyodide.runPythonAsync(code);
       if (result !== undefined && result !== null) value = String(result);
@@ -203,6 +243,7 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
     // Attempted even after a failure: code that plotted and then raised still
     // drew something worth seeing.
     if (draws) {
+      const earlier = err.length;
       try {
         const figures = await pyodide.runPythonAsync(HARVEST);
         const list = figures?.toJs ? figures.toJs() : [];
@@ -214,6 +255,14 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
         // is exactly the question worth answering when no picture appears.
         err.push('[figure] ' + String(error?.message || error));
       }
+      // Glyph warnings from before this point describe a picture that was
+      // never delivered: the fonts are put back on the way to savefig, and a
+      // glyph that is still missing there warns again from inside the harvest.
+      // Those late ones are kept, because they are about the image that
+      // arrived. The early ones go: a dozen lines naming every digit on the
+      // axes is noise when the digits came out fine, and the model reading it
+      // cannot tell that from a real failure.
+      err = err.filter((line, at) => at >= earlier || !/Glyph \\d+ .*missing from font/.test(line));
     }
 
     post({
