@@ -79,6 +79,50 @@ function Check() {
   );
 }
 
+
+/** The magnifying glass on the query row. */
+function Magnifier() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden
+         stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+         style={{ flexShrink: 0, opacity: 0.35 }}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.3-4.3" />
+    </svg>
+  );
+}
+
+/** A globe beside each source. Three weights rather than three hues: the
+ *  reference tints these from a brand palette, and here amber and red already
+ *  mean warning and error everywhere else. The variation is all the colour was
+ *  doing. */
+function Globe({ rank }: { rank: number }) {
+  const weight = [0.55, 0.4, 0.28][rank % 3];
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden
+         className="tt-globe" stroke="currentColor" strokeWidth="2"
+         style={{ opacity: weight }}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3.5 12h17M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
+    </svg>
+  );
+}
+
+/** Just the host, which is what says whose page this is. A full URL in a
+ *  narrow column is mostly path. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+/** How many sources a search lists before the rest become a count. Enough to
+ *  choose from; few enough that a search does not fill the trace it is one
+ *  step of. */
+const SHOWN_SOURCES = 4;
+
 function Block({ label, value, tone }: { label?: string; value: string; tone?: string }) {
   return (
     <div style={{ marginTop: 6 }}>
@@ -176,8 +220,12 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
           <div className="tt-rail">
             {steps.map((step, i) => {
               const result = step.turn?.run?.result;
+              // Running until it has produced something: a result, some text,
+              // or a list of sources. A search has none of the first two.
               const running = step.kind === 'code'
-                && !result && !step.turn?.run?.output;
+                && !result
+                && !step.turn?.run?.output
+                && !step.turn?.run?.sources;
               // Staggered, so the rows arrive as a sequence rather than as a
               // block appearing at once.
               const delay = { animationDelay: `${Math.min(i, 6) * 90}ms` };
@@ -219,7 +267,39 @@ export default function Trace({ steps, live }: { steps: Step[]; live: boolean })
                 );
               }
 
-              const tool = step.turn?.run?.tool ?? 'Python';
+              const run = step.turn?.run;
+              const tool = run?.tool ?? 'Python';
+
+              // A search is a query and the pages it found, not a command and
+              // its output. Given rows of its own so the sources are links to
+              // follow rather than lines in a paragraph.
+              if (tool === '搜尋' && run?.sources) {
+                const shownSources = run.sources.slice(0, SHOWN_SOURCES);
+                const rest = run.sources.length - shownSources.length;
+                return (
+                  <div key={i}>
+                    <div className="tt-query" style={delay}>
+                      <Magnifier />
+                      <span className="tt-query-text">{step.text}</span>
+                    </div>
+                    {shownSources.map((source, n) => (
+                      <a
+                        key={source.url}
+                        className="tt-source"
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ animationDelay: `${Math.min(n + 1, 6) * 90}ms` }}
+                      >
+                        <Globe rank={n} />
+                        <span className="tt-source-title">{source.title || source.url}</span>
+                        <span className="tt-source-host">{hostOf(source.url)}</span>
+                      </a>
+                    ))}
+                    {rest > 0 && <div className="tt-more">另外 {rest} 筆</div>}
+                  </div>
+                );
+              }
               const first = step.text.trim().split('\n')[0] || tool.toLowerCase();
               const lines = step.text.trim().split('\n').length;
               // Lines are a measure of code and say nothing about a query or a

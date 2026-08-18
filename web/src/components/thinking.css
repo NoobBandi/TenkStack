@@ -211,3 +211,79 @@ button.tt-row:disabled {
   cursor: default;
   background: transparent;
 }
+
+/* A search's own row: the query it was given, above the sources it found. */
+.tt-query {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 6px;
+  animation: fade-up 320ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.tt-query-text {
+  font-size: 12.5px;
+  color: rgba(242, 242, 242, 0.62);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One result. A link, not a button: it goes somewhere, and the browser's own
+ * middle-click and open-in-new-tab should keep working. */
+a.tt-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 150ms;
+  animation: fade-up 320ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+a.tt-source:hover { background: rgba(255, 255, 255, 0.05); }
+
+/* The title carries the underline on hover, not the whole row: the row is a
+ * hit area and the title is the thing being followed. */
+a.tt-source:hover .tt-source-title { text-decoration: underline; }
+
+.tt-source-title {
+  min-width: 0;
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(242, 242, 242, 0.82);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tt-source-host {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: rgba(242, 242, 242, 0.32);
+}
+
+/* The reference tints these per source from a brand palette. This console
+ * spends colour only on meaning -- amber and red are warnings everywhere else
+ * in it -- so the globes are white at three weights instead. The variation
+ * still separates one row from the next, which is all the colour was doing. */
+.tt-globe { flex-shrink: 0; }
+
+.tt-more {
+  padding: 2px 6px;
+  font-size: 12px;
+  color: rgba(242, 242, 242, 0.3);
+  animation: fade-in 300ms ease-out both;
+}
+
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-query, a.tt-source, .tt-more { animation: none; }
+}

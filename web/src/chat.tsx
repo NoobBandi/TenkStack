@@ -37,6 +37,10 @@ export interface Turn extends ChatMessage {
     /** Present for the tools that return text, so the row can show what came
      *  back without the trace having to know each tool's shape. */
     output?: string;
+    /** A search's results, kept structured rather than only as the prose the
+     *  model reads. The trace lists them as links, and a link is a thing to
+     *  click rather than a string in a paragraph. */
+    sources?: { title: string; url: string }[];
   };
   usage?: Usage;
   timings?: Timings;
@@ -406,6 +410,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
           let content: string;
           let result: RunResult | undefined;
+          let sources: { title: string; url: string }[] | undefined;
 
           if (name === 'web_search' || name === 'read_page') {
             // These run on the backend, not in the sandbox: a frame with no
@@ -413,9 +418,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             // would let any page reach one.
             try {
               const args = JSON.parse(call.function.arguments);
-              content = name === 'web_search'
-                ? describeSearch(await webSearch(String(args.query ?? '')))
-                : describePage(await webRead(String(args.url ?? '')));
+              if (name === 'web_search') {
+                const found = await webSearch(String(args.query ?? ''));
+                content = describeSearch(found);
+                sources = found.results.map((r) => ({ title: r.title, url: r.url }));
+              } else {
+                const page = await webRead(String(args.url ?? ''));
+                content = describePage(page);
+                sources = [{ title: page.title || page.url, url: page.url }];
+              }
             } catch (err) {
               // A failed search is a fact the model can act on -- try other
               // words, or answer without it -- so it goes back as a result
@@ -436,7 +447,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             role: 'tool',
             tool_call_id: call.id,
             content,
-            run: { code: shown, tool: heading, result, output: result ? undefined : content },
+            run: {
+              code: shown, tool: heading, result, sources,
+              // Only for the tools whose answer is prose. A search's answer is
+              // a list of links and is rendered as one.
+              output: result || name === 'web_search' ? undefined : content,
+            },
           }];
           setTurns([...conversation]);
         }
