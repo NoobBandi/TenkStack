@@ -372,8 +372,16 @@ function ChatInner() {
                 const isLast = index === exchanges.length - 1;
                 const answer = exchange.answer;
                 // The trace is live while this exchange is the one being
-                // produced and no answer has landed in it yet.
-                const tracing = isLast && streaming && !answer?.content;
+                // produced. Content usually means the answer has started and
+                // the working can fold away -- but not in a run that has used
+                // the sandbox. There a model writes a line, runs something,
+                // writes another line, and which of those was the answer is
+                // only known from a finish_reason that arrives after the fact.
+                // Folding on the first one shut the trace mid-run and reopened
+                // it on the next call. So once something has been executed the
+                // trace stays open until the streaming stops.
+                const ran = exchange.steps.some((step) => step.kind === 'code');
+                const tracing = isLast && streaming && (ran || !answer?.content);
 
                 return (
                   <div key={index}>
