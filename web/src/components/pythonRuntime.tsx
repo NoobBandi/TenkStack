@@ -108,7 +108,19 @@ const RUNTIME_DOC = `<!doctype html><meta charset="utf-8"><body><script type="mo
    */
   const HARVEST = [
     'import base64 as _b64, io as _io',
+    'import matplotlib as _mpl',
     'import matplotlib.pyplot as _plt',
+    // Whatever the code did to the font list, DejaVu goes back on the end of
+    // it. Code that wants Chinese tends to name a CJK font and nothing else,
+    // and that font has no digits -- so the labels arrive and every number on
+    // the axes turns into a box. Appending costs nothing when the list is
+    // already right: a fallback chain is only consulted for what the fonts
+    // ahead of it lack. Here rather than before the run because the font a
+    // glyph is drawn with is decided at savefig, so this still reaches text
+    // that was created earlier.
+    "_fonts = list(_mpl.rcParams['font.sans-serif'])",
+    "if 'DejaVu Sans' not in _fonts:",
+    "    _mpl.rcParams['font.sans-serif'] = _fonts + ['DejaVu Sans']",
     '_out = []',
     'for _num in _plt.get_fignums():',
     '    _buf = _io.BytesIO()',
