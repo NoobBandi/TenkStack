@@ -117,6 +117,22 @@ class _Text(HTMLParser):
     article. Dropping the elements that are never prose, and keeping the block
     boundaries as newlines, is the difference between a page a model can read
     and a wall it has to guess at.
+
+    Two things survive that and are worth removing by shape rather than by
+    name, since neither is peculiar to the site they were found on:
+
+    A block that is almost entirely link text is a menu. The language list down
+    the side of an encyclopedia article, a breadcrumb, a "jump to content" --
+    all of them are links and nothing else, while a paragraph that happens to
+    cite things is a fifth link text at most. Measuring that ratio is the
+    standard readability heuristic and needs to know nothing about the page.
+
+    A formula is written twice. MathML carries a presentation tree, one symbol
+    per element, and beside it the TeX it was rendered from -- so the text comes
+    out as a run of loose brackets and subscripts followed by the same equation
+    written properly. The loose version is worse than noise: a model reading it
+    can reassemble the wrong equation, and it cannot tell that it did. Only the
+    TeX is kept.
     """
 
     SKIP = {"script", "style", "noscript", "template", "svg", "nav", "footer", "form"}
@@ -124,41 +140,80 @@ class _Text(HTMLParser):
         "p", "div", "section", "article", "li", "tr", "br", "hr",
         "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre",
     }
+    LINK_DENSITY = 0.8
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.parts: list[str] = []
-        self._skipping = 0
+        self.blocks: list[str] = []
         self.title = ""
+        self._buffer: list[str] = []
+        self._chars = 0
+        self._linked = 0
+        self._skipping = 0
+        self._anchor = 0
+        self._math = 0
+        self._tex = 0
         self._in_title = False
 
+    def _flush(self) -> None:
+        text = "".join(self._buffer).strip()
+        chars, linked = self._chars, self._linked
+        self._buffer, self._chars, self._linked = [], 0, 0
+        if not text:
+            return
+        if chars and linked / chars >= self.LINK_DENSITY:
+            return
+        self.blocks.append(text)
+
     def handle_starttag(self, tag, attrs):
+        if tag in self.BLOCK:
+            self._flush()
         if tag in self.SKIP:
             self._skipping += 1
+        if tag == "a":
+            self._anchor += 1
+        if tag == "math":
+            self._math += 1
+        if tag == "annotation":
+            self._tex += 1
         if tag == "title":
             self._in_title = True
-        if tag in self.BLOCK:
-            self.parts.append("\n")
 
     def handle_endtag(self, tag):
+        if tag in self.BLOCK:
+            self._flush()
         if tag in self.SKIP and self._skipping:
             self._skipping -= 1
+        if tag == "a" and self._anchor:
+            self._anchor -= 1
+        if tag == "math" and self._math:
+            self._math -= 1
+        if tag == "annotation" and self._tex:
+            self._tex -= 1
         if tag == "title":
             self._in_title = False
-        if tag in self.BLOCK:
-            self.parts.append("\n")
 
     def handle_data(self, data):
         if self._in_title and not self.title:
             self.title = data.strip()
-        if not self._skipping:
-            self.parts.append(data)
+        if self._skipping:
+            return
+        # Inside a formula, only the TeX. The presentation tree beside it says
+        # the same thing one bracket at a time.
+        if self._math and not self._tex:
+            return
+        self._buffer.append(data)
+        weight = len(data.strip())
+        self._chars += weight
+        if self._anchor:
+            self._linked += weight
 
     def text(self) -> str:
-        joined = "".join(self.parts)
+        self._flush()
+        joined = "\n\n".join(self.blocks)
+        joined = re.sub(r"[ \t\u00a0]+", " ", joined)
         # Runs of blank lines are what block boundaries leave behind; a page is
         # not more readable for having twenty of them in a row.
-        joined = re.sub(r"[ \t ]+", " ", joined)
         return re.sub(r"\n\s*\n\s*", "\n\n", joined).strip()
 
 

@@ -13,8 +13,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.search import (  # noqa: E402
-    CHUNK_CHARS, CHUNK_OVERLAP, MAX_PASSAGES, _assemble, _passages, _rank, _terms,
+    CHUNK_CHARS, CHUNK_OVERLAP, MAX_PASSAGES, _Text, _assemble, _passages, _rank, _terms,
 )
+
+
+def extract(html):
+    parser = _Text()
+    parser.feed(html)
+    return parser.text()
 
 failures = []
 
@@ -31,7 +37,30 @@ def check_that(name, condition, detail=""):
     check(name, bool(condition) or detail or False, True)
 
 
-print("terms")
+print("extraction")
+check("a block of nothing but links is a menu",
+      extract("<ul><li><a href=/a>Español</a></li><li><a href=/b>日本語</a></li></ul>"
+              "<p>The article itself.</p>"),
+      "The article itself.")
+check("a paragraph that cites things is not",
+      extract("<p>BM25 was developed by <a href=/r>Robertson</a> and others "
+              "over several years of work on probabilistic retrieval.</p>"),
+      "BM25 was developed by Robertson and others over several years of work "
+      "on probabilistic retrieval.")
+check("scripts, navigation and footers stay out",
+      extract("<nav><p>Home</p></nav><script>var x=1</script>"
+              "<p>Body.</p><footer><p>Contact us</p></footer>"),
+      "Body.")
+check("a formula arrives once, as TeX",
+      extract("<p>The score is <span><math><semantics><mrow><mi>k</mi><mn>1</mn></mrow>"
+              "<annotation encoding=\"application/x-tex\">{k_1}</annotation>"
+              "</semantics></math></span> here.</p>"),
+      "The score is {k_1} here.")
+check("the title is taken from the head",
+      (lambda t: (t.feed("<title>Okapi BM25</title><p>x</p>"), t.title)[1])(_Text()),
+      "Okapi BM25")
+
+print("\nterms")
 check("latin lowercases and splits", _terms("BM25 Ranking, k1=1.2"),
       ["bm25", "ranking", "k1", "1", "2"])
 check("cjk becomes overlapping pairs", _terms("質數分布"), ["質數", "數分", "分布"])
