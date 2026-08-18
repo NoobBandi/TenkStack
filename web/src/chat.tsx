@@ -10,7 +10,7 @@ import {
 import { usePythonRuntime, type RunResult } from './components/pythonRuntime';
 import type { Step } from './components/Trace';
 import {
-  describePage, describeResult, describeSearch, MAX_STEPS, parseCode,
+  describeCall, describePage, describeResult, describeSearch, MAX_STEPS, parseCode,
   SANDBOX_TOOL, SEARCH_TOOLS,
 } from './sandboxTool';
 
@@ -382,26 +382,36 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         // Said out loud rather than stopping quietly. A run that used its whole
         // budget and never answered looks identical to one that finished, and
         // the reader is the only one who can decide whether to ask again.
+        //
+        // The calls of this last round are answered rather than executed.
+        // Nothing would read the results -- the loop ends here -- so running
+        // them costs up to a minute each and buys nothing. They still get
+        // replies: an assistant message whose tool_calls were left unanswered
+        // is not a conversation that can be continued, and this one is about to
+        // be saved and asked a second question.
         if (step === MAX_STEPS - 1) {
           setError(`已用完 ${MAX_STEPS} 個步驟仍未得到答案，已停下。`);
+          conversation = [...conversation, ...calls.map((call) => {
+            const { heading, shown } = describeCall(call);
+            const said = `已達 ${MAX_STEPS} 個步驟的上限，這個呼叫沒有執行。`;
+            return {
+              role: 'tool' as const,
+              tool_call_id: call.id,
+              content: said,
+              run: { code: shown, tool: heading, output: said },
+            };
+          })];
+          setTurns([...conversation]);
+          break;
         }
 
         for (const call of calls) {
           if (controller.signal.aborted) throw new DOMException('aborted', 'AbortError');
           const name = call.function.name;
 
-          // What the row says while it is happening. Named before it is done,
-          // because a step that is running is the one worth being able to see.
-          const heading = name === 'web_search' ? '搜尋'
-            : name === 'read_page' ? '讀取網頁'
-            : 'Python';
-          let shown = call.function.arguments;
-          try {
-            const args = JSON.parse(call.function.arguments);
-            shown = args.code ?? args.query ?? args.url ?? shown;
-          } catch {
-            // Left as the raw arguments, which is what the failure looks like.
-          }
+          // Named before it is done, because a step that is running is the one
+          // worth being able to see.
+          const { heading, shown } = describeCall(call);
 
           setTurns([...conversation, {
             role: 'tool', tool_call_id: call.id, content: '',
@@ -443,10 +453,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content = describeResult(result);
           }
 
+          // The model cannot see the loop it is running inside, so it cannot
+          // plan against a budget it was never told. It rides along with the
+          // result, which is at the tail of the conversation -- writing it into
+          // the tool description instead would rewrite the prompt's prefix every
+          // step and throw away the server's cache of it each time.
+          const left = MAX_STEPS - 1 - step;
+          const budget = left === 1
+            ? '\n\n（這是最後一次工具結果，下一次回覆必須給出答案。）'
+            : `\n\n（之後還能再呼叫工具 ${left} 次。）`;
+
           conversation = [...conversation, {
             role: 'tool',
             tool_call_id: call.id,
-            content,
+            // The note is for the model only. `output` below is what the reader
+            // sees, and it stays the result itself.
+            content: content + budget,
             run: {
               code: shown, tool: heading, result, sources,
               // Only for the tools whose answer is prose. A search's answer is

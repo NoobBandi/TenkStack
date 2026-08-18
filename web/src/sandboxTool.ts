@@ -1,5 +1,5 @@
 import type { RunResult } from './components/pythonRuntime';
-import type { SearchResult, ToolSpec } from './api';
+import type { SearchResult, ToolCall, ToolSpec } from './api';
 
 /**
  * The tools the model gets.
@@ -16,6 +16,29 @@ import type { SearchResult, ToolSpec } from './api';
  * code that tries to open a file, code that assumes a variable survived from
  * the last call, code that returns a value and prints nothing.
  */
+
+/**
+ * What a call looks like in the trace before it has run.
+ *
+ * The heading is the tool's name in the reader's language and the body is the
+ * one argument that is the point of it -- the code, the query, the URL. Needed
+ * in two places now: dispatch, and the step that reports calls it declined to
+ * run, which has to describe them without running them.
+ */
+export function describeCall(call: ToolCall): { heading: string; shown: string } {
+  const name = call.function.name;
+  const heading = name === 'web_search' ? '搜尋'
+    : name === 'read_page' ? '讀取網頁'
+    : 'Python';
+  let shown = call.function.arguments;
+  try {
+    const args = JSON.parse(call.function.arguments);
+    shown = args.code ?? args.query ?? args.url ?? shown;
+  } catch {
+    // Left as the raw arguments, which is what the failure looks like.
+  }
+  return { heading, shown };
+}
 
 export const MAX_STEPS = 8;
 
