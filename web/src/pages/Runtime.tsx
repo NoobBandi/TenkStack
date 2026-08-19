@@ -208,11 +208,15 @@ export default function Runtime() {
                 // Turning it on for the first time is a multi-gigabyte pull, so
                 // it asks; every later flip is instant and does not.
                 const needsPull = !row.llm && !state?.managed;
+                // Short enough not to wrap in the column it lives in: the tag
+                // alone identifies these images, and the repository in front
+                // of it wrapped the cell onto two ragged lines.
+                const tagOf = (image?: string | null) => image?.split(':').pop() ?? '';
                 const why = row.llm
                   ? (state?.managed
-                      ? `${state.image?.split('/').pop()}${state.image_size ? ` · ${state.image_size}` : ''}`
-                      : '原生建置，非主控台安裝')
-                  : state?.managed ? '已安裝，未啟用' : `要下載 ${row.runtime?.image.split('/').pop()}`;
+                      ? `${tagOf(state.image)}${state.image_size ? ` · ${state.image_size}` : ''}`
+                      : '原生建置')
+                  : state?.managed ? '已安裝，未啟用' : `要下載 ${tagOf(row.runtime?.image)}`;
                 const control = (
                   <Switch
                     size="small"
@@ -225,6 +229,15 @@ export default function Runtime() {
                 );
                 return (
                   <Space size={8}>
+                    <Tooltip title={[
+                      state?.image,
+                      row.shared_switch && '這台有多張同廠商的卡，這個開關會一起影響它們',
+                      !state?.managed && row.llm && '這個執行環境不是主控台安裝的',
+                    ].filter(Boolean).join('　')}>
+                      <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                        {why}
+                      </Text>
+                    </Tooltip>
                     {needsPull ? (
                       <Popconfirm
                         title="要下載這個執行環境嗎？"
@@ -239,13 +252,6 @@ export default function Runtime() {
                         {control}
                       </Popconfirm>
                     ) : control}
-                    <Tooltip title={row.shared_switch
-                      ? '這台有多張同廠商的卡，這個開關會一起影響它們'
-                      : undefined}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {why}{row.shared_switch ? '（同廠商共用）' : ''}
-                      </Text>
-                    </Tooltip>
                   </Space>
                 );
               },
@@ -288,6 +294,13 @@ export default function Runtime() {
                 );
                 return (
                   <Space size={8}>
+                    <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO,
+                                                    whiteSpace: 'nowrap' }}>
+                      {none
+                        ? (template ? '尚未建立' : '—')
+                        : `${row.containers.map((c) => c.name).join('、')}${
+                            row.comfy.image_size ? ` · ${row.comfy.image_size}` : ''}`}
+                    </Text>
                     {/* Nothing on this card yet, so On is a build: a new
                         container, its own output directory, and a download in
                         the tens of gigabytes. Asks first, and names it. */}
@@ -310,12 +323,6 @@ export default function Runtime() {
                         {control}
                       </Tooltip>
                     )}
-                    <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
-                      {none
-                        ? (template ? '尚未建立' : '—')
-                        : `${row.containers.map((c) => c.name).join('、')}${
-                            row.comfy.image_size ? ` · ${row.comfy.image_size}` : ''}`}
-                    </Text>
                   </Space>
                 );
               },
