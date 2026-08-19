@@ -192,7 +192,16 @@ async def survey(devices: list[dict]) -> dict:
             "image": row.get("Image"),
             "state": row.get("State"),
             "status": row.get("Status"),
-            "ports": row.get("Ports") or "",
+            # From the container's own configuration, not from `docker ps`.
+            #
+            # The display column is empty for a stopped container -- nothing is
+            # published while nothing is running -- so reading it made a
+            # stopped instance look like it held no port at all. The port
+            # allocator believed that and handed a new instance the port a
+            # stopped one still owns, which is a collision that only appears
+            # when somebody switches the stopped one back on. The binding is in
+            # the configuration either way.
+            "ports": _ports(host),
             "created": row.get("CreatedAt"),
             "restart_policy": ((host.get("RestartPolicy") or {}).get("Name") or "no"),
             "wants_gpu": wants,
@@ -282,6 +291,16 @@ async def pull(image: str, record) -> bool:
         record.state = "error"
         return False
     return True
+
+
+def _ports(host: dict) -> str:
+    """`127.0.0.1:8189->8188/tcp`, from HostConfig rather than from `docker ps`."""
+    published = []
+    for target, bindings in (host.get("PortBindings") or {}).items():
+        for binding in bindings or []:
+            address = binding.get("HostIp") or "0.0.0.0"
+            published.append(f"{address}:{binding.get('HostPort')}->{target}")
+    return ", ".join(published)
 
 
 async def image_sizes() -> dict[str, str]:

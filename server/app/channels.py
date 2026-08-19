@@ -163,6 +163,36 @@ def _write_scopes(name: str, scopes: set[str]) -> None:
     path.write_text(f"bind {' '.join(listed)}\n")
 
 
+# A site address line: `https://host:8444, https://127.0.0.1:8444,` or a bare
+# `http://:8000 {`. Anchored to the start of a line so the ports inside
+# `reverse_proxy 127.0.0.1:8070` and prose in comments are not mistaken for
+# published ones.
+_ADDRESS_LINE = re.compile(r"^\s*https?://\S", re.M)
+_PORT = re.compile(r":(\d+)")
+
+
+def _published(path: Path | None) -> list[int]:
+    """The ports a channel file actually opens.
+
+    Read rather than declared, because one channel is no longer one port. The
+    ComfyUI channel is a site block per instance -- 8444 for the first card,
+    8445 for the second -- and the console can now add them, so a table saying
+    `:8444` beside a switch that governs both was describing a machine that
+    stopped existing today.
+    """
+    if path is None:
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    found: set[int] = set()
+    for line in text.splitlines():
+        if _ADDRESS_LINE.match(line):
+            found.update(int(port) for port in _PORT.findall(line))
+    return sorted(found)
+
+
 def status() -> list[dict]:
     files: dict[str, Path] = {}
     for directory in (CHANNELS, DISABLED):
@@ -174,11 +204,15 @@ def status() -> list[dict]:
     out = []
     for name, meta in _META.items():
         path = files.get(name)
+        published = _published(path)
         out.append({
             "key": name,
             "enabled": path is not None and path.parent == CHANNELS,
             "present": path is not None,
             "scopes": sorted(_read_scopes(name)),
+            # Every port, from the file. `port` stays as the one the rest of
+            # the console links to.
+            "ports": published or ([meta["port"]] if meta.get("port") else []),
             **meta,
         })
     return {"channels": out, "addresses": addresses}  # type: ignore[return-value]
