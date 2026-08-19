@@ -824,7 +824,46 @@ VRAM_MARGIN = 4 * 1024**3
 _vram_lock = asyncio.Lock()
 
 
-def _shares_card(instance: dict, card: str | None) -> bool:
+async def _target_card(model_id: str, cards: list[dict]) -> dict | None:
+    """The card this model will actually load onto.
+
+    Read from the model entry's own `env`, which is where the console writes a
+    card choice, resolved against what llama-server enumerates so that a
+    selector naming a device no launcher can see does not silently decide the
+    VRAM policy.
+
+    An entry that pins nothing gets the first device a launcher offers, which is
+    what llama.cpp itself would pick. That was this function's entire previous
+    behaviour, written as `gpu.sample_dict(0)` -- correct while one card could
+    run a model, and quietly wrong the moment a second runtime is configured.
+    """
+    if not cards:
+        return None
+
+    spec = config.read_model_spec(model_id) or {}
+    environment = spec.get("env") or {}
+    devices = backends.match(await backends.usable(), cards)
+
+    chosen = next(
+        (d for d in devices
+         if d["env"] and all(environment.get(k) == v for k, v in d["env"].items())),
+        None,
+    )
+    if chosen is None and devices:
+        chosen = devices[0]
+
+    address = (chosen or {}).get("pci_bdf_address")
+    if address:
+        wanted = containers.bus_key(address)
+        for card in cards:
+            if card.get("pci_bdf_address") and containers.bus_key(card["pci_bdf_address"]) == wanted:
+                return card
+    # Nothing resolved: the old assumption, kept as a fallback rather than as
+    # the rule. Unknown has to mean "check something" here, not "check nothing".
+    return cards[0]
+
+
+def _shares_card(instance: dict, card: dict | None, by_port: dict[int, list[str]]) -> bool:
     """Whether this instance is on the card llama-server uses.
 
     Since a second GPU went in, "ComfyUI is holding VRAM" and "ComfyUI is in
@@ -833,28 +872,44 @@ def _shares_card(instance: dict, card: str | None) -> bool:
     clearing it off its own card for no reason -- or, worse, refusing a chat
     request with 503 because a card the model will never touch was busy.
 
-    Matched by name rather than by a table mapping vendors to torch device
-    types. ComfyUI reports `xpu:0 Intel(R) Arc(TM) Pro B70 Graphics` and
-    `cuda:0 NVIDIA GeForce RTX 3060 : cudaMallocAsync`, each containing what
-    the telemetry provider calls the same card, so one substring test covers
-    every vendor and needs no updating when a fourth appears. Type alone would
-    not do it: torch on ROCm calls itself `cuda`, which is indistinguishable
-    from a real NVIDIA card.
+    Answered by PCI address where the container mapping reaches: the port an
+    instance answers on is published by exactly one container, and that
+    container's device bindings name the card it was given. That join is exact,
+    which the previous one was not -- two cards of the same model are the
+    ordinary way to expand this machine, and a name cannot tell them apart.
 
-    Unknown means yes. Failing to free a card that needed freeing is an
-    out-of-memory on load; freeing one that did not is a lost cache. Only one
+    The name test stays as the fallback for an instance that is not in a
+    container, or when Docker cannot be reached. ComfyUI reports `xpu:0
+    Intel(R) Arc(TM) Pro B70 Graphics` and `cuda:0 NVIDIA GeForce RTX 3060 :
+    cudaMallocAsync`, each containing what the telemetry provider calls the
+    same card, so one substring test covers every vendor. Type alone would not
+    do it: torch on ROCm calls itself `cuda`, which is indistinguishable from a
+    real NVIDIA card.
+
+    Unknown means yes, either way. Failing to free a card that needed freeing is
+    an out-of-memory on load; freeing one that did not is a lost cache. Only one
     of those is worth defaulting to.
     """
-    name = ((instance.get("device") or {}).get("name") or "").strip()
-    if not card or not name:
+    if card is None:
         return True
-    return card.lower() in name.lower()
+
+    address = card.get("pci_bdf_address")
+    held = by_port.get(int(instance.get("port") or 0)) or []
+    if address and held:
+        return containers.bus_key(address) in {containers.bus_key(a) for a in held}
+
+    name = (card.get("name") or "").strip()
+    text = ((instance.get("device") or {}).get("name") or "").strip()
+    if not name or not text:
+        return True
+    return name.lower() in text.lower()
 
 
-async def _comfyui_held_vram(card: str | None = None) -> list[tuple[dict, int]]:
+async def _comfyui_held_vram() -> list[tuple[dict, int]]:
     """Instances holding more than an idle amount, with how much.
 
-    With `card`, only those on it -- see `_shares_card`.
+    Every card, because which of them are in the way is a question that needs
+    the model's target, and that costs more to work out than this probe does.
     """
     found = await asyncio.gather(*(_probe_comfyui(p) for p in COMFYUI_PORTS))
     out = []
@@ -862,7 +917,7 @@ async def _comfyui_held_vram(card: str | None = None) -> list[tuple[dict, int]]:
         if instance is None:
             continue
         held = (instance.get("device") or {}).get("torch_vram_total") or 0
-        if held >= COMFYUI_IDLE_VRAM and _shares_card(instance, card):
+        if held >= COMFYUI_IDLE_VRAM:
             out.append((instance, held))
     return out
 
@@ -902,20 +957,23 @@ async def make_room_for(model_id: str) -> None:
         if not anywhere:
             return
 
-        # The card llama-server runs on. Device 0 of whichever provider
-        # answered -- on this machine the Intel one, since selection is by
-        # probe and Intel is asked first, which is also the card the models are
-        # built and flagged for.
-        sample = await gpu.sample_dict(0) or {}
-        card = sample.get("name")
+        # The card this model will load onto, and the containers that hold the
+        # cards -- both only now, because both cost more than the probe above
+        # and neither is needed in the common case where nothing is held.
+        cards = await gpu.list_devices()
+        target = await _target_card(model_id, cards)
+        by_port = await containers.port_cards(cards)
 
-        held = [(i, b) for i, b in anywhere if _shares_card(i, card)]
+        held = [(i, b) for i, b in anywhere if _shares_card(i, target, by_port)]
         if not held:
             # Something is holding VRAM, but on another card. Nothing to do,
             # and in particular nothing to refuse the caller over.
             return
 
-        # Only now is it worth asking how big the model is.
+        # Only now is it worth asking how big the model is. Measured on the
+        # target card rather than on device 0: with one card those were the
+        # same number, and with two they are not.
+        sample = (await gpu.sample_dict(target["index"]) if target else None) or {}
         need = sum(f["size_bytes"] for f in config.files_for_model(model_id)) + VRAM_MARGIN
         total = (sample.get("memory_total_mib") or 0) * 1024**2
         used = (sample.get("memory_used_mib") or 0) * 1024**2
@@ -954,7 +1012,8 @@ async def make_room_for(model_id: str) -> None:
             await asyncio.sleep(0.5)
             # Filtered by card too, or this waits thirty seconds for an
             # instance on another GPU to release memory it was never asked for.
-            if not await _comfyui_held_vram(card):
+            still = await _comfyui_held_vram()
+            if not [i for i, _ in still if _shares_card(i, target, by_port)]:
                 logger.info("ComfyUI released the card")
                 return
         logger.warning("ComfyUI still holds VRAM after 30s; loading %s anyway", model_id)

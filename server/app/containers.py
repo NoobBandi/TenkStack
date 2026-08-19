@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ async def _docker(*args: str) -> str | None:
     return out.decode()
 
 
-def _bus_key(address: str) -> str:
+def bus_key(address: str) -> str:
     """A PCI address in the form two sources can be compared in.
 
     The kernel writes four domain digits and lower case; nvidia-smi writes eight
@@ -163,7 +164,7 @@ async def survey(devices: list[dict]) -> dict:
 
     details = await _inspect([row.get("Names", "") for row in rows if row.get("Names")])
     by_bus = {
-        _bus_key(str(d["pci_bdf_address"])): d
+        bus_key(str(d["pci_bdf_address"])): d
         for d in devices if d.get("pci_bdf_address")
     }
 
@@ -177,9 +178,9 @@ async def survey(devices: list[dict]) -> dict:
 
         cards = []
         for address in claimed:
-            device = by_bus.get(_bus_key(address))
+            device = by_bus.get(bus_key(address))
             if device:
-                held.add(_bus_key(address))
+                held.add(bus_key(address))
                 cards.append({
                     "pci_bdf_address": device["pci_bdf_address"],
                     "name": device.get("name"),
@@ -211,9 +212,35 @@ async def survey(devices: list[dict]) -> dict:
             {"pci_bdf_address": d["pci_bdf_address"], "name": d.get("name"),
              "vendor": d.get("vendor")}
             for d in devices
-            if d.get("pci_bdf_address") and _bus_key(str(d["pci_bdf_address"])) not in held
+            if d.get("pci_bdf_address") and bus_key(str(d["pci_bdf_address"])) not in held
         ],
     }
+
+
+# `127.0.0.1:8188->8188/tcp, 0.0.0.0:9000->9000/tcp` -- the host port is the
+# first number after the address, and it is the one the console probes on.
+_PUBLISHED = re.compile(r":(\d+)->")
+
+
+async def port_cards(devices: list[dict]) -> dict[int, list[str]]:
+    """{published host port: the PCI addresses that container holds}.
+
+    The join the VRAM policy needs, and the only exact one available. A ComfyUI
+    instance reports its device as a torch string -- `xpu:0 Intel(R) Arc(TM)
+    Pro B70 Graphics` -- with no PCI address in it, so matching an instance to
+    a card by name cannot tell two identical cards apart. The port it answers
+    on, though, is published by exactly one container, and that container's
+    device bindings say which card it was given.
+    """
+    survey_result = await survey(devices)
+    mapping: dict[int, list[str]] = {}
+    for container in survey_result["containers"]:
+        addresses = [card["pci_bdf_address"] for card in container["cards"]]
+        if not addresses:
+            continue
+        for port in _PUBLISHED.findall(container["ports"] or ""):
+            mapping[int(port)] = addresses
+    return mapping
 
 
 async def names() -> list[str]:
