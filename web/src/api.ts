@@ -1020,6 +1020,9 @@ export interface Channel {
   present: boolean;
   /** Networks allowed to reach it. 'wan' means every interface. */
   scopes: string[];
+  /** Every port the channel's Caddy file actually opens. One channel stopped
+   *  being one port when ComfyUI grew a site block per instance. */
+  ports: number[];
 }
 
 export interface ChannelState {
