@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import shlex
+from pathlib import Path
 
 from . import config
 
@@ -74,6 +75,17 @@ def _launchers() -> list[str]:
 
     macros = data.get("macros") or {}
     found: list[str] = []
+
+    # A macro naming an executable is a launcher this machine has, whether or
+    # not a model entry uses it yet. That matters for exactly the case this
+    # whole per-card arrangement is for: a runtime is installed before the
+    # first model is pointed at it, and until then the console would report one
+    # usable card and hide the choice that has just become real.
+    for value in macros.values():
+        path = Path(str(value))
+        if path.is_file() and os.access(path, os.X_OK):
+            found.append(str(path))
+
     for spec in (data.get("models") or {}).values():
         text = str((spec or {}).get("cmd") or "").strip()
         if not text:
