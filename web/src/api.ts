@@ -293,7 +293,29 @@ export interface ModelSpec {
   group: string | null;
   extra?: string;
   mmproj?: string | null;
+  /** `backend:index` -- `SYCL:0`, `CUDA:1`. Empty means unpinned, which is the
+   *  only answer on a machine with one usable card. */
+  device?: string;
+  /** What is actually written in llama-swap's `env` for this model. Returned
+   *  when reading a spec, so the form can tell which device it corresponds to;
+   *  never sent back, because the device choice is what gets written. */
+  env?: Record<string, string>;
 }
+
+/** A card a configured llama-server can actually see -- which is not the same
+ *  set as the cards in the machine. The NVIDIA card here is invisible to the
+ *  SYCL build, so it cannot run a model no matter that it exists. */
+export interface BackendDevice {
+  backend: string;
+  index: number;
+  name: string;
+  total_mib: number;
+  launcher: string;
+  env: Record<string, string>;
+  pci_bdf_address: string | null;
+}
+
+export const fetchBackendDevices = () => get<BackendDevice[]>('/backends/devices');
 
 export const fetchModelFiles = () => get<ModelFile[]>('/models/files');
 export const fetchConfig = () => get<{ raw: string; models: Record<string, unknown>; groups: Record<string, unknown> }>('/config');

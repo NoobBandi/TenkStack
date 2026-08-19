@@ -144,16 +144,46 @@ async def upsert_model(
     group: str | None,
     extra: str = "",
     mmproj: str | None = None,
+    env: dict | None = None,
+    managed_env: set[str] | None = None,
 ) -> None:
     async with _lock:
         data = _load()
         models = data.setdefault("models", {})
-        models[model_id] = {
-            "name": name,
-            "description": description,
-            "cmd": build_cmd(model_file, ctx_size, n_gpu_layers, extra, mmproj),
-            "ttl": ttl,
-        }
+        # Merged into the existing entry, never substituted for it.
+        #
+        # llama-swap understands more keys than this form does -- `aliases`,
+        # `env`, `filters`, `cmdStop` -- and a hand-written one is not the UI's
+        # to delete. Replacing the mapping wholesale silently dropped them on
+        # the next edit through the console, which is the worst shape a data
+        # loss can take: it happens later, to somebody who changed something
+        # unrelated. Mutated in place rather than rebuilt so ruamel keeps the
+        # comments attached to the mapping as well.
+        entry = models.get(model_id)
+        if not isinstance(entry, dict):
+            entry = {}
+            models[model_id] = entry
+        entry["name"] = name
+        entry["description"] = description
+        entry["cmd"] = build_cmd(model_file, ctx_size, n_gpu_layers, extra, mmproj)
+        entry["ttl"] = ttl
+
+        # Which card this model runs on, as llama-swap's per-model `env`.
+        #
+        # A structured key rather than a flag inside `cmd`, because llama-swap
+        # already passes `env` through to the process it spawns and a YAML
+        # mapping does not have to be parsed back out of a command line. Only
+        # the variables the caller says it manages are cleared -- an
+        # environment variable somebody added by hand is not the UI's to
+        # remove, the same rule the rest of this entry now follows.
+        managed = managed_env or set()
+        kept = {k: v for k, v in (entry.get("env") or {}).items() if k not in managed}
+        merged = {**kept, **(env or {})}
+        if merged:
+            entry["env"] = merged
+        else:
+            entry.pop("env", None)
+
         _sync_group_membership(data, model_id, group)
         _dump(data)
     logger.info("upserted model %s (group=%s)", model_id, group)
@@ -681,6 +711,9 @@ def read_model_spec(model_id: str) -> dict | None:
 
     return {
         "id": model_id,
+        # Verbatim, so the UI can tell which device entry it corresponds to
+        # without this module knowing what a device is.
+        "env": dict(spec.get("env") or {}),
         "name": spec.get("name") or model_id,
         "description": spec.get("description") or "",
         "model_file": values["model_file"] or "",

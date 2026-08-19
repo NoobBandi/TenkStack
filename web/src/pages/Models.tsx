@@ -9,10 +9,11 @@ import {
 } from '@ant-design/icons';
 import { useStream } from '../stream';
 import {
-  deleteFile, deleteModel, deletePartial, fetchModelFiles, fetchModelSpec, fetchPartials,
-  loadModel, modelFileRefs, saveModel, unloadAll, unloadModel,
-  type ModelFile, type ModelFileRef, type ModelInfo, type ModelSpec, type ModelWeight,
-  type PartialFile,
+  deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
+  fetchModelSpec, fetchPartials, loadModel, modelFileRefs, saveModel, unloadAll,
+  unloadModel,
+  type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo,
+  type ModelSpec, type ModelWeight, type PartialFile,
 } from '../api';
 import { MONO } from '../theme';
 
@@ -25,6 +26,7 @@ const STATE_COLOURS: Record<string, string> = {
 const EMPTY: ModelSpec = {
   id: '', name: '', description: '', model_file: '',
   ctx_size: 16384, n_gpu_layers: 99, ttl: 900, group: 'large', extra: '', mmproj: null,
+  device: '',
 };
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
@@ -86,6 +88,17 @@ export default function Models() {
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [form] = Form.useForm<ModelSpec>();
+  /**
+   * The cards a llama-server here can actually drive.
+   *
+   * Asked for, not assumed: a machine with two cards and one runtime still has
+   * one answer, and a field with a single option is a question that should not
+   * have been put. The picker below appears only when this has more than one
+   * entry, which today it does not -- the SYCL build cannot see the NVIDIA
+   * card -- and will start appearing on its own once a CUDA runtime is
+   * configured, with nobody having to remember to switch it on.
+   */
+  const [devices, setDevices] = useState<BackendDevice[]>([]);
 
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
@@ -100,6 +113,19 @@ export default function Models() {
   }, [refreshModels]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    fetchBackendDevices().then(setDevices).catch(() => setDevices([]));
+  }, []);
+
+  /** Which device entry a model's stored environment corresponds to. Matched
+   *  on the variables themselves rather than on a name written beside them, so
+   *  an entry edited by hand is still recognised. */
+  const deviceOf = (env?: Record<string, string>) => {
+    if (!env) return '';
+    const hit = devices.find((d) => Object.keys(d.env).length > 0
+      && Object.entries(d.env).every(([key, value]) => env[key] === value));
+    return hit ? `${hit.backend}:${hit.index}` : '';
+  };
 
   const onSave = async () => {
     const values = await form.validateFields();
@@ -118,7 +144,7 @@ export default function Models() {
   const openEdit = async (id: string) => {
     try {
       const spec = await fetchModelSpec(id);
-      form.setFieldsValue(spec);
+      form.setFieldsValue({ ...spec, device: deviceOf(spec.env) });
       setEditing(id);
       setOpen(true);
     } catch (error) {
@@ -546,6 +572,23 @@ export default function Models() {
               }))}
             />
           </Form.Item>
+          {/* Only when there is a choice. One usable card means one option,
+              and a select with one option is a question that should not have
+              been asked -- the same rule as the log page's per-instance row
+              and the paginator's size list. */}
+          {devices.length > 1 && (
+            <Form.Item name="device" label="顯示卡"
+                       extra="只列出這台的 llama-server 真的看得到的卡。留空表示不指定。">
+              <Select
+                allowClear
+                placeholder="不指定"
+                options={devices.map((d) => ({
+                  value: `${d.backend}:${d.index}`,
+                  label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
+                }))}
+              />
+            </Form.Item>
+          )}
           <Space size={16} style={{ display: 'flex' }}>
             <Form.Item name="ctx_size" label="Context 長度" style={{ flex: 1 }}>
               <InputNumber min={512} max={1048576} step={1024} style={{ width: '100%' }} />

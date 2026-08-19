@@ -28,8 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
-    auth, catalog, channels, chats, config, containers, files, gguf, gpu,
-    gpu_history, llamaswap, logs as journal, search, speed, system, users,
+    auth, backends, catalog, channels, chats, config, containers, files, gguf,
+    gpu, gpu_history, llamaswap, logs as journal, search, speed, system, users,
     versions,
 )
 
@@ -227,6 +227,10 @@ class ModelSpec(BaseModel):
     group: str | None = "large"
     extra: str = ""
     mmproj: str | None = None
+    # Which card to run on, as `backend:index` -- `SYCL:0`, `CUDA:1`. Empty
+    # means "do not pin", which is the only sensible default on a machine with
+    # one usable card and the only answer the form offers there.
+    device: str = ""
 
 
 @app.get("/api/models")
@@ -280,6 +284,35 @@ async def read_models():
     return result
 
 
+async def _device_env(chosen: str) -> dict:
+    """The environment a `backend:index` choice means, or nothing.
+
+    Resolved against what llama-server actually enumerates rather than
+    constructed from the string, so a stale choice -- a card that has since
+    been removed -- writes no selector at all instead of one pointing at a
+    device that is not there.
+    """
+    if not chosen:
+        return {}
+    backend, _, index = chosen.partition(":")
+    for device in await backends.usable():
+        if device["backend"] == backend and str(device["index"]) == index:
+            return device["env"]
+    logger.warning("model asked for device %s, which no launcher sees", chosen)
+    return {}
+
+
+@app.get("/api/backends/devices")
+async def read_backend_devices(refresh: bool = False):
+    """The cards a configured llama-server can actually see.
+
+    Not the GPU list: a card with no runtime that can drive it cannot run a
+    model, and offering it would be a choice that fails at load time.
+    """
+    devices, cards = await asyncio.gather(backends.usable(refresh), gpu.list_devices())
+    return backends.match(devices, cards)
+
+
 @app.post("/api/models")
 async def create_model(spec: ModelSpec):
     await config.upsert_model(
@@ -293,6 +326,8 @@ async def create_model(spec: ModelSpec):
         group=spec.group,
         extra=spec.extra,
         mmproj=spec.mmproj,
+        env=await _device_env(spec.device),
+        managed_env=backends.selector_vars(),
     )
     return {"ok": True, "id": spec.id}
 
