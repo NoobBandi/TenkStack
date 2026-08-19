@@ -22,10 +22,11 @@ about who can reach it rather than about what the card does.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from pathlib import Path
 
-from . import containers, paths
+from . import channels, containers, paths
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,16 @@ async def create(card: dict, cards: list[dict]) -> str:
     if await containers._docker(*args) is None:
         raise ValueError(f"無法建立 {name}，詳細原因在主控台的日誌裡")
     logger.info("created ComfyUI instance %s on %s port %d", name, vendor, port)
+
+    # Published as well as created, or a new card gets an instance nobody in
+    # the house can open. Not fatal if it fails: the instance is real and
+    # working on loopback, the console can already see it, and the reason to
+    # separate the two is that reaching it from another machine is a question
+    # about the network rather than about the card.
+    try:
+        await channels.publish_comfyui(port, note=f"{spec['label']} -- {card.get('name') or slot}")
+    except Exception:
+        logger.exception("created %s but could not publish it through Caddy", name)
     return name
 
 
@@ -201,12 +212,25 @@ async def destroy(name: str, delete_image: bool = False) -> None:
     if name not in await containers.names():
         raise ValueError(f"沒有這個容器：{name}")
 
-    image = None
-    if delete_image:
-        detail = await containers._inspect([name])
-        image = ((detail.get(name) or {}).get("Config") or {}).get("Image")
+    detail = await containers._inspect([name])
+    config = (detail.get(name) or {}).get("Config") or {}
+    image = config.get("Image") if delete_image else None
+
+    # Read before the container goes: the published port is the only link back
+    # to the site block that has to go with it.
+    upstream = None
+    bindings = ((detail.get(name) or {}).get("HostConfig") or {}).get("PortBindings") or {}
+    for published in bindings.values():
+        for entry in published or []:
+            with contextlib.suppress(TypeError, ValueError):
+                upstream = int(entry.get("HostPort"))
 
     await containers._docker("rm", "-f", name)
+    if upstream is not None:
+        try:
+            await channels.unpublish_comfyui(upstream)
+        except Exception:
+            logger.exception("removed %s but could not unpublish :%d", name, upstream)
     if image:
         if await containers._docker("rmi", image) is None:
             logger.warning("removed %s but could not delete %s", name, image)

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import socket
 import subprocess
@@ -270,3 +271,95 @@ async def set_scopes(name: str, scopes: list[str]):
     await _apply(rollback)
     logger.info("channel %s scopes -> %s", name, sorted(wanted) or ["local"])
     return {"changed": True, **status()}
+
+
+# --------------------------------------------------------------------------
+# Publishing one ComfyUI instance
+#
+# The ComfyUI channel is one site block per instance, mapped by a fixed offset:
+# 8188 is published on 8444, 8189 on 8445. That was a comment describing what
+# somebody did by hand; creating an instance from the console means doing it
+# from here instead, or a new card ends up with an instance the household
+# cannot reach.
+#
+# The hosts are copied from a block that already exists rather than rebuilt,
+# because that list is the machine's own answer to "what am I called" --
+# hostname, LAN address, Tailscale name and address -- and reconstructing it
+# would be a second, worse copy of it. Only the first instance on a fresh
+# machine has nothing to copy, and that one is built from what `_addresses`
+# already finds.
+# --------------------------------------------------------------------------
+
+COMFYUI_CHANNEL = "comfyui.caddy"
+UPSTREAM_BASE = 8188
+PUBLIC_BASE = 8444
+
+_SITE = re.compile(
+    r"\n#[^\n]*\n(?:https://[^\n]*\n)*[^\n]*\{\n\timport comfyui-channel (\d+)\n\}\n"
+)
+_HOST = re.compile(r"https://([^:,\s]+):\d+")
+
+
+def public_port(upstream: int) -> int:
+    return PUBLIC_BASE + (upstream - UPSTREAM_BASE)
+
+
+def _channel_path() -> Path | None:
+    for directory in (CHANNELS, DISABLED):
+        path = directory / COMFYUI_CHANNEL
+        if path.exists():
+            return path
+    return None
+
+
+def _hosts(text: str) -> list[str]:
+    """The names this machine publishes under, from the file or from the box."""
+    found = list(dict.fromkeys(_HOST.findall(text)))
+    if found:
+        return found
+
+    addresses = _addresses()
+    names = ["localhost", "127.0.0.1", socket.gethostname()]
+    for key in ("lan", "tailscale"):
+        if addresses.get(key):
+            names.append(addresses[key])
+    return list(dict.fromkeys(names))
+
+
+async def publish_comfyui(upstream: int, note: str = "") -> int:
+    """Add a site block for one instance, and reload. Returns the public port."""
+    path = _channel_path()
+    if path is None:
+        raise RuntimeError(f"找不到 {COMFYUI_CHANNEL}，無法發布這個實例")
+
+    text = path.read_text(encoding="utf-8")
+    if f"import comfyui-channel {upstream}\n" in text:
+        return public_port(upstream)
+
+    port = public_port(upstream)
+    addresses = ",\n".join(f"https://{host}:{port}" for host in _hosts(text))
+    block = (
+        f"\n# :{upstream}{f' -- {note}' if note else ''}\n"
+        f"{addresses} {{\n\timport comfyui-channel {upstream}\n}}\n"
+    )
+
+    before = text
+    path.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8")
+    await _apply(lambda: path.write_text(before, encoding="utf-8"))
+    logger.info("published ComfyUI :%d on :%d", upstream, port)
+    return port
+
+
+async def unpublish_comfyui(upstream: int) -> None:
+    """Remove one instance's site block, and reload."""
+    path = _channel_path()
+    if path is None:
+        return
+    text = path.read_text(encoding="utf-8")
+    trimmed = _SITE.sub(
+        lambda m: "" if m.group(1) == str(upstream) else m.group(0), text)
+    if trimmed == text:
+        return
+    path.write_text(trimmed, encoding="utf-8")
+    await _apply(lambda: path.write_text(text, encoding="utf-8"))
+    logger.info("unpublished ComfyUI :%d", upstream)
