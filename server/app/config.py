@@ -804,6 +804,23 @@ def env_map(value: Any) -> dict[str, str]:
     return out
 
 
+async def add_macro(name: str, value: str) -> None:
+    """Name a launcher in the config, so the device probe can find it.
+
+    A macro because that is what the macros in this file already are -- the
+    existing `llama-sycl` is one -- and because naming it is the whole of
+    registration: nothing else has to be told a new backend exists.
+    """
+    async with _lock:
+        data = _load()
+        macros = data.setdefault("macros", {})
+        if macros.get(name) == value:
+            return
+        macros[name] = value
+        await _apply(data)
+    logger.info("registered launcher macro %s -> %s", name, value)
+
+
 def read_model_spec(model_id: str) -> dict | None:
     """Parse a model's cmd back into the fields the editor shows.
 

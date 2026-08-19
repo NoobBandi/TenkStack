@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Empty, Space, Table, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Empty, Progress, Space, Table, Tag, Tooltip,
+  Typography,
 } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
-import { fetchRuntime, restartContainer, type RuntimeContainer, type RuntimeSurvey }
-  from '../api';
+import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  fetchRuntime, fetchRuntimes, installRuntime, restartContainer,
+  type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
+} from '../api';
 import { MONO } from '../theme';
 
 const { Text } = Typography;
@@ -32,11 +35,13 @@ const STATE_COLOUR: Record<string, string> = {
 export default function Runtime() {
   const { message } = AntApp.useApp();
   const [survey, setSurvey] = useState<RuntimeSurvey | null>(null);
+  const [cards, setCards] = useState<RuntimeCoverage[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(() => {
     fetchRuntime().then(setSurvey)
       .catch(() => setSurvey({ available: false, containers: [], idle_gpus: [] }));
+    fetchRuntimes().then(setCards).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -70,8 +75,103 @@ export default function Runtime() {
 
   const orphans = survey?.containers.filter((c) => c.orphaned) ?? [];
 
+  const onInstall = async (row: RuntimeCoverage) => {
+    setBusy(row.vendor);
+    try {
+      await installRuntime(row.vendor);
+      load();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {/* Above the containers, because it answers the question they raise: a
+          card with no runtime cannot run a model no matter what is installed
+          beside it. Rows are the cards in the machine, so a host with one
+          vendor, or three, needs nothing edited here. */}
+      <Card title="推論執行環境" size="small" loading={cards.length === 0}>
+        <Table<RuntimeCoverage>
+          dataSource={cards}
+          rowKey={(row) => row.pci_bdf_address ?? row.name ?? row.vendor}
+          size="small"
+          pagination={false}
+          columns={[
+            {
+              title: '顯示卡',
+              render: (_, row) => (
+                <Space size={6}>
+                  <span>{row.name ?? row.pci_bdf_address}</span>
+                  <Tag color={row.vendor === 'nvidia' ? 'green' : 'blue'}>{row.vendor}</Tag>
+                </Space>
+              ),
+            },
+            {
+              title: 'llama-server', width: 330,
+              render: (_, row) => {
+                if (row.covered) {
+                  return <Tag color="green">可以跑模型</Tag>;
+                }
+                const job = row.install;
+                if (job && job.state !== 'error') {
+                  const done = job.state === 'done';
+                  return (
+                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {done ? '已寫入啟動器' : job.state === 'writing' ? '寫入啟動器…' : '下載映像…'}
+                      </Text>
+                      <Progress
+                        size="small"
+                        status={done ? 'success' : 'active'}
+                        percent={done ? 100 : job.layers_total
+                          ? Math.round((job.layers_done / job.layers_total) * 100) : 0}
+                      />
+                    </Space>
+                  );
+                }
+                if (job?.state === 'error') {
+                  return <Tooltip title={job.message}><Tag color="error">安裝失敗</Tag></Tooltip>;
+                }
+                if (!row.runtime) {
+                  return <Text type="secondary">沒有這家廠商的範本</Text>;
+                }
+                return (
+                  <Space size={6} wrap>
+                    <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
+                      {row.runtime.image.split('/').pop()}
+                    </Text>
+                    {!row.runtime.verified && (
+                      <Tooltip title="這份設定是照官方文件寫的，沒有在這台機器上跑過">
+                        <Tag color="warning">未驗證</Tag>
+                      </Tooltip>
+                    )}
+                    {row.runtime.requires && (
+                      <Tooltip title={`主機需要 ${row.runtime.requires}`}>
+                        <Tag>需要 {row.runtime.requires}</Tag>
+                      </Tooltip>
+                    )}
+                  </Space>
+                );
+              },
+            },
+            {
+              title: '', width: 110,
+              render: (_, row) => (row.covered || !row.runtime ? null : (
+                <Button size="small" icon={<CloudDownloadOutlined />}
+                        loading={busy === row.vendor}
+                        disabled={!!row.install && row.install.state !== 'error'}
+                        onClick={() => onInstall(row)}>
+                  安裝
+                </Button>
+              )),
+            },
+          ]}
+        />
+      </Card>
+
       {orphans.length > 0 && (
         <Alert
           type="warning"

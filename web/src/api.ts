@@ -317,6 +317,31 @@ export interface BackendDevice {
 
 export const fetchBackendDevices = () => get<BackendDevice[]>('/backends/devices');
 
+/** One card in the machine, and whether anything here can run a model on it.
+ *  A card with no runtime is not broken -- it may be doing images, or waiting
+ *  for an image to be pulled -- so this reports rather than warns. */
+export interface RuntimeCoverage {
+  pci_bdf_address: string | null;
+  name: string | null;
+  vendor: string;
+  covered: boolean;
+  runtime: {
+    vendor: string; label: string; image: string;
+    requires: string | null;
+    /** False for a recipe written from documentation and never run here. */
+    verified: boolean;
+  } | null;
+  install: {
+    vendor: string; image: string;
+    state: 'pulling' | 'writing' | 'done' | 'error';
+    layers_done: number; layers_total: number; message: string;
+  } | null;
+}
+
+export const fetchRuntimes = () => get<RuntimeCoverage[]>('/runtimes');
+export const installRuntime = (vendor: string) =>
+  send<RuntimeCoverage['install']>('/runtimes/install', 'POST', { vendor });
+
 export const fetchModelFiles = () => get<ModelFile[]>('/models/files');
 export const fetchConfig = () => get<{ raw: string; models: Record<string, unknown>; groups: Record<string, unknown> }>('/config');
 

@@ -313,6 +313,28 @@ async def read_backend_devices(refresh: bool = False):
     return backends.match(devices, cards)
 
 
+@app.get("/api/runtimes")
+async def read_runtimes():
+    """Every card in the machine, and whether anything here can run a model on it."""
+    return await backends.coverage(await gpu.list_devices())
+
+
+@app.post("/api/runtimes/install")
+async def install_runtime(payload: dict = Body(...),
+                          _: dict = Depends(auth.require_owner)):
+    """Pull a vendor's llama.cpp image and register a launcher for it.
+
+    Owner-only and in a browser: this writes an executable and edits the file
+    that decides how every model starts. It is also several gigabytes of
+    download, which is not something an API key pasted into a chat client
+    should be able to start.
+    """
+    try:
+        return await backends.install(str(payload.get("vendor") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/models")
 async def create_model(spec: ModelSpec):
     """Write a model entry, or say why it could not be written.
