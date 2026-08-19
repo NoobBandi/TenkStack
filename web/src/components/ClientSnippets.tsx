@@ -9,6 +9,11 @@ import { MONO } from '../theme';
 
 const { Paragraph } = Typography;
 
+const BOX: React.CSSProperties = {
+  background: 'rgba(255,255,255,0.04)', padding: 12, borderRadius: 6,
+  overflowX: 'auto', margin: 0, fontSize: 12, lineHeight: 1.55, fontFamily: MONO,
+};
+
 /**
  * Ready-made client configuration.
  *
@@ -30,6 +35,10 @@ export default function ClientSnippets() {
   const [network, setNetwork] = useState<NetworkInfo | null>(null);
   const [hostKey, setHostKey] = useState<string>();
   const [tab, setTab] = useState('opencode');
+  // Which shell the second box is written for. Only some snippets have one, and
+  // the difference is not cosmetic: `export` and `$env:` are different
+  // languages, and on Windows the second one lasts only as long as the window.
+  const [shell, setShell] = useState<'linux' | 'windows'>('linux');
 
   useEffect(() => {
     fetchEndpoints().then(setEndpoints).catch(() => undefined);
@@ -103,51 +112,55 @@ export default function ClientSnippets() {
     {
       key: 'claude-code',
       label: 'Claude Code',
-      code: `# Claude Code 走 Anthropic 自己的 /v1/messages 格式，llama-server 原生支援，
-# 主控台的 /v1 代理照樣轉發，認證用它本來就會送的 x-api-key。
-#
-# 注意 ANTHROPIC_BASE_URL 不要帶 /v1：Claude Code 自己會接上 /v1/messages。
-
-export ANTHROPIC_BASE_URL="${origin}"
+      caption: 'Linux／macOS 放 ~/.claude/settings.json，Windows 放 %USERPROFILE%\\.claude\\settings.json。'
+             + 'ANTHROPIC_BASE_URL 不要帶 /v1，Claude Code 自己會接上 /v1/messages。'
+             + '背景小工作會另外叫一個「快速模型」，不指定就會送 claude-haiku-*，這台沒有那個名字，'
+             + '所以兩個都要設。',
+      code: `{
+  "env": {
+    "ANTHROPIC_BASE_URL": "${origin}",
+    "ANTHROPIC_AUTH_TOKEN": "sk-console-...",
+    "ANTHROPIC_MODEL": "${modelId}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${modelId}"
+  }
+}`,
+      shellCaption: '不想改設定檔就用環境變數跑一次。PowerShell 的 $env: 只在這個視窗有效，'
+                  + '要留著改用 setx（新開的視窗才會生效）。',
+      shell: {
+        linux: `export ANTHROPIC_BASE_URL="${origin}"
 export ANTHROPIC_AUTH_TOKEN="sk-console-..."
 export ANTHROPIC_MODEL="${modelId}"
-# 背景小工作會另外叫一個「快速模型」，不指定的話它會送 claude-haiku-*，
-# 這台沒有那個名字就會失敗。指到同一個模型即可。
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${modelId}"
-
-# 或寫進 ~/.claude/settings.json：
-# {
-#   "env": {
-#     "ANTHROPIC_BASE_URL": "${origin}",
-#     "ANTHROPIC_AUTH_TOKEN": "sk-console-...",
-#     "ANTHROPIC_MODEL": "${modelId}",
-#     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${modelId}"
-#   }
-# }
-#
-# config.yaml 裡另外掛了 claude-opus-5／claude-sonnet-5／claude-haiku-4-5
-# 這幾個別名指向同一個模型，所以硬寫死模型名的工具也能通。`,
+claude`,
+        windows: `$env:ANTHROPIC_BASE_URL = "${origin}"
+$env:ANTHROPIC_AUTH_TOKEN = "sk-console-..."
+$env:ANTHROPIC_MODEL = "${modelId}"
+$env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "${modelId}"
+claude`,
+      },
     },
     {
       key: 'codex',
       label: 'Codex',
-      code: `# ~/.codex/config.toml
-#
-# Codex 只講 OpenAI 協定，而且從 2026 年 2 月起只剩 Responses API
-# （wire_api = "chat" 已移除）。llama-server 有 /v1/responses，所以能用。
-# 先在 shell 設好金鑰：export TENKS_KEY=sk-console-...
-
-model_provider = "tenks"
+      caption: 'Linux／macOS 放 ~/.codex/config.toml，Windows 放 %USERPROFILE%\\.codex\\config.toml。'
+             + 'Codex 只講 OpenAI 協定，而且從 2026 年 2 月起只剩 Responses API'
+             + '（wire_api = "chat" 已移除）；llama-server 有 /v1/responses 所以能用。'
+             + '內建的 provider id（openai／ollama／lmstudio）不能覆寫，要取自己的名字。',
+      code: `model_provider = "tenks"
 model = "${modelId}"
 
 [model_providers.tenks]
 name = "TenkStack"
 base_url = "${base}"
 env_key = "TENKS_KEY"
-wire_api = "responses"
-
-# 內建的 provider id（openai／ollama／lmstudio）不能覆寫，所以取一個自己的名字。
-# 別名 gpt-5-codex／gpt-5 也指向同一個模型。`,
+wire_api = "responses"`,
+      shellCaption: '金鑰不寫在設定檔裡，Codex 只記變數名稱，值從環境變數讀。',
+      shell: {
+        linux: `export TENKS_KEY="sk-console-..."
+codex`,
+        windows: `$env:TENKS_KEY = "sk-console-..."
+codex`,
+      },
     },
     {
       key: 'grok',
@@ -233,16 +246,43 @@ print(resp.choices[0].message.content)`,
         </Space>
 
         <Paragraph type="secondary" style={{ fontSize: 12, margin: 0 }}>
-          位址與模型 id 取自這台機器目前的狀態。API key 到「使用者」頁建立，只會顯示一次。
+          {active.caption
+            ?? '位址與模型 id 取自這台機器目前的狀態。API key 到「使用者」頁建立，只會顯示一次。'}
         </Paragraph>
 
-        <pre style={{
-          background: 'rgba(255,255,255,0.04)', padding: 12, borderRadius: 6,
-          overflowX: 'auto', margin: 0, fontSize: 12, lineHeight: 1.55,
-          fontFamily: MONO,
-        }}>
-          <code>{active.code}</code>
-        </pre>
+        <pre style={BOX}><code>{active.code}</code></pre>
+
+        {/* The second box exists because the first one is a file and this is
+            something you type. Keeping them apart is the difference between a
+            config to paste and a command to run -- and the command is not the
+            same command on both platforms. */}
+        {active.shell && (
+          <>
+            <Space size={10} wrap style={{ marginTop: 2 }}>
+              <Segmented
+                size="small"
+                value={shell}
+                onChange={(v) => setShell(v as 'linux' | 'windows')}
+                options={[
+                  { label: 'Linux／macOS', value: 'linux' },
+                  { label: 'Windows PowerShell', value: 'windows' },
+                ]}
+              />
+              <Button type="text" size="small" icon={<CopyOutlined />}
+                      onClick={() => copy(active.shell![shell])}>
+                複製
+              </Button>
+            </Space>
+
+            {active.shellCaption && (
+              <Paragraph type="secondary" style={{ fontSize: 12, margin: 0 }}>
+                {active.shellCaption}
+              </Paragraph>
+            )}
+
+            <pre style={BOX}><code>{active.shell[shell]}</code></pre>
+          </>
+        )}
       </Space>
     </Card>
   );
