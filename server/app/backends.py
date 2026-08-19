@@ -262,7 +262,7 @@ FALLBACK = {
 }
 
 
-def wrapper_text(vendor: str, models_dir: str) -> str:
+def wrapper_text(vendor: str, models_dir: str, variant: str = "vendor") -> str:
     """The launcher script for one vendor, ready to write.
 
     Two details make the container invisible to the rest of the config, and
@@ -272,7 +272,7 @@ def wrapper_text(vendor: str, models_dir: str) -> str:
     container runs with --network host, so `--port ${PORT}` lands where
     llama-swap expects it.
     """
-    spec = RUNTIMES.get(vendor) or FALLBACK
+    spec = _spec_for(vendor, variant) or FALLBACK
     flags = " ".join(shlex.quote(f) for f in spec["flags"])
     selector = _SELECTOR_FOR_VENDOR.get(vendor)
     forward = ""
@@ -369,7 +369,7 @@ async def coverage(cards: list[dict]) -> list[dict]:
             # What would be installed for it. An unverified recipe is worth
             # saying before the download, not after.
             "runtime": {**spec, "vendor": vendor} if spec else None,
-            "install": _installs[vendor].as_dict() if vendor in _installs else None,
+            "state": await state(vendor) if vendor in RUNTIMES else None,
         })
     return rows
 
@@ -410,7 +410,7 @@ async def _pull(record: "Install") -> bool:
     return True
 
 
-async def install(vendor: str) -> dict:
+async def install(vendor: str, variant: str = "vendor") -> dict:
     """Add a runtime for one vendor: pull the image, write the launcher, name it.
 
     Every step is fixed and none of it is free-form. The image comes from the
@@ -421,7 +421,7 @@ async def install(vendor: str) -> dict:
     """
     from . import config
 
-    spec = RUNTIMES.get(vendor)
+    spec = _spec_for(vendor, variant)
     if spec is None:
         raise ValueError(f"沒有 {vendor} 的執行環境範本")
 
@@ -429,7 +429,7 @@ async def install(vendor: str) -> dict:
     if running and running.state in {"pulling", "writing"}:
         return running.as_dict()
 
-    path = config.CONFIG_PATH.parent / f"llama-server-{vendor}.sh"
+    path = _script(vendor)
     if path.exists():
         raise ValueError(f"{path.name} 已經存在，沒有覆寫它")
 
@@ -441,7 +441,8 @@ async def install(vendor: str) -> dict:
             return
         record.state = "writing"
         try:
-            path.write_text(wrapper_text(vendor, str(paths.MODELS_DIR)), encoding="utf-8")
+            path.write_text(wrapper_text(vendor, str(paths.MODELS_DIR), variant),
+                            encoding="utf-8")
             path.chmod(0o755)
             await config.add_macro(f"llama-{vendor}", str(path))
         except Exception as exc:
@@ -451,6 +452,171 @@ async def install(vendor: str) -> dict:
         # The probe caches, and a new launcher is exactly what invalidates it.
         await usable(refresh=True)
         record.state, record.message = "done", str(path)
+
+    asyncio.create_task(run())
+    return record.as_dict()
+
+
+# --------------------------------------------------------------------------
+# The rest of a runtime's life
+#
+# Installing one is the easy half. The reason the other half exists is that a
+# fresh machine should start with nothing: several gigabytes per vendor, on a
+# host that may only ever use one card, is not something to arrive with. So a
+# runtime can be added, updated, switched off and removed, and the console
+# holds only what somebody asked for.
+#
+# Two things it deliberately does not do. It does not touch drivers -- those
+# need root, sometimes a reboot, and belong to whatever installed the kernel
+# module; the console reports versions and stops there. And it will not
+# unregister a launcher some model is still started through, because that is
+# not a setting, it is breaking the models that use it.
+# --------------------------------------------------------------------------
+
+# `IMAGE="${LLAMA_IMAGE:-ghcr.io/...}"` in a generated launcher.
+_IMAGE_LINE = re.compile(r'IMAGE="\$\{LLAMA_IMAGE:-([^}"]+)\}"')
+
+
+def _spec_for(vendor: str, variant: str = "vendor") -> dict | None:
+    if variant == "vulkan":
+        return {**FALLBACK, "vendor": vendor}
+    spec = RUNTIMES.get(vendor)
+    return {**spec, "vendor": vendor} if spec else None
+
+
+def _script(vendor: str):
+    from . import config
+    return config.CONFIG_PATH.parent / f"llama-server-{vendor}.sh"
+
+
+async def _images() -> dict[str, str]:
+    """{image reference: human size} for what is actually on this disk."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return {}
+    out, _ = await proc.communicate()
+    found = {}
+    for line in out.decode("utf-8", "replace").splitlines():
+        name, _, size = line.partition("\t")
+        if name:
+            found[name.strip()] = size.strip()
+    return found
+
+
+async def state(vendor: str) -> dict:
+    """What exists for one vendor: the script, the macro, the image.
+
+    Three independent facts rather than one status, because they come apart in
+    ways worth seeing: a disabled runtime is a script with no macro, and a
+    half-removed one is a macro with no image.
+    """
+    from . import config
+
+    script = _script(vendor)
+    macros = config.launcher_macros()
+    macro = f"llama-{vendor}"
+    images = await _images()
+
+    # From the script when there is one: it records which variant was chosen,
+    # and the table only knows what the default would have been.
+    image = (_spec_for(vendor) or {}).get("image")
+    if script.exists():
+        found = _IMAGE_LINE.search(script.read_text(encoding="utf-8", errors="replace"))
+        if found:
+            image = found.group(1)
+
+    return {
+        "managed": script.exists(),
+        "enabled": macros.get(macro) == str(script),
+        "image": image,
+        "image_size": images.get(image or ""),
+        "install": _installs[vendor].as_dict() if vendor in _installs else None,
+        "used_by": config.models_using("${%s}" % macro),
+    }
+
+
+async def enable(vendor: str, on: bool) -> None:
+    """Register or unregister the launcher macro, leaving the files alone.
+
+    Off is not a lighter uninstall -- the image stays, so turning it back on
+    costs nothing. It is how a card gets taken out of service without throwing
+    away several gigabytes to do it.
+    """
+    from . import config
+
+    script = _script(vendor)
+    macro = f"llama-{vendor}"
+    if on:
+        if not script.exists():
+            raise ValueError(f"{script.name} 不存在，先安裝再啟用")
+        await config.add_macro(macro, str(script))
+    else:
+        used = config.models_using("${%s}" % macro)
+        if used:
+            raise ValueError(
+                f"還有模型用這個執行環境啟動：{'、'.join(used)}。"
+                "先把它們改到別張卡，或刪掉它們。"
+            )
+        await config.remove_macro(macro)
+    await usable(refresh=True)
+
+
+async def remove(vendor: str, delete_image: bool = False) -> None:
+    """Unregister, delete the launcher, and optionally reclaim the image.
+
+    The image is the several gigabytes, and deleting it is separate on purpose:
+    removing a runtime to change how a card is used is not the same act as
+    reclaiming disk, and only one of them is slow to undo.
+    """
+    await enable(vendor, False)
+
+    script = _script(vendor)
+    if script.exists():
+        script.unlink()
+
+    if delete_image:
+        image = (await state(vendor)).get("image")
+        if image:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "docker", "rmi", image,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, err = await proc.communicate()
+                if proc.returncode != 0:
+                    logger.warning("could not remove %s: %s", image, err.decode()[:200])
+            except OSError as exc:
+                logger.warning("could not run docker rmi: %s", exc)
+    _installs.pop(vendor, None)
+    await usable(refresh=True)
+
+
+async def update(vendor: str) -> dict:
+    """Pull the image again.
+
+    The tags here are rolling -- `server-cuda` moves with llama.cpp's releases
+    -- so this is the whole of updating a containerised runtime. Nothing is
+    written: the launcher script names the tag, not a digest.
+    """
+    image = (await state(vendor)).get("image")
+    if not image:
+        raise ValueError(f"沒有 {vendor} 的執行環境範本")
+
+    running = _installs.get(vendor)
+    if running and running.state in {"pulling", "writing"}:
+        return running.as_dict()
+
+    record = Install(vendor=vendor, image=image)
+    _installs[vendor] = record
+
+    async def run() -> None:
+        if await _pull(record):
+            record.state = "done"
 
     asyncio.create_task(run())
     return record.as_dict()

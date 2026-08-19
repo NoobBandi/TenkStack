@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Empty, Progress, Space, Table, Tag, Tooltip,
-  Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Empty, Progress, Space, Table, Tag,
+  Tooltip, Typography,
 } from 'antd';
-import { CloudDownloadOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
-  fetchRuntime, fetchRuntimes, installRuntime, restartContainer,
-  type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
+  CloudDownloadOutlined, DownOutlined, ReloadOutlined,
+} from '@ant-design/icons';
+import {
+  fetchRuntime, fetchRuntimes, restartContainer, runtimeAction,
+  type RuntimeAction, type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
 } from '../api';
 import { MONO } from '../theme';
 
@@ -75,10 +77,13 @@ export default function Runtime() {
 
   const orphans = survey?.containers.filter((c) => c.orphaned) ?? [];
 
-  const onInstall = async (row: RuntimeCoverage) => {
+  const act = async (
+    row: RuntimeCoverage, action: RuntimeAction,
+    options: { variant?: string; delete_image?: boolean } = {},
+  ) => {
     setBusy(row.vendor);
     try {
-      await installRuntime(row.vendor);
+      await runtimeAction(row.vendor, action, options);
       load();
     } catch (error) {
       message.error((error as Error).message);
@@ -113,9 +118,21 @@ export default function Runtime() {
               title: 'llama-server', width: 330,
               render: (_, row) => {
                 if (row.covered) {
-                  return <Tag color="green">可以跑模型</Tag>;
+                  return (
+                    <Space size={6} wrap>
+                      <Tag color="green">可以跑模型</Tag>
+                      {row.state?.image_size && (
+                        <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
+                          {row.state.image?.split('/').pop()} · {row.state.image_size}
+                        </Text>
+                      )}
+                    </Space>
+                  );
                 }
-                const job = row.install;
+                if (row.state?.managed && !row.state.enabled) {
+                  return <Tag>已安裝，未啟用</Tag>;
+                }
+                const job = row.state?.install ?? null;
                 if (job && job.state !== 'error') {
                   const done = job.state === 'done';
                   return (
@@ -158,15 +175,78 @@ export default function Runtime() {
               },
             },
             {
-              title: '', width: 110,
-              render: (_, row) => (row.covered || !row.runtime ? null : (
-                <Button size="small" icon={<CloudDownloadOutlined />}
-                        loading={busy === row.vendor}
-                        disabled={!!row.install && row.install.state !== 'error'}
-                        onClick={() => onInstall(row)}>
-                  安裝
-                </Button>
-              )),
+              title: '', width: 180,
+              render: (_, row) => {
+                if (!row.runtime) return null;
+                const state = row.state;
+                const working = !!state?.install
+                  && ['pulling', 'writing'].includes(state.install.state);
+
+                // A launcher this console did not write is not its business.
+                // The native SYCL build covers the Arc here, and offering to
+                // remove it would be offering to delete somebody's own work.
+                if (!state?.managed) {
+                  return row.covered ? (
+                    <Text type="secondary" style={{ fontSize: 12 }}>非主控台安裝</Text>
+                  ) : (
+                    <Dropdown.Button
+                      size="small"
+                      loading={busy === row.vendor || working}
+                      icon={<DownOutlined />}
+                      onClick={() => act(row, 'install')}
+                      menu={{
+                        items: [{
+                          key: 'vulkan',
+                          label: '改用 Vulkan 通用映像（約 290 MB）',
+                          onClick: () => act(row, 'install', { variant: 'vulkan' }),
+                        }],
+                      }}
+                    >
+                      <CloudDownloadOutlined /> 安裝
+                    </Dropdown.Button>
+                  );
+                }
+
+                const used = state.used_by;
+                return (
+                  <Dropdown.Button
+                    size="small"
+                    loading={busy === row.vendor || working}
+                    icon={<DownOutlined />}
+                    onClick={() => act(row, state.enabled ? 'update' : 'enable')}
+                    menu={{
+                      items: [
+                        {
+                          key: 'update', label: '更新映像',
+                          onClick: () => act(row, 'update'),
+                        },
+                        {
+                          key: 'disable',
+                          label: used.length
+                            ? `停用（${used.length} 個模型在用）`
+                            : '停用（保留映像）',
+                          disabled: !state.enabled || used.length > 0,
+                          onClick: () => act(row, 'disable'),
+                        },
+                        { type: 'divider' as const },
+                        {
+                          key: 'remove', label: '移除啟動器',
+                          danger: true, disabled: used.length > 0,
+                          onClick: () => act(row, 'remove'),
+                        },
+                        {
+                          key: 'purge',
+                          label: `移除並刪除映像${state.image_size ? `（${state.image_size}）` : ''}`,
+                          danger: true, disabled: used.length > 0,
+                          onClick: () => act(row, 'remove', { delete_image: true }),
+                        },
+                      ],
+                    }}
+                  >
+                    {state.enabled ? '更新' : '啟用'}
+                  </Dropdown.Button>
+                );
+              },
             },
           ]}
         />

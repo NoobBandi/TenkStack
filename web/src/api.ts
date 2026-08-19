@@ -331,16 +331,34 @@ export interface RuntimeCoverage {
     /** False for a recipe written from documentation and never run here. */
     verified: boolean;
   } | null;
-  install: {
-    vendor: string; image: string;
-    state: 'pulling' | 'writing' | 'done' | 'error';
-    layers_done: number; layers_total: number; message: string;
+  /** What exists for this vendor. Null for a vendor with no template.
+   *  `managed` is a launcher this console wrote -- a native build is covered
+   *  but not managed, and is left alone. `enabled` is whether the config names
+   *  it; the two come apart, which is the point of being able to switch one
+   *  off without throwing away several gigabytes. */
+  state: {
+    managed: boolean;
+    enabled: boolean;
+    image: string | null;
+    image_size: string | null;
+    install: {
+      vendor: string; image: string;
+      state: 'pulling' | 'writing' | 'done' | 'error';
+      layers_done: number; layers_total: number; message: string;
+    } | null;
+    /** Models started through this launcher. Non-empty means it cannot be
+     *  switched off without breaking them. */
+    used_by: string[];
   } | null;
 }
 
+export type RuntimeAction = 'install' | 'update' | 'enable' | 'disable' | 'remove';
+
 export const fetchRuntimes = () => get<RuntimeCoverage[]>('/runtimes');
-export const installRuntime = (vendor: string) =>
-  send<RuntimeCoverage['install']>('/runtimes/install', 'POST', { vendor });
+export const runtimeAction = (
+  vendor: string, action: RuntimeAction,
+  options: { variant?: string; delete_image?: boolean } = {},
+) => send<unknown>('/runtimes/action', 'POST', { vendor, action, ...options });
 
 export const fetchModelFiles = () => get<ModelFile[]>('/models/files');
 export const fetchConfig = () => get<{ raw: string; models: Record<string, unknown>; groups: Record<string, unknown> }>('/config');

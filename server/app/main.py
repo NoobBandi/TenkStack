@@ -340,20 +340,38 @@ async def read_runtimes():
     return await backends.coverage(await gpu.list_devices())
 
 
-@app.post("/api/runtimes/install")
-async def install_runtime(payload: dict = Body(...),
-                          _: dict = Depends(auth.require_owner)):
-    """Pull a vendor's llama.cpp image and register a launcher for it.
+@app.post("/api/runtimes/action")
+async def runtime_action(payload: dict = Body(...),
+                         _: dict = Depends(auth.require_owner)):
+    """Add, update, switch off or remove a runtime.
 
-    Owner-only and in a browser: this writes an executable and edits the file
-    that decides how every model starts. It is also several gigabytes of
-    download, which is not something an API key pasted into a chat client
-    should be able to start.
+    Owner-only and in a browser: these write an executable, edit the file that
+    decides how every model starts, and pull or delete several gigabytes. None
+    of that belongs to an API key pasted into a chat client.
+
+    Drivers are not here and will not be. Installing one needs root, sometimes
+    a reboot, and belongs to whatever installed the kernel module; a web
+    console that could do it would be a web console that could brick the
+    machine it is served from. Versions are reported instead -- see the
+    settings page -- so the mismatch is visible even though the fix is not a
+    button.
     """
+    vendor = str(payload.get("vendor") or "")
+    action = str(payload.get("action") or "")
     try:
-        return await backends.install(str(payload.get("vendor") or ""))
+        if action == "install":
+            return await backends.install(vendor, str(payload.get("variant") or "vendor"))
+        if action == "update":
+            return await backends.update(vendor)
+        if action in {"enable", "disable"}:
+            await backends.enable(vendor, action == "enable")
+        elif action == "remove":
+            await backends.remove(vendor, bool(payload.get("delete_image")))
+        else:
+            raise ValueError(f"不認識的動作：{action}")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @app.post("/api/models")

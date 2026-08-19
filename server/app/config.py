@@ -893,6 +893,36 @@ async def add_macro(name: str, value: str) -> None:
     logger.info("registered launcher macro %s -> %s", name, value)
 
 
+async def remove_macro(name: str) -> None:
+    """Take a launcher's name out of the config."""
+    async with _lock:
+        data = _load()
+        macros = data.get("macros") or {}
+        if name not in macros:
+            return
+        del macros[name]
+        await _apply(data)
+    logger.info("removed launcher macro %s", name)
+
+
+def models_using(wrapper: str) -> list[str]:
+    """Which models are started through this launcher.
+
+    Asked before unregistering one, because a macro that disappears out from
+    under a model does not degrade it -- llama-swap cannot expand the name and
+    the entry stops working entirely.
+    """
+    try:
+        data = _load()
+    except Exception:
+        logger.exception("could not read the config while checking launcher use")
+        return []
+    return [
+        model_id for model_id, spec in (data.get("models") or {}).items()
+        if _wrapper_in((spec or {}).get("cmd")) == wrapper
+    ]
+
+
 def read_model_spec(model_id: str) -> dict | None:
     """Parse a model's cmd back into the fields the editor shows.
 
