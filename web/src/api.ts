@@ -410,6 +410,46 @@ export interface FileEstimate {
 export const estimateFile = (repo_id: string, parts: string[], size_bytes: number) =>
   send<FileEstimate>('/catalog/estimate', 'POST', { repo_id, parts, size_bytes });
 
+// ---------------------------------------------------------------------------
+// Runtime containers
+// ---------------------------------------------------------------------------
+
+export interface RuntimeCard {
+  pci_bdf_address: string;
+  name: string | null;
+  vendor: string | null;
+}
+
+export interface RuntimeContainer {
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  ports: string;
+  created: string;
+  restart_policy: string;
+  /** Whether it asked for a card at all -- by a render node or a CUDA request. */
+  wants_gpu: boolean;
+  /** The cards it asked for that are actually in this machine. */
+  cards: RuntimeCard[];
+  /** It asked for a card and none of them are here. Docker keeps starting it
+   *  anyway, so this is the only place the reason would appear. */
+  orphaned: boolean;
+}
+
+export interface RuntimeSurvey {
+  /** False when there is no Docker on this host at all. */
+  available: boolean;
+  containers: RuntimeContainer[];
+  /** Cards no container has claimed. Stated, not offered: creating one is
+   *  `docker run`, which the console deliberately cannot do. */
+  idle_gpus: RuntimeCard[];
+}
+
+export const fetchRuntime = () => get<RuntimeSurvey>('/runtime');
+export const restartContainer = (name: string) =>
+  send<{ ok: boolean }>('/runtime/restart', 'POST', { name });
+
 export const searchCatalog = (q: string) =>
   get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20`);
 export const catalogFiles = (repoId: string) =>

@@ -17,6 +17,7 @@ import Settings from './pages/Settings';
 import Gpu from './pages/Gpu';
 import Connections from './pages/Connections';
 import Logs from './pages/Logs';
+import Runtime from './pages/Runtime';
 import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
 import { ChatProvider } from './chat';
@@ -33,6 +34,7 @@ const ROUTES = [
   { path: '/models', element: <Models /> },
   { path: '/catalog', element: <Catalog /> },
   { path: '/comfyui', element: <ComfyUI /> },
+  { path: '/runtime', element: <Runtime /> },
   { path: '/files', element: <Files /> },
   { path: '/users', element: <Users /> },
   { path: '/gpu', element: <Gpu /> },

@@ -28,8 +28,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
-    auth, catalog, channels, chats, config, files, gguf, gpu, gpu_history,
-    llamaswap, logs as journal, search, speed, system, users, versions,
+    auth, catalog, channels, chats, config, containers, files, gguf, gpu,
+    gpu_history, llamaswap, logs as journal, search, speed, system, users,
+    versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -398,6 +399,34 @@ async def write_config(payload: dict = Body(...)):
         await config.write_raw(text)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid YAML: {exc}") from exc
+    return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# Runtime containers
+# --------------------------------------------------------------------------
+
+@app.get("/api/runtime")
+async def read_runtime():
+    """Every container on this machine, paired with the cards it holds."""
+    return await containers.survey(await gpu.list_devices())
+
+
+@app.post("/api/runtime/restart")
+async def runtime_restart(payload: dict = Body(...),
+                          _: dict = Depends(auth.require_owner)):
+    """Restart one container.
+
+    Owner-only, and in a browser, for the same reason the filesystem routes are:
+    an API key is minted to be pasted into somebody's chat client, and nothing
+    about that intent implies the right to bounce the image generator. Restart
+    is also the far end of what this console will do to a container -- there is
+    no create, no exec, no remove -- because those are indistinguishable from a
+    root shell when the process runs in the `docker` group.
+    """
+    name = str(payload.get("name") or "")
+    if not await containers.restart(name):
+        raise HTTPException(status_code=404, detail=f"沒有這個容器：{name}")
     return {"ok": True}
 
 
