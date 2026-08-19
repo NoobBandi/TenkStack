@@ -286,7 +286,7 @@ export default function Runtime() {
               },
             },
             {
-              title: '',
+              title: '', align: 'right' as const,
               render: (_, row) => {
                 const state = row.state;
                 const comfy = row.comfy;
@@ -464,7 +464,7 @@ export default function Runtime() {
               ),
             },
             {
-              title: '',
+              title: '', align: 'right' as const,
               render: (_, row) => (
                 <Button size="small" icon={<ReloadOutlined />}
                         loading={busy === row.name}
