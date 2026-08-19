@@ -28,8 +28,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
-    auth, catalog, channels, chats, config, files, gpu, gpu_history, llamaswap,
-    logs as journal, search, system, users, versions,
+    auth, catalog, channels, chats, config, files, gguf, gpu, gpu_history,
+    llamaswap, logs as journal, search, speed, system, users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -413,6 +413,36 @@ async def catalog_search(q: str, limit: int = 100):
 @app.get("/api/catalog/files")
 async def catalog_files(repo_id: str):
     return await catalog.list_files(repo_id)
+
+
+@app.post("/api/catalog/estimate")
+async def catalog_estimate(payload: dict = Body(...)):
+    """How fast one GGUF would generate here, read from its header.
+
+    A POST rather than a GET because the parts of a split model are a list, and
+    a 40 GiB model split six ways would otherwise have to be flattened into a
+    query string. Nothing is written; the cost is one ranged read per file, and
+    only the first time.
+    """
+    repo_id = payload.get("repo_id")
+    parts = payload.get("parts") or []
+    if not repo_id or not parts:
+        raise HTTPException(status_code=400, detail="repo_id and parts are required")
+    head = await gguf.describe(repo_id, [str(p) for p in parts])
+    if head is None:
+        raise HTTPException(status_code=502, detail="could not read the GGUF header")
+    estimate = speed.estimate(head, int(payload.get("size_bytes") or 0))
+    return {
+        "estimate": estimate,
+        "architecture": head["architecture"],
+        "layers": head["layers"],
+        "attention_layers": head["attention_layers"],
+        "expert_count": head["expert_count"],
+        "expert_used_count": head["expert_used_count"],
+        "context_length": head["context_length"],
+        "mtp": head["mtp"],
+        "by_type": head["by_type"],
+    }
 
 
 @app.post("/api/catalog/download")

@@ -8,8 +8,9 @@ import {
 } from '@ant-design/icons';
 import { LINE, MONO } from '../theme';
 import {
-  cancelDownload, catalogFiles, fetchDownloads, searchCatalog, startDownload, subscribe,
-  type CatalogFile, type CatalogRepo, type DownloadStatus,
+  cancelDownload, catalogFiles, estimateFile, fetchDownloads, searchCatalog,
+  startDownload, subscribe,
+  type CatalogFile, type CatalogRepo, type DownloadStatus, type FileEstimate,
 } from '../api';
 
 const { Text } = Typography;
@@ -17,6 +18,44 @@ const { Text } = Typography;
 /** The card holds 32 GiB. Anything at or above this cannot be fully resident,
  *  so the UI says so before the download rather than after. */
 const VRAM_GIB = 32;
+
+/** What an estimate rests on, said beside it rather than in a footnote.
+ *  `校準` reproduces a model measured on this card; `外推` is the same physics
+ *  applied to a shape nobody here has measured; `粗估` means something in the
+ *  file is known to make the number optimistic. */
+const CONFIDENCE = {
+  calibrated: { color: 'green', label: '校準' },
+  extrapolated: { color: 'blue', label: '外推' },
+  rough: { color: 'orange', label: '粗估' },
+} as const;
+
+/** The reasoning behind one estimate. Shown on hover because the digits alone
+ *  invite more trust than they have earned -- what the number assumed about
+ *  depth, speculative decoding and expert routing moves it more than its own
+ *  precision does. */
+function EstimateDetail({ file }: { file: FileEstimate }) {
+  const est = file.estimate;
+  return (
+    <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+      <div>
+        {file.architecture}
+        {file.layers ? ` · ${file.layers} 層` : ''}
+        {file.attention_layers && file.attention_layers !== file.layers
+          ? `（僅 ${file.attention_layers} 層有 KV）` : ''}
+        {file.expert_count
+          ? ` · ${file.expert_count} 專家取 ${file.expert_used_count}` : ''}
+      </div>
+      <div>
+        每 token 讀 {est.read_gib_per_token} GiB 權重，KV 每 token {est.kv_kib_per_token} KiB
+      </div>
+      <div>在 {est.depth} token 深度、關閉推測解碼下估算</div>
+      <div>{Math.round(est.window / 1024)}K 視窗約需 {est.vram_gib} GiB 顯存</div>
+      {est.notes.map((note) => (
+        <div key={note} style={{ marginTop: 4 }}>· {note}</div>
+      ))}
+    </div>
+  );
+}
 
 const keyOf = (d: DownloadStatus) => `${d.repo_id}/${d.filename}`;
 
@@ -165,6 +204,12 @@ export default function Catalog() {
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [files, setFiles] = useState<CatalogFile[]>([]);
+  // Speed estimates, filled in one row at a time and never on load. Reading a
+  // GGUF header costs a few MiB of transfer per file; a repo listing seventy-six
+  // quants would pull half a gigabyte just to draw a column, so the estimate is
+  // asked for rather than assumed.
+  const [estimates, setEstimates] =
+    useState<Record<string, FileEstimate | 'loading' | 'error'>>({});
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
   // Finished rows stay until dismissed, so a download that ended while the user
@@ -202,6 +247,7 @@ export default function Catalog() {
     setSearching(true);
     setSelected(null);
     setFiles([]);
+    setEstimates({});
     setPage(1);
     setPageSize(10);
     setFilePageSize(10);
@@ -216,6 +262,7 @@ export default function Catalog() {
 
   const onPick = async (repoId: string) => {
     setSelected(repoId);
+    setEstimates({});
     setFilePage(1);
     setFilePageSize(10);
     setLoadingFiles(true);
@@ -247,6 +294,17 @@ export default function Catalog() {
       setDownloads(await fetchDownloads());
     } catch (error) {
       message.error((error as Error).message);
+    }
+  };
+
+  const onEstimate = async (file: CatalogFile) => {
+    if (!selected || estimates[file.filename]) return;
+    setEstimates((prev) => ({ ...prev, [file.filename]: 'loading' }));
+    try {
+      const found = await estimateFile(selected, file.parts, file.size_bytes);
+      setEstimates((prev) => ({ ...prev, [file.filename]: found }));
+    } catch {
+      setEstimates((prev) => ({ ...prev, [file.filename]: 'error' }));
     }
   };
 
@@ -502,6 +560,45 @@ export default function Catalog() {
                       )}
                     </Space>
                   ),
+                },
+                {
+                  title: '預估速度', width: 168,
+                  render: (_, row) => {
+                    // A projector has no decode loop of its own; the number
+                    // would be meaningless rather than merely uncertain.
+                    if (row.is_mmproj) return <Text type="secondary">—</Text>;
+                    const found = estimates[row.filename];
+                    if (!found) {
+                      return (
+                        <Tooltip title="讀這個檔案開頭約 8 MiB 的 GGUF 標頭來推算，不會下載模型">
+                          <Button size="small" type="link" style={{ padding: 0 }}
+                                  onClick={() => onEstimate(row)}>
+                            估算
+                          </Button>
+                        </Tooltip>
+                      );
+                    }
+                    if (found === 'loading') {
+                      return <Text type="secondary">讀取標頭…</Text>;
+                    }
+                    if (found === 'error') {
+                      return (
+                        <Tooltip title="讀不到這個檔案的 GGUF 標頭">
+                          <Text type="secondary">讀不到</Text>
+                        </Tooltip>
+                      );
+                    }
+                    return (
+                      <Tooltip title={<EstimateDetail file={found} />}>
+                        <Space size={4}>
+                          <span style={{ fontFamily: MONO }}>{found.estimate.tok_s} tok/s</span>
+                          <Tag color={CONFIDENCE[found.estimate.confidence].color}>
+                            {CONFIDENCE[found.estimate.confidence].label}
+                          </Tag>
+                        </Space>
+                      </Tooltip>
+                    );
+                  },
                 },
                 {
                   title: '', width: 110,

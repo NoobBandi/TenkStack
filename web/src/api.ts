@@ -372,6 +372,44 @@ export interface DownloadStatus {
   mib_per_second: number;
 }
 
+/** What a GGUF would do on this machine, worked out from its header without
+ *  downloading it. `confidence` says what the number rests on: `calibrated`
+ *  reproduces a model measured here, `extrapolated` is the same physics applied
+ *  to a shape nobody has measured (MoE), `rough` means something in the file is
+ *  known to make the estimate optimistic. `notes` carries the reasons, and they
+ *  matter more than the digits. */
+export interface SpeedEstimate {
+  tok_s: number;
+  ms_per_token: number;
+  read_gib_per_token: number;
+  kv_kib_per_token: number;
+  /** Cache depth the figure is quoted at -- generation slows as it fills. */
+  depth: number;
+  vram_gib: number;
+  window: number;
+  fits: boolean;
+  confidence: 'calibrated' | 'extrapolated' | 'rough';
+  notes: string[];
+}
+
+export interface FileEstimate {
+  estimate: SpeedEstimate;
+  architecture: string;
+  layers: number | null;
+  /** Blocks that actually hold a KV cache. A hybrid model caches on a minority
+   *  of its layers, and using the block count instead overstates the cache
+   *  several times over. */
+  attention_layers: number;
+  expert_count: number;
+  expert_used_count: number;
+  context_length: number | null;
+  mtp: boolean;
+  by_type: Record<string, number>;
+}
+
+export const estimateFile = (repo_id: string, parts: string[], size_bytes: number) =>
+  send<FileEstimate>('/catalog/estimate', 'POST', { repo_id, parts, size_bytes });
+
 export const searchCatalog = (q: string) =>
   get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20`);
 export const catalogFiles = (repoId: string) =>
