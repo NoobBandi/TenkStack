@@ -606,6 +606,40 @@ _MANAGED = ("--model", "--mmproj", "--ctx-size", "--n-gpu-layers",
             "--host", "--port", "--jinja")
 
 
+# Alias lookups, refreshed when the file changes rather than per request.
+_aliases: dict[str, str] = {}
+_aliases_stamp: float = -1.0
+
+
+def canonical_model(name: str) -> str:
+    """The config key a request's `model` names, following aliases.
+
+    llama-swap resolves aliases itself, so a request works either way. This is
+    for the console's own bookkeeping: it compares the requested name against
+    what is running, and an aliased name matches nothing, so an already-loaded
+    model looks absent and the VRAM path goes looking for room that is already
+    there -- possibly evicting ComfyUI to make it.
+    """
+    global _aliases, _aliases_stamp
+    try:
+        stamp = CONFIG_PATH.stat().st_mtime
+    except OSError:
+        return name
+    if stamp != _aliases_stamp:
+        try:
+            data = _load()
+        except Exception:
+            logger.exception("could not read the config while resolving aliases")
+            return name
+        _aliases = {
+            str(alias): model_id
+            for model_id, spec in (data.get("models") or {}).items()
+            for alias in ((spec or {}).get("aliases") or [])
+        }
+        _aliases_stamp = stamp
+    return _aliases.get(name, name)
+
+
 def read_model_spec(model_id: str) -> dict | None:
     """Parse a model's cmd back into the fields the editor shows.
 

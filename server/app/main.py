@@ -818,6 +818,13 @@ async def make_room_for(model_id: str) -> None:
     if not model_id:
         return
 
+    # An aliased name -- `claude-opus-5`, `gpt-5-codex` -- is a different string
+    # for a model that may already be loaded. Resolved here so the comparison
+    # below is against the config key, not against whatever the client called
+    # it; otherwise every request from an Anthropic or Codex client looks like
+    # a cold load and goes hunting for VRAM.
+    model_id = config.canonical_model(model_id)
+
     running = await llamaswap.get_running()
     if any(entry.get("model") == model_id for entry in running):
         return

@@ -56,6 +56,12 @@ export default function ClientSnippets() {
   const apiBase = endpoints.find((e) => e.key === 'api-http')
     ?? endpoints.find((e) => e.key === 'api-https');
   const base = apiBase ? urlFor(apiBase, hostname) : 'http://<host>:8000/v1';
+  // Claude Code appends `/v1/messages` itself, so it needs the origin rather
+  // than the base every other client here wants. Taking it off the same
+  // endpoint keeps the two from drifting when the port or host changes.
+  const origin = apiBase
+    ? `${apiBase.scheme}://${hostname}:${apiBase.port}`
+    : 'http://<host>:8000';
   const model = models[0];
   const modelId = model?.id ?? '<model-id>';
   const vision = model?.capabilities?.vision ?? false;
@@ -93,6 +99,55 @@ export default function ClientSnippets() {
 // opencode 不會送 chat_template_kwargs，思考模式會是開的，
 // 導致完全產不出 tool call。請在「模型」頁的額外參數加上：
 //   --reasoning-budget 0`,
+    },
+    {
+      key: 'claude-code',
+      label: 'Claude Code',
+      code: `# Claude Code 走 Anthropic 自己的 /v1/messages 格式，llama-server 原生支援，
+# 主控台的 /v1 代理照樣轉發，認證用它本來就會送的 x-api-key。
+#
+# 注意 ANTHROPIC_BASE_URL 不要帶 /v1：Claude Code 自己會接上 /v1/messages。
+
+export ANTHROPIC_BASE_URL="${origin}"
+export ANTHROPIC_AUTH_TOKEN="sk-console-..."
+export ANTHROPIC_MODEL="${modelId}"
+# 背景小工作會另外叫一個「快速模型」，不指定的話它會送 claude-haiku-*，
+# 這台沒有那個名字就會失敗。指到同一個模型即可。
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${modelId}"
+
+# 或寫進 ~/.claude/settings.json：
+# {
+#   "env": {
+#     "ANTHROPIC_BASE_URL": "${origin}",
+#     "ANTHROPIC_AUTH_TOKEN": "sk-console-...",
+#     "ANTHROPIC_MODEL": "${modelId}",
+#     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${modelId}"
+#   }
+# }
+#
+# config.yaml 裡另外掛了 claude-opus-5／claude-sonnet-5／claude-haiku-4-5
+# 這幾個別名指向同一個模型，所以硬寫死模型名的工具也能通。`,
+    },
+    {
+      key: 'codex',
+      label: 'Codex',
+      code: `# ~/.codex/config.toml
+#
+# Codex 只講 OpenAI 協定，而且從 2026 年 2 月起只剩 Responses API
+# （wire_api = "chat" 已移除）。llama-server 有 /v1/responses，所以能用。
+# 先在 shell 設好金鑰：export TENKS_KEY=sk-console-...
+
+model_provider = "tenks"
+model = "${modelId}"
+
+[model_providers.tenks]
+name = "TenkStack"
+base_url = "${base}"
+env_key = "TENKS_KEY"
+wire_api = "responses"
+
+# 內建的 provider id（openai／ollama／lmstudio）不能覆寫，所以取一個自己的名字。
+# 別名 gpt-5-codex／gpt-5 也指向同一個模型。`,
     },
     {
       key: 'grok',
