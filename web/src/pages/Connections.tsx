@@ -4,7 +4,7 @@ import {
   Tooltip, Typography,
 } from 'antd';
 import {
-  CopyOutlined, GlobalOutlined, LockOutlined, SafetyCertificateOutlined, UnlockOutlined,
+  GlobalOutlined, LockOutlined, SafetyCertificateOutlined, UnlockOutlined,
 } from '@ant-design/icons';
 import ClientSnippets from '../components/ClientSnippets';
 import {
@@ -236,12 +236,17 @@ export default function Connections() {
               title: '網址',
               render: (_, row) => (
                 <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  {/* The address is what the page is for, so it is the
+                      largest thing in the row -- and clicking it copies, which
+                      is what the button beside it used to be for. One target
+                      instead of two, and the bigger one. */}
                   {urls(row).map((url) => (
-                    <Space key={url} size={4}>
-                      <Text code style={{ fontSize: 12 }}>{url}</Text>
-                      <Button type="text" size="small" icon={<CopyOutlined />}
-                              onClick={() => copy(url)} />
-                    </Space>
+                    <Tooltip key={url} title="點一下複製">
+                      <Text code style={{ fontSize: 14, cursor: 'pointer' }}
+                            onClick={() => copy(url)}>
+                        {url}
+                      </Text>
+                    </Tooltip>
                   ))}
                   {!row.endpoint.listening && <Tag color="error">未監聽</Tag>}
                 </Space>
