@@ -130,7 +130,14 @@ export default function Models() {
   const onSave = async () => {
     const values = await form.validateFields();
     try {
-      await saveModel({ ...values, name: values.name || values.id });
+      // `device` is always sent, as a string, even when the select was
+      // cleared: omitting it means "leave the card alone", which is right for
+      // an API client and wrong for a form the user just emptied.
+      await saveModel({
+        ...values,
+        name: values.name || values.id,
+        device: devices.length > 1 ? values.device ?? '' : undefined,
+      });
       message.success('已寫入設定，llama-swap 會自動重載');
       setOpen(false);
       setEditing(null);

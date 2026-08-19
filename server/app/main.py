@@ -227,10 +227,14 @@ class ModelSpec(BaseModel):
     group: str | None = "large"
     extra: str = ""
     mmproj: str | None = None
-    # Which card to run on, as `backend:index` -- `SYCL:0`, `CUDA:1`. Empty
-    # means "do not pin", which is the only sensible default on a machine with
-    # one usable card and the only answer the form offers there.
-    device: str = ""
+    # Which card to run on, as `backend:index` -- `SYCL:0`, `CUDA:1`.
+    #
+    # Three states, and they are not the same. `null` (or absent) means the
+    # caller did not mention a card, so whatever the entry already says is left
+    # alone -- an edit that does not name a card must not unpin one. `""` means
+    # the caller cleared it, which is what the form sends when its select is
+    # emptied. A value pins.
+    device: str | None = None
 
 
 @app.get("/api/models")
@@ -284,7 +288,7 @@ async def read_models():
     return result
 
 
-async def _device_env(chosen: str) -> dict:
+async def _device_env(chosen: str | None) -> dict:
     """The environment a `backend:index` choice means, or nothing.
 
     Resolved against what llama-server actually enumerates rather than
@@ -300,6 +304,23 @@ async def _device_env(chosen: str) -> dict:
             return device["env"]
     logger.warning("model asked for device %s, which no launcher sees", chosen)
     return {}
+
+
+async def _device_wrapper(chosen: str | None) -> str | None:
+    """The launcher macro for a chosen card, or None to leave it alone.
+
+    None is not a default -- it means the caller did not name a card, and an
+    edit that does not name one must keep the launcher the entry already has.
+    Choosing for it would move a working model to another vendor's backend
+    because a form field was left empty.
+    """
+    if not chosen:
+        return None
+    backend, _, index = chosen.partition(":")
+    for device in await backends.usable():
+        if device["backend"] == backend and str(device["index"]) == index:
+            return config.wrapper_for(device.get("launcher"))
+    return None
 
 
 @app.get("/api/backends/devices")
@@ -363,7 +384,11 @@ async def _write_model(spec: ModelSpec):
         extra=spec.extra,
         mmproj=spec.mmproj,
         env=await _device_env(spec.device),
-        managed_env=backends.selector_vars(),
+        # Only when the caller said something about the card. Clearing the
+        # selector on an edit that never mentioned one would unpin a model as a
+        # side effect of changing its context size.
+        managed_env=backends.selector_vars() if spec.device is not None else None,
+        wrapper=await _device_wrapper(spec.device),
     )
     return {"ok": True, "id": spec.id}
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import re
 import shutil
 from pathlib import Path
@@ -27,7 +28,16 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = paths.LLAMA_SWAP_CONFIG
 MODELS_DIR = paths.MODELS_DIR
-WRAPPER = "${llama-sycl}"
+
+# The launcher a model is started through, when nothing says otherwise.
+#
+# This used to be the constant `${llama-sycl}`, which was this machine's
+# arrangement written into every model the console creates -- and on a host
+# without that macro, every one of them would have been born broken. It is now
+# only the last resort, and the callers below prefer, in order: the launcher
+# the entry already uses, the one belonging to the card the model is pinned to,
+# and the only one this machine has.
+FALLBACK_WRAPPER = "${llama-sycl}"
 
 _yaml = YAML()
 _yaml.preserve_quotes = True
@@ -204,12 +214,57 @@ async def write_raw(text: str) -> None:
         CONFIG_PATH.write_text(text, encoding="utf-8")
 
 
+def launcher_macros() -> dict[str, str]:
+    """{macro name: path}, for the macros that name an executable.
+
+    The inverse lookup the device picker needs: a chosen card belongs to a
+    launcher, and a model entry has to name that launcher the way llama-swap
+    refers to it.
+    """
+    try:
+        data = _load()
+    except Exception:
+        logger.exception("could not read the config while listing launchers")
+        return {}
+    out = {}
+    for name, value in (data.get("macros") or {}).items():
+        path = Path(str(value)).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            out[str(name)] = str(path)
+    return out
+
+
+def wrapper_for(launcher: str | None) -> str | None:
+    """`${macro}` for a launcher path, or None if no macro names it."""
+    if not launcher:
+        return None
+    for name, path in launcher_macros().items():
+        if path == launcher:
+            return "${%s}" % name
+    return None
+
+
+def default_wrapper() -> str:
+    """The launcher to use when nothing has said which.
+
+    A machine with exactly one is not making a choice, so it gets used whatever
+    it is called -- which is the case that matters for a host that never had a
+    native build. Past that, the historical name, which at least fails loudly
+    on a machine that does not have it rather than starting the wrong backend.
+    """
+    macros = launcher_macros()
+    if len(macros) == 1:
+        return "${%s}" % next(iter(macros))
+    return FALLBACK_WRAPPER
+
+
 def build_cmd(
     model_file: str,
     ctx_size: int = 16384,
     n_gpu_layers: int = 99,
     extra: str = "",
     mmproj: str | None = None,
+    wrapper: str | None = None,
 ) -> str:
     """Assemble a llama-server command line.
 
@@ -219,7 +274,7 @@ def build_cmd(
     able to clear it. Callers pass 0 to mean "let llama.cpp decide".
     """
     lines = [
-        WRAPPER,
+        wrapper or FALLBACK_WRAPPER,
         f"--model ${{models-dir}}/{model_file}",
         "--host 127.0.0.1 --port ${PORT}",
     ]
@@ -251,6 +306,7 @@ async def upsert_model(
     mmproj: str | None = None,
     env: dict | None = None,
     managed_env: set[str] | None = None,
+    wrapper: str | None = None,
 ) -> None:
     async with _lock:
         data = _load()
@@ -270,7 +326,14 @@ async def upsert_model(
             models[model_id] = entry
         entry["name"] = name
         entry["description"] = description
-        entry["cmd"] = build_cmd(model_file, ctx_size, n_gpu_layers, extra, mmproj)
+        # An edit that does not say which launcher keeps the one already there.
+        # Silently moving a model from the NVIDIA launcher to the Intel one
+        # because the form did not mention it would be a very quiet way to
+        # break a card that was working.
+        entry["cmd"] = build_cmd(
+            model_file, ctx_size, n_gpu_layers, extra, mmproj,
+            wrapper or _wrapper_in(entry.get("cmd")) or default_wrapper(),
+        )
         entry["ttl"] = ttl
 
         # Which card this model runs on, as llama-swap's per-model `env`.
@@ -780,6 +843,15 @@ def canonical_model(name: str) -> str:
     return _aliases.get(name, name)
 
 
+# The launcher reference at the head of a cmd: `${llama-sycl}`.
+_WRAPPER_LINE = re.compile(r"^\s*(\$\{[^}]+\})\s*$", re.M)
+
+
+def _wrapper_in(cmd: Any) -> str | None:
+    match = _WRAPPER_LINE.search(str(cmd or ""))
+    return match.group(1) if match else None
+
+
 def _env_pairs(value: Any) -> list[str]:
     """A model entry's `env`, as the list of strings llama-swap wants.
 
@@ -865,6 +937,9 @@ def read_model_spec(model_id: str) -> dict | None:
         # As a mapping, so the UI can tell which device entry it corresponds to
         # without either side handling llama-swap's list-of-strings shape.
         "env": env_map(spec.get("env")),
+        # Preserved so an edit cannot move a model to another card's launcher
+        # just by not mentioning it.
+        "wrapper": _wrapper_in(spec.get("cmd")) or "",
         "name": spec.get("name") or model_id,
         "description": spec.get("description") or "",
         "model_file": values["model_file"] or "",
