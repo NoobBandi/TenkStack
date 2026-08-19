@@ -1527,7 +1527,7 @@ _ENDPOINTS = [
         "scheme": "http",
         "port": 8000,
         "path": "/v1",
-        "note": "給不方便處理自簽憑證的用戶端，例如 opencode。只開放 /v1，"
+        "note": "給不方便處理自簽憑證的用戶端，例如 Opencode。只開放 /v1，"
                 "OpenAI 與 Anthropic 兩種格式都收，API key 在區網上是明文。",
         "encrypted": False,
     },

@@ -53,7 +53,7 @@ _META = {
         "label": "API（純 HTTP）",
         "port": 8000,
         "encrypted": False,
-        "note": "給不方便信任自簽憑證的用戶端，例如 opencode。只開放 /v1，"
+        "note": "給不方便信任自簽憑證的用戶端，例如 Opencode。只開放 /v1，"
                 "API key 在區網上是明文傳送。",
     },
     "comfyui": {

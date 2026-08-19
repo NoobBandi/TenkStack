@@ -79,7 +79,7 @@ export default function ClientSnippets() {
   const snippets = [
     {
       key: 'opencode',
-      label: 'opencode',
+      label: 'Opencode',
       code: `// ~/.config/opencode/opencode.json
 {
   "$schema": "https://opencode.ai/config.json",
@@ -94,7 +94,7 @@ export default function ClientSnippets() {
       "models": {
         "${modelId}": {
           "name": "${model?.name || modelId}",${vision ? `
-          // Without these two, opencode assumes a custom provider cannot see
+          // Without these two, Opencode assumes a custom provider cannot see
           // and strips images out before the request is sent.
           "attachment": true,
           "modalities": { "input": ["text", "image"], "output": ["text"] },` : ''}
@@ -105,7 +105,7 @@ export default function ClientSnippets() {
   }
 }
 
-// opencode 不會送 chat_template_kwargs，思考模式會是開的，
+// Opencode 不會送 chat_template_kwargs，思考模式會是開的，
 // 導致完全產不出 tool call。請在「模型」頁的額外參數加上：
 //   --reasoning-budget 0`,
     },
