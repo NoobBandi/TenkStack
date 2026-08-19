@@ -377,7 +377,10 @@ async def set_card_role(payload: dict = Body(...),
             if not on:
                 raise HTTPException(status_code=400, detail="這張卡上沒有 ComfyUI 容器")
             try:
-                return {"ok": True, "created": await comfy.create(card, cards)}
+                # Started, not awaited. The image is 16 to 20 GB and the reply
+                # has to come back now so the page can show a bar rather than a
+                # button that spins for several minutes.
+                return {"ok": True, "job": await comfy.start(card, cards, "create")}
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
         for box in held:
@@ -416,12 +419,9 @@ async def comfy_action(payload: dict = Body(...),
         if action == "remove":
             await comfy.destroy(name, bool(payload.get("delete_image")))
         elif action == "update":
-            # Pull first, then recreate: the container names a tag, so the new
-            # image is only picked up by starting a new container from it.
-            detail = await containers._inspect([name])
-            image = ((detail.get(name) or {}).get("Config") or {}).get("Image")
-            if not image:
-                raise ValueError(f"沒有這個容器：{name}")
+            # Pull then recreate, because the container names a tag and a new
+            # image is only picked up by a new container -- and in the
+            # background, because pulling one is minutes.
             cards = await gpu.list_devices()
             held = await containers.by_card(cards)
             card = next((c for c in cards
@@ -430,10 +430,7 @@ async def comfy_action(payload: dict = Body(...),
                         None)
             if card is None:
                 raise ValueError(f"{name} 沒有對應到任何一張卡")
-            if await containers._docker("pull", image) is None:
-                raise ValueError(f"無法下載 {image}")
-            await comfy.destroy(name, False)
-            await comfy.create(card, cards)
+            return {"ok": True, "job": await comfy.start(card, cards, "update", name)}
         else:
             raise ValueError(f"不認識的動作：{action}")
     except ValueError as exc:

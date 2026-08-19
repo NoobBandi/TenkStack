@@ -394,39 +394,8 @@ async def coverage(cards: list[dict]) -> list[dict]:
 
 
 async def _pull(record: "Install") -> bool:
-    """docker pull, with the only progress its non-interactive output carries.
-
-    There are no byte counts without a terminal, so layers are what can be
-    counted honestly -- better than a spinner for a 7 GiB image, and better
-    than a percentage invented from nothing.
-    """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "pull", record.image,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-    except OSError as exc:
-        record.state, record.message = "error", str(exc)
-        return False
-
-    assert proc.stdout is not None
-    while True:
-        raw = await proc.stdout.readline()
-        if not raw:
-            break
-        line = raw.decode("utf-8", "replace").strip()
-        if line.endswith("Pulling fs layer"):
-            record.layers_total += 1
-        elif line.endswith("Pull complete") or line.endswith("Already exists"):
-            record.layers_done += 1
-        elif line:
-            record.message = line[:200]
-
-    if await proc.wait() != 0:
-        record.state = "error"
-        return False
-    return True
+    from . import containers
+    return await containers.pull(record.image, record)
 
 
 async def install(vendor: str, variant: str = "vendor") -> dict:

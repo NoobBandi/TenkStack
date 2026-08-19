@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import channels, containers, paths
@@ -199,10 +200,11 @@ async def state(card: dict, cards: list[dict], boxes: list[dict]) -> dict:
         "image": image,
         "image_size": sizes.get(image or ""),
         "slot": _slot(card, cards),
+        "job": job_for(card),
     }
 
 
-async def destroy(name: str, delete_image: bool = False) -> None:
+async def destroy(name: str, delete_image: bool = False, unpublish: bool = True) -> None:
     """Stop and remove one instance, and optionally its image.
 
     The instance's own directories are left alone. They hold outputs and a
@@ -226,7 +228,7 @@ async def destroy(name: str, delete_image: bool = False) -> None:
                 upstream = int(entry.get("HostPort"))
 
     await containers._docker("rm", "-f", name)
-    if upstream is not None:
+    if upstream is not None and unpublish:
         try:
             await channels.unpublish_comfyui(upstream)
         except Exception:
@@ -234,3 +236,92 @@ async def destroy(name: str, delete_image: bool = False) -> None:
     if image:
         if await containers._docker("rmi", image) is None:
             logger.warning("removed %s but could not delete %s", name, image)
+
+
+@dataclass
+class Job:
+    """One long ComfyUI operation, as the page needs to see it.
+
+    These take minutes -- the images are 16 to 20 GB -- so none of them may
+    happen inside the request that asked for them. The request starts the work
+    and returns; the row polls and draws a bar. A button that spins for two
+    minutes is indistinguishable from one that has hung.
+    """
+    card: str
+    action: str                 # create | update
+    state: str = "pulling"      # pulling | starting | done | error
+    layers_done: int = 0
+    layers_total: int = 0
+    message: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "card": self.card, "action": self.action, "state": self.state,
+            "layers_done": self.layers_done, "layers_total": self.layers_total,
+            "message": self.message,
+        }
+
+
+_jobs: dict[str, Job] = {}
+
+
+def job_for(card: dict) -> dict | None:
+    address = card.get("pci_bdf_address")
+    key = containers.bus_key(address) if address else ""
+    record = _jobs.get(key)
+    return record.as_dict() if record else None
+
+
+def _busy(key: str) -> Job | None:
+    record = _jobs.get(key)
+    return record if record and record.state in {"pulling", "starting"} else None
+
+
+async def start(card: dict, cards: list[dict], action: str, name: str = "") -> dict:
+    """Begin a create or an update in the background, and return immediately."""
+    address = card.get("pci_bdf_address") or ""
+    key = containers.bus_key(address)
+
+    running = _busy(key)
+    if running:
+        return running.as_dict()
+
+    vendor = card.get("vendor") or ""
+    spec = IMAGES.get(vendor)
+    if spec is None:
+        raise ValueError(f"沒有 {vendor} 的 ComfyUI 映像範本")
+
+    if action == "create" and f"{PREFIX}-{_slot(card, cards)}" in await containers.names():
+        raise ValueError("這張卡上已經有 ComfyUI 實例了")
+    if action == "update" and not name:
+        raise ValueError("要更新哪一個實例？")
+
+    image = spec["image"]
+    if action == "update":
+        detail = await containers._inspect([name])
+        image = ((detail.get(name) or {}).get("Config") or {}).get("Image") or image
+
+    record = Job(card=key, action=action)
+    _jobs[key] = record
+
+    async def run() -> None:
+        try:
+            # Pulled explicitly rather than left to `docker run`, which would
+            # do it silently and give this nothing to report.
+            if not await containers.pull(image, record):
+                return
+            record.state = "starting"
+            if action == "update":
+                # The port does not change, so the site block does not either.
+                # Rewriting it would work and would throw away whatever comment
+                # somebody had put above it, which is the only thing in that
+                # file this console did not write.
+                await destroy(name, False, unpublish=False)
+            await create(card, cards)
+            record.state = "done"
+        except Exception as exc:
+            record.state, record.message = "error", str(exc)
+            logger.exception("ComfyUI %s on %s failed", action, key)
+
+    asyncio.create_task(run())
+    return record.as_dict()

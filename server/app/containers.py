@@ -243,6 +243,47 @@ async def port_cards(devices: list[dict]) -> dict[int, list[str]]:
     return mapping
 
 
+async def pull(image: str, record) -> bool:
+    """`docker pull`, counting layers into a record the page can read.
+
+    Shared rather than written twice, because both halves of a card's row pull
+    an image and the progress means the same thing on each. `record` is any
+    object with `layers_total`, `layers_done`, `message` and `state` -- the
+    caller owns it and the UI reads it while this runs.
+
+    Layers are the only honest progress here: a non-interactive `docker pull`
+    carries no byte counts, and a percentage invented from nothing would be
+    worse than a coarse one that is true.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "pull", image,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except OSError as exc:
+        record.state, record.message = "error", str(exc)
+        return False
+
+    assert proc.stdout is not None
+    while True:
+        raw = await proc.stdout.readline()
+        if not raw:
+            break
+        line = raw.decode("utf-8", "replace").strip()
+        if line.endswith("Pulling fs layer"):
+            record.layers_total += 1
+        elif line.endswith("Pull complete") or line.endswith("Already exists"):
+            record.layers_done += 1
+        elif line:
+            record.message = line[:200]
+
+    if await proc.wait() != 0:
+        record.state = "error"
+        return False
+    return True
+
+
 async def image_sizes() -> dict[str, str]:
     """{image reference: human size} for what is on this disk."""
     listing = await _docker("images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}")

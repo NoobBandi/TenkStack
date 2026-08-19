@@ -214,6 +214,28 @@ export default function Runtime() {
             {
               title: '跑 ComfyUI', width: 240,
               render: (_, row) => {
+                const job = row.comfy.job;
+                if (job && ['pulling', 'starting'].includes(job.state)) {
+                  return (
+                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {job.state === 'starting'
+                          ? (job.action === 'update' ? '重建實例…' : '建立實例…')
+                          : '下載映像…'}
+                      </Text>
+                      <Progress size="small" status="active"
+                                percent={job.layers_total
+                                  ? Math.round((job.layers_done / job.layers_total) * 100) : 0} />
+                    </Space>
+                  );
+                }
+                if (job?.state === 'error') {
+                  return (
+                    <Tooltip title={job.message}>
+                      <Tag color="error">{job.action === 'update' ? '更新失敗' : '建立失敗'}</Tag>
+                    </Tooltip>
+                  );
+                }
                 const none = row.containers.length === 0;
                 const template = row.comfy.template;
                 const control = (

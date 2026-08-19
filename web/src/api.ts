@@ -340,6 +340,13 @@ export interface RuntimeCoverage {
     image: string | null;
     image_size: string | null;
     slot: string;
+    /** A create or update running in the background. The images are 16-20 GB,
+     *  so none of it happens inside the request that asked for it. */
+    job: {
+      card: string; action: 'create' | 'update';
+      state: 'pulling' | 'starting' | 'done' | 'error';
+      layers_done: number; layers_total: number; message: string;
+    } | null;
   };
   runtime: {
     vendor: string; label: string; image: string;
