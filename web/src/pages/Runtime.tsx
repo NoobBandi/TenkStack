@@ -137,7 +137,11 @@ export default function Runtime() {
           pagination={false}
           columns={[
             {
-              title: '顯示卡',
+              // Given a width, like everything else. It was the only column
+              // without one, so it took all the spare space and the switches
+              // -- the point of the table -- ended up against the far edge,
+              // a screen away from the card they belong to.
+              title: '顯示卡', width: 300,
               render: (_, row) => (
                 <Space size={6}>
                   <span>{row.name ?? row.pci_bdf_address}</span>
@@ -282,7 +286,7 @@ export default function Runtime() {
               },
             },
             {
-              title: '', width: 90,
+              title: '',
               render: (_, row) => {
                 const state = row.state;
                 const comfy = row.comfy;
@@ -419,7 +423,7 @@ export default function Runtime() {
               ),
             },
             {
-              title: '映像', dataIndex: 'image',
+              title: '映像', dataIndex: 'image', width: 300,
               render: (image: string) => (
                 <Text style={{ fontFamily: MONO, fontSize: 12 }} ellipsis>{image}</Text>
               ),
@@ -460,7 +464,7 @@ export default function Runtime() {
               ),
             },
             {
-              title: '', width: 100,
+              title: '',
               render: (_, row) => (
                 <Button size="small" icon={<ReloadOutlined />}
                         loading={busy === row.name}
