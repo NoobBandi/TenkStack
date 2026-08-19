@@ -1521,7 +1521,7 @@ _ENDPOINTS = [
         "port": 8000,
         "path": "/v1",
         "note": "給不方便處理自簽憑證的用戶端，例如 opencode。只開放 /v1，"
-                "API key 在區網上是明文。",
+                "OpenAI 與 Anthropic 兩種格式都收，API key 在區網上是明文。",
         "encrypted": False,
     },
     {
@@ -1530,7 +1530,8 @@ _ENDPOINTS = [
         "scheme": "https",
         "port": 8443,
         "path": "/v1",
-        "note": "同一個 OpenAI 相容端點，但走 TLS。用戶端需信任本地 CA。",
+        "note": "同一組端點但走 TLS：/v1/chat/completions 是 OpenAI 格式，"
+                "/v1/messages 是 Anthropic 格式。用戶端需信任本地 CA。",
         "encrypted": True,
     },
     {
@@ -1669,7 +1670,14 @@ async def read_network():
 
 
 # --------------------------------------------------------------------------
-# OpenAI-compatible proxy
+# Model proxy
+#
+# Two request formats reach the same models. `/v1/chat/completions` is the
+# OpenAI shape every client speaks; `/v1/messages` is Anthropic's, which
+# llama-server translates internally and answers with Anthropic-shaped content
+# blocks, `stop_reason` and SSE events. Nothing here has to know the difference
+# -- the route below is a catch-all and forwards whatever arrives -- but the
+# logging does, because the two put the same facts in different places.
 # --------------------------------------------------------------------------
 
 def _log_request_shape(path: str, body: bytes, request: Request) -> None:
@@ -1678,9 +1686,16 @@ def _log_request_shape(path: str, body: bytes, request: Request) -> None:
     Third-party agents are opaque about which knobs they translate into request
     fields -- documentation and issue trackers disagree, and the only authority
     is the bytes that arrive. This proxy is the one place that sees them, so it
-    reports the shape (never the prompt text) of every completion request.
+    reports the shape (never the prompt text) of every completion request, in
+    either format.
     """
-    if not path.startswith("chat/completions") or not body:
+    if not body:
+        return
+    if path.startswith("chat/completions"):
+        shape = "openai"
+    elif path.startswith("messages") and not path.startswith("messages/count"):
+        shape = "anthropic"
+    else:
         return
     try:
         payload = json.loads(body)
@@ -1694,19 +1709,24 @@ def _log_request_shape(path: str, body: bytes, request: Request) -> None:
          "reasoning", "reasoning_effort", "enable_thinking")
         if key in payload
     }
+    messages = payload.get("messages") or []
     logger.info(
-        "/v1 request from %s: model=%s messages=%d tools=%d stream=%s "
+        "/v1 %s request from %s: model=%s messages=%d tools=%d stream=%s "
         "max_tokens=%s temperature=%s multimodal=%s reasoning_fields=%s",
+        shape,
         agent,
         payload.get("model"),
-        len(payload.get("messages") or []),
+        # The Anthropic format carries the system prompt outside the message
+        # list, so counting messages alone would report one fewer turn than the
+        # OpenAI form of the same conversation.
+        len(messages) + (1 if shape == "anthropic" and payload.get("system") else 0),
         len(payload.get("tools") or []),
         payload.get("stream"),
         payload.get("max_tokens") or payload.get("max_completion_tokens"),
         payload.get("temperature"),
         # Content parts rather than a plain string means an image or file made
         # it into the request instead of being stripped by the client.
-        any(isinstance(m.get("content"), list) for m in (payload.get("messages") or [])),
+        any(isinstance(m.get("content"), list) for m in messages),
         reasoning_fields or "none",
     )
 
@@ -1718,6 +1738,13 @@ async def openai_proxy(path: str, request: Request):
     llama-swap listens on 127.0.0.1 with no auth of its own, so this is what
     lets a family member's app reach the models with an API key instead of the
     port being open to anyone on the LAN.
+
+    Every path under /v1 is carried, not a listed set: `chat/completions`,
+    `completions`, `embeddings`, `models`, and Anthropic's `messages` and
+    `messages/count_tokens`. An Anthropic-format client authenticates the way
+    it already does -- `x-api-key`, which `auth.identify` accepts beside
+    `Authorization: Bearer` -- and names its model the same way, so `model`
+    must be a key from llama-swap's config rather than a `claude-*` id.
 
     Responses are streamed rather than buffered: a chat completion with
     stream=true must arrive token by token, and reading it to completion first

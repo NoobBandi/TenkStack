@@ -10,7 +10,7 @@ import {
 const { Text, Paragraph } = Typography;
 
 const SERVICES = [
-  { name: 'llama-swap', port: 8080, note: 'LLM 生命週期與 OpenAI 相容端點' },
+  { name: 'llama-swap', port: 8080, note: 'LLM 生命週期與 OpenAI／Anthropic 端點' },
   // One per card, since the device is fixed when the process starts. The
   // ports are the ones the console probes; instances actually running are
   // listed on the ComfyUI page, which asks them rather than assuming.
