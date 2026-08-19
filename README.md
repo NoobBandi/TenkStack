@@ -43,7 +43,9 @@ not have.
 - **Catalog** — search Hugging Face and download GGUFs, segmented and resumable,
   into per-repo folders so two publishers' identically named quants stay
   distinct. Split uploads are listed as one model rather than as the fragments
-  they arrive in, since no fragment is usable alone.
+  they arrive in, since no fragment is usable alone. Any quant can be asked what
+  it would generate at *on this card* before the download starts, worked out
+  from the file's own header.
 - **ComfyUI** — one row per instance, each with the GPU it was launched against,
   because that is fixed at start and therefore decides which card is free.
   Updates run through ComfyUI-Manager across every instance at once.
@@ -89,6 +91,25 @@ orphaned comments above a bare `{}` at column zero, which is unparseable.
 measured ~8 MiB/s from Taiwan (60 ms RTT, heavy packet reordering); eight
 streams to the *same* endpoint reached 41 MiB/s. The limit is the
 bandwidth-delay product of one connection, not the server or the link.
+
+**Speed is estimated from the header, not from the file size.** Hugging Face
+serves ranged requests on GGUF files, and a GGUF opens with a complete
+description of itself: the architecture metadata, then a directory naming every
+tensor with its shape and quantisation type. Eight megabytes of a twenty
+gigabyte file is enough to answer how fast it would run, because generation is
+bandwidth-bound — bytes read per token over what the card delivers, plus a fixed
+cost per block. Two details separate that from `size / bandwidth`, and both are
+counted from the tensor names: a mixture-of-experts model reads a fraction of
+itself (Qwen3-30B-A3B Q4_K_M is 17.3 GiB of file but 1.95 GiB of reading, since
+8 of its 128 experts run per token), and a hybrid model caches on a minority of
+its layers (Qwen3.8-27B declares 65 blocks; 17 of them hold a KV cache). The
+constants are measured on this card — 568 GB/s from the Q6_K mat-vec kernel,
+9.8 ms per token of launch overhead — which matters because the B70 will not
+report its own memory bandwidth to anything: `xpu-smi` answers with a −1
+sentinel and Level Zero answers 64-bit at 2800 MHz, off by an order of
+magnitude. The estimate lands on the model measured here to within 0.3%; where a
+file is known to break the assumption, the row says so instead of carrying a
+correction factor.
 
 **Capabilities are measured, not declared.** Vision support is read from
 llama-server's `/props`, because a `--mmproj` flag pointing at a missing file
