@@ -139,7 +139,7 @@ export default function Runtime() {
                   return (
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        {job!.state === 'writing' ? '寫入啟動器…' : '下載映像…'}
+                        {job!.state === 'writing' ? '寫入設定…' : '下載映像…'}
                       </Text>
                       <Progress size="small" status="active"
                                 percent={job!.layers_total
@@ -229,14 +229,17 @@ export default function Runtime() {
                       items: [
                         { key: 'update', label: '更新映像', onClick: () => act(row, 'update') },
                         { type: 'divider' as const },
+                        // Two removals, because reclaiming disk and changing
+                        // what a card does are different decisions and only
+                        // one of them takes a long download to undo.
                         {
-                          key: 'remove', label: '移除啟動器', danger: true,
+                          key: 'remove', label: '解除安裝（保留映像）', danger: true,
                           disabled: used.length > 0,
                           onClick: () => act(row, 'remove'),
                         },
                         {
                           key: 'purge',
-                          label: `移除並刪除映像${state.image_size ? `（${state.image_size}）` : ''}`,
+                          label: `解除安裝並刪除映像${state.image_size ? `（釋出 ${state.image_size}）` : ''}`,
                           danger: true, disabled: used.length > 0,
                           onClick: () => act(row, 'remove', { delete_image: true }),
                         },
