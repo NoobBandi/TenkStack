@@ -8,8 +8,9 @@
 A self-hosted control panel for a home AI box. Built around an **Intel Arc Pro
 B70** (Battlemage, 32 GB) on Linux with the `xe` driver, where the usual
 CUDA-shaped tooling does not apply. A second card went in later — an NVIDIA RTX
-3060 for image generation — so every surface reports per card rather than per
-machine.
+3060 — and each card is now told what it is for: models, images, both, or
+nothing. Every surface reports per card rather than per machine, and the
+console installs whatever a card needs to do the job it was given.
 
 It replaced a GPUStack deployment. GPUStack is built for multi-node clusters,
 and on one machine every one of its sharp edges — worker registration, the VRAM
@@ -39,13 +40,23 @@ not have.
   host, which is what the button is allowed to promise.
 - **Models** — add, edit and remove models; optionally delete their weights from
   disk; spot orphaned files and interrupted downloads. One vision projector can
-  serve several models, and each entry says which it is using.
+  serve several models, and each entry says which it is using. On a machine
+  where more than one card can run a model, an entry also says which card —
+  and the field appears only there, because a single usable card is not a
+  choice.
 - **Catalog** — search Hugging Face and download GGUFs, segmented and resumable,
   into per-repo folders so two publishers' identically named quants stay
   distinct. Split uploads are listed as one model rather than as the fragments
   they arrive in, since no fragment is usable alone. Any quant can be asked what
   it would generate at *on this card* before the download starts, worked out
   from the file's own header.
+- **GPU roles** — one row per card with two switches: run models, draw images.
+  Neither is a stored preference. The first reads whether a configured
+  llama-server can actually enumerate that card, the second whether a container
+  bound to it is up, so the page cannot come to disagree with the machine.
+  Turning either on for the first time installs what it needs — the official
+  llama.cpp image for the vendor, or a ComfyUI instance with its own port,
+  storage and Caddy site block — in the background, with a bar.
 - **ComfyUI** — one row per instance, each with the GPU it was launched against,
   because that is fixed at start and therefore decides which card is free.
   Updates run through ComfyUI-Manager across every instance at once.
@@ -54,7 +65,11 @@ not have.
   images, text, and weights — a GGUF or safetensors header is read in place, so
   a 20 GB file answers what it is without being moved. Uploads are chunked and
   resumable, streamed to disk rather than buffered.
-- **Users** — accounts, roles and API keys for an OpenAI-compatible endpoint.
+- **Users** — accounts, roles and API keys for the API below.
+- **Connections** — one row per way in: the address, who may reach it, whether
+  it is open, and a client configuration example. `/v1/chat/completions` speaks
+  OpenAI and `/v1/messages` speaks Anthropic, both proxied to the same models,
+  so Claude Code and Codex point here as readily as anything else.
 
 ## Architecture
 
@@ -63,8 +78,10 @@ Caddy ──┬── :8443 https  console (UI + API + /v1 proxy)
         ├── :8000 http   /v1 only, for clients that cannot trust a private CA
         └── :8444 https  ComfyUI, gated by forward_auth against the console
                 │
-        FastAPI :8070 ──┬── llama-swap :8080 ──> llama-server (SYCL) per model
-                        ├── ComfyUI :8188, one instance per GPU
+        FastAPI :8070 ──┬── llama-swap :8080 ──> llama-server per model
+                        │                        native build, or the vendor's
+                        │                        official image in a container
+                        ├── ComfyUI :8188+, one instance per GPU
                         └── SearXNG :8090, what the agent's searches go through
 ```
 
@@ -86,6 +103,13 @@ comments explaining the VRAM policy, and `safe_dump` would delete every one of
 them on the first edit made through the UI. Rendered YAML is parsed back before
 it replaces the real file — emptying a commented mapping makes ruamel print
 orphaned comments above a bare `{}` at column zero, which is unparseable.
+
+Parsing is not enough, though, and finding that out cost an afternoon: a file
+that is valid YAML but the wrong shape makes llama-swap log one warning and
+keep serving the config it read last, so every edit through the console appears
+to work and none of them apply. Only llama-swap knows its own schema, so it is
+asked — the write is bracketed by a journal cursor, and a config it will not
+take is rolled back rather than left in place.
 
 **Downloads are segmented.** A single TCP stream to Hugging Face's Xet CDN
 measured ~8 MiB/s from Taiwan (60 ms RTT, heavy packet reordering); eight
@@ -110,6 +134,31 @@ sentinel and Level Zero answers 64-bit at 2800 MHz, off by an order of
 magnitude. The estimate lands on the model measured here to within 0.3%; where a
 file is known to break the assumption, the row says so instead of carrying a
 correction factor.
+
+**A card's job is derived, never stored.** Whether a card can run a model is
+whether a configured launcher enumerates it — asked by running
+`llama-server --list-devices`, not by consulting a table. Whether it draws
+images is whether a container bound to it is up, and which card a container
+holds is read from its device bindings rather than from its name, since
+`--device /dev/dri/by-path/…` and a CUDA ordinal are facts while
+`comfyui-nv0` is a convention somebody can rename. So there is no settings
+file to fall out of step, and a host with one vendor, or three, needs nothing
+edited.
+
+**The VRAM policy asks which card, not device 0.** One 32 GB card shared
+between a language model and ComfyUI needs an arbiter, and the console is the
+only process that sees both. With a second card that arbitration has to know
+where the model is going: it reads the card from the model entry's own
+selector, measures free memory on that card, and matches ComfyUI instances to
+cards through the container publishing the port each answers on — an exact
+join, where comparing the device names two cards of the same model report
+cannot be one.
+
+**A second vendor is an image, not a second toolchain.** The native SYCL build
+is worth keeping for the card whose owner is measuring it; for every other card
+the goal is that it works without anyone installing a 10 GB toolchain, which is
+what llama.cpp's per-backend images are for. The kernel driver has to be on the
+host and cannot be anywhere else; everything above it belongs in the image.
 
 **Capabilities are measured, not declared.** Vision support is read from
 llama-server's `/props`, because a `--mmproj` flag pointing at a missing file
@@ -140,17 +189,24 @@ that is the thing the user actually waits for.
 
 ## Requirements
 
-- Intel GPU with the `xe` or `i915` driver, and `xpu-smi`
-- `llama.cpp` built with the SYCL backend, and **oneDNN** — `GGML_SYCL_DNN`
-  defaults to ON but silently compiles itself out when `find_package(DNNL)`
-  fails, and a build without it loses the XMX attention path: measured here at
-  254 t/s prefill against 291 at 32k context, generation unchanged. Two apt
-  packages, not one: `intel-oneapi-dnnl` carries only the shared library, while
-  the headers and `dnnl-config.cmake` are in `intel-oneapi-dnnl-devel`.
+- A GPU and its vendor's tooling for telemetry: `xpu-smi` for Intel,
+  `nvidia-smi` for NVIDIA, `rocm-smi` for AMD. Cards from more than one vendor
+  in the same machine are the case this is written for, not an afterthought.
+- Docker, and for NVIDIA the container toolkit. Both ComfyUI and — unless a
+  card has a native build — llama-server run in containers, which is what keeps
+  a second vendor from meaning a second userspace toolchain on the host. The
+  console can install either from the official images; nothing has to be pulled
+  by hand.
+- A native `llama.cpp` build is optional and worth it for one card: the one
+  whose owner is measuring it. On Intel that means the SYCL backend **and
+  oneDNN** — `GGML_SYCL_DNN` defaults to ON but silently compiles itself out
+  when `find_package(DNNL)` fails, and a build without it loses the XMX
+  attention path: measured here at 254 t/s prefill against 291 at 32k context,
+  generation unchanged. Two apt packages, not one: `intel-oneapi-dnnl` carries
+  only the shared library, while the headers and `dnnl-config.cmake` are in
+  `intel-oneapi-dnnl-devel`.
 - [llama-swap](https://github.com/mostlygeek/llama-swap)
 - [Caddy](https://caddyserver.com/) for TLS and the single entry point
-- ComfyUI via [`yanwk/comfyui-boot:xpu`](https://github.com/YanWenKun/ComfyUI-Docker)
-  (native PyTorch XPU; IPEX reached EOL in March 2026)
 - [SearXNG](https://github.com/searxng/searxng) on loopback, if the agent should
   be able to search. Optional: the tool is offered to the model only when the
   instance answers, so an absent one removes the capability rather than breaking
