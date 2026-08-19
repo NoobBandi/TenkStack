@@ -44,7 +44,18 @@ UNITS = {
     # it is the only place a service that died on startup says so.
     "init.scope": "系統",
 }
-COMFY_CONTAINER = "comfyui-xpu"
+# Every ComfyUI container, not one of them.
+#
+# There is one instance per card -- comfyui-xpu on the Arc, comfyui-nv0 on the
+# NVIDIA -- because the card is fixed when the process starts. Following a
+# single hardcoded name meant the other instance's output existed nowhere the
+# console could see it, which is exactly the instance you go looking for when
+# a generation failed on the card you use less.
+#
+# They share one label, so the page still offers "圖像" as one source; the
+# container name rides along as the unit, which is what the second filter
+# selects on.
+COMFY_PREFIX = "comfyui"
 COMFY_LABEL = "圖像"
 
 # xpu-smi writes a dozen lines of MEI permission errors straight to syslog on
@@ -66,6 +77,9 @@ _tasks: list[asyncio.Task] = []
 # cancellation entirely and keep the service alive until systemd's stop timeout
 # expires and SIGKILLs the lot -- ninety seconds of 502s on every restart.
 _children: set[asyncio.subprocess.Process] = set()
+# Containers that already have a reader, so the watcher does not start a second
+# one for the same name on its next pass.
+_followed: set[str] = set()
 
 
 def _level(priority: int | None) -> str:
@@ -347,12 +361,31 @@ async def _read_journal() -> None:
         await asyncio.sleep(5)
 
 
-async def _read_docker() -> None:
+async def _running_containers() -> list[str]:
+    """The ComfyUI containers that exist right now, running or not.
+
+    `-a` on purpose: a stopped container still holds the log of how it stopped,
+    and that is the one people come here to read.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "ps", "-a", "--format", "{{.Names}}",
+            "--filter", f"name={COMFY_PREFIX}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return []
+    out, _ = await proc.communicate()
+    return [name for name in out.decode().split() if name]
+
+
+async def _read_container(container: str) -> None:
     while True:
         try:
             proc = await asyncio.create_subprocess_exec(
                 "docker", "logs", "--follow", "--timestamps", "--tail", "200",
-                COMFY_CONTAINER,
+                container,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -387,7 +420,7 @@ async def _read_docker() -> None:
 
             _emit({
                 "t": seconds,
-                "unit": COMFY_CONTAINER,
+                "unit": container,
                 "label": COMFY_LABEL,
                 "level": level,
                 "text": summary,
@@ -395,14 +428,37 @@ async def _read_docker() -> None:
             })
 
         _children.discard(proc)
+        # A container that has been removed will never produce another line;
+        # respawning on it would be a `docker logs` failure every five seconds
+        # forever. Forgotten instead, so the watcher can pick it up again if a
+        # container of that name comes back.
+        if container not in await _running_containers():
+            _followed.discard(container)
+            logger.info("stopped following container %s: it is gone", container)
+            return
         await asyncio.sleep(5)
+
+
+async def _watch_containers() -> None:
+    """Start a reader for each ComfyUI container, including ones added later.
+
+    A container created after the console started -- a second card, a rebuilt
+    instance -- would otherwise be invisible until the next restart.
+    """
+    while True:
+        for container in await _running_containers():
+            if container not in _followed:
+                _followed.add(container)
+                _tasks.append(asyncio.create_task(_read_container(container)))
+                logger.info("following container %s", container)
+        await asyncio.sleep(60)
 
 
 def start() -> None:
     if _tasks:
         return
     _tasks.append(asyncio.create_task(_read_journal()))
-    _tasks.append(asyncio.create_task(_read_docker()))
+    _tasks.append(asyncio.create_task(_watch_containers()))
     logger.info("log readers started (journal + docker)")
 
 

@@ -167,6 +167,10 @@ interface Props {
 export default function JournalView({ lines, height }: Props) {
   const { message } = AntApp.useApp();
   const [unit, setUnit] = useState('all');
+  /** Which instance within the selected source, when a source has more than
+   *  one. ComfyUI is the case that needs it: one container per card, both
+   *  called 圖像, and the one you want is the one that just failed. */
+  const [instance, setInstance] = useState('all');
   const [levels, setLevels] = useState<Set<string>>(() => new Set(LEVELS));
   const [range, setRange] = useState(0);
   /** Bounds for the custom range, as epoch seconds. Null until both are set,
@@ -233,6 +237,32 @@ export default function JournalView({ lines, height }: Props) {
     return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([label]) => label);
   }, [windowed]);
 
+  /** The units behind the selected source. Empty for a source that is a single
+   *  unit, which is every one of them except ComfyUI, so the second row of
+   *  buttons appears only where there is a choice to make. */
+  const instances = useMemo(() => {
+    if (unit === 'all') return [];
+    const seen = new Set<string>();
+    for (const line of windowed) if (line.label === unit) seen.add(line.unit);
+    return [...seen].sort();
+  }, [windowed, unit]);
+
+  /** Their shared prefix, dropped from the buttons: `comfyui-xpu` and
+   *  `comfyui-nv0` are told apart by what differs, and the part they share is
+   *  already said by the source button beside them. */
+  const trim = useMemo(() => {
+    if (instances.length < 2) return 0;
+    const [first] = instances;
+    let at = 0;
+    while (at < first.length && instances.every((name) => name[at] === first[at])) at += 1;
+    const cut = first.slice(0, at).lastIndexOf('-');
+    return cut < 0 ? 0 : cut + 1;
+  }, [instances]);
+
+  /** A source with one unit has nothing to choose, and a stale choice from the
+   *  previously selected source would hide every line. */
+  useEffect(() => { setInstance('all'); }, [unit]);
+
   /** Per level, within everything else that is selected -- so the number beside
    *  「錯誤」 answers "how many errors am I currently not seeing". */
   const levelCounts = useMemo(() => {
@@ -240,21 +270,23 @@ export default function JournalView({ lines, height }: Props) {
     const counts: Record<string, number> = { error: 0, warn: 0, info: 0 };
     for (const line of windowed) {
       if (unit !== 'all' && line.label !== unit) continue;
+      if (instance !== 'all' && line.unit !== instance) continue;
       if (needle && !line.text.toLowerCase().includes(needle)) continue;
       counts[line.level] = (counts[line.level] ?? 0) + 1;
     }
     return counts;
-  }, [windowed, unit, query]);
+  }, [windowed, unit, instance, query]);
 
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return windowed.filter((line) => {
       if (unit !== 'all' && line.label !== unit) return false;
+      if (instance !== 'all' && line.unit !== instance) return false;
       if (!levels.has(line.level)) return false;
       if (needle && !line.text.toLowerCase().includes(needle)) return false;
       return true;
     });
-  }, [windowed, unit, levels, query]);
+  }, [windowed, unit, instance, levels, query]);
 
   useEffect(() => {
     if (!frozen && atBottom && pane.current) {
@@ -357,6 +389,16 @@ export default function JournalView({ lines, height }: Props) {
           options={[{ label: '全部', value: 'all' },
             ...units.map((label) => ({ label, value: label }))]}
         />
+
+        {instances.length > 1 && (
+          <Segmented
+            size="small"
+            value={instance}
+            onChange={(v) => setInstance(String(v))}
+            options={[{ label: '全部', value: 'all' },
+              ...instances.map((name) => ({ label: name.slice(trim), value: name }))]}
+          />
+        )}
 
         {/* Levels are independent switches rather than one choice: "errors and
             warnings but not information" is the normal way to read a log, and a
