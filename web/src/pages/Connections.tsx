@@ -1,39 +1,40 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, App as AntApp, Card, Checkbox, Col, Row, Segmented, Space, Switch, Table,
-  Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Checkbox, Segmented, Space, Switch, Table, Tag,
+  Tooltip, Typography,
 } from 'antd';
-import { GlobalOutlined, LockOutlined, UnlockOutlined } from '@ant-design/icons';
-import Endpoints from '../components/Endpoints';
+import {
+  CopyOutlined, GlobalOutlined, LockOutlined, SafetyCertificateOutlined, UnlockOutlined,
+} from '@ant-design/icons';
 import ClientSnippets from '../components/ClientSnippets';
 import {
-  fetchChannels, setChannel, setChannelScopes,
-  type Channel, type ChannelState,
+  fetchChannels, fetchEndpoints, fetchNetwork, setChannel, setChannelScopes,
+  type Channel, type ChannelState, type Endpoint, type NetworkHost, type NetworkInfo,
 } from '../api';
-import { ACCENT, MONO } from '../theme';
+import { ACCENT } from '../theme';
 
 const { Text } = Typography;
 
 /**
- * Ways in, and which networks may use them.
+ * Every way in, in one table.
+ *
+ * This was three cards, and the same decision was made twice in it: the
+ * endpoint list had a host selector and the client snippets had another, and
+ * they did not agree -- so copying an address from one and a config from the
+ * other gave you a snippet pointing somewhere you had not chosen. Meanwhile
+ * the thing that decides whether any of it works, the channel switch and its
+ * reach, sat in a third card with no visible connection to the address it
+ * governs.
+ *
+ * One source selector at the top, one row per way in, and the address, who may
+ * reach it, and whether it is open at all read across a single line.
  *
  * A channel is one Caddy site block in its own file; the switch moves that file
- * and restarts the proxy. Reach is a `bind` directive rather than hostname
+ * and reloads the proxy. Reach is a `bind` directive rather than hostname
  * matching, so a channel closed to Tailscale has no socket on the Tailscale
- * address at all instead of a port that answers 404.
- *
- * The console's own address is not listed, because it is not one of these
- * files -- it lives in the main Caddyfile so that no switch on this page can
- * close the page.
- *
- * ONE ROW PER CHANNEL
- *
- * This was a stack of paragraphs: a switch, a name, a port, an icon, a
- * sentence of explanation, a checkbox group, and then another sentence saying
- * what the checkboxes had just said. The controls were buried in the prose and
- * you had to read the block to find out how to change it. A row puts the two
- * decisions -- who may reach this, and is it open at all -- in fixed places
- * and lets the explanation live where explanations belong, on hover.
+ * address at all instead of a port that answers 404. Two rows have no channel:
+ * the console and the API it carries live in the main Caddyfile, so that no
+ * switch on this page can close the page it is drawn on.
  */
 
 /**
@@ -41,8 +42,7 @@ const { Text } = Typography;
  *
  * `所有介面` was a checkbox beside `區網` and `Tailscale`, which made it look
  * like a peer of theirs. It is not: with it on, the other two mean nothing,
- * and they stayed checkable anyway. Three exclusive modes say the shape of the
- * thing, and the network list only appears in the one mode that has a list.
+ * and they stayed checkable anyway.
  */
 const REACH = [
   { value: 'local', label: '只有本機' },
@@ -55,6 +55,12 @@ const NETWORKS = [
   { key: 'tailscale', label: 'Tailscale', hint: '你的 Tailnet 內的裝置，走加密通道' },
 ];
 
+/** Which snippet tab an endpoint's 範例 button opens. */
+const SNIPPET_FOR: Record<string, string> = {
+  'api-http': 'opencode',
+  'api-https': 'claude-code',
+};
+
 function reachOf(channel: Channel): string {
   if (channel.scopes.includes('wan')) return 'all';
   return channel.scopes.length ? 'pick' : 'local';
@@ -63,14 +69,28 @@ function reachOf(channel: Channel): string {
 export default function Connections() {
   const { message, modal } = AntApp.useApp();
   const [state, setState] = useState<ChannelState | null>(null);
+  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [network, setNetwork] = useState<NetworkInfo | null>(null);
+  const [hostKey, setHostKey] = useState<string>();
   const [busy, setBusy] = useState<string | null>(null);
+  const [tab, setTab] = useState('opencode');
 
   const load = useCallback(() => {
     fetchChannels().then(setState)
       .catch(() => setState({ channels: [], addresses: { lan: null, tailscale: null, wan: '0.0.0.0' } }));
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    fetchEndpoints().then(setEndpoints).catch(() => undefined);
+    fetchNetwork().then((info) => {
+      setNetwork(info);
+      // Default to whichever address the console was actually opened on, so
+      // the addresses shown are the ones already known to work from here.
+      const current = info.hosts.find((h) => h.host === window.location.hostname);
+      setHostKey(current?.key ?? info.hosts[info.hosts.length - 1]?.key);
+    }).catch(() => undefined);
+  }, [load]);
 
   const run = async (key: string, action: () => Promise<{ changed: boolean } & ChannelState>,
                      done: string) => {
@@ -86,17 +106,26 @@ export default function Connections() {
     }
   };
 
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success('已複製');
+    } catch {
+      // Clipboard access needs a secure context; over plain HTTP it is blocked.
+      message.warning('瀏覽器不允許複製，請手動選取');
+    }
+  };
+
   const toggle = (channel: Channel, next: boolean) => {
     if (next) {
       void run(channel.key, () => setChannel(channel.key, true), `${channel.label} 已開啟`);
       return;
     }
     // Closing is the direction that breaks things for someone else, and the
-    // restart interrupts every connection briefly, so it earns a sentence.
+    // reload interrupts connections briefly, so it earns a sentence.
     modal.confirm({
       title: `關閉 ${channel.label}？`,
-      content: `連到 ${channel.ports.map((p) => `:${p}`).join('、')} 的用戶端會立刻失去連線。`
-        + '套用時整個代理會重啟一次，主控台本身會短暫中斷約一秒。',
+      content: `連到 ${channel.ports.map((p) => `:${p}`).join('、')} 的用戶端會立刻失去連線。`,
       okText: '關閉',
       cancelText: '取消',
       okButtonProps: { danger: true },
@@ -110,131 +139,204 @@ export default function Connections() {
   const setReach = (channel: Channel, reach: string) => {
     if (reach === 'all') return setScopes(channel, ['wan']);
     if (reach === 'local') return setScopes(channel, []);
-    // Entering 選擇網路 from either end starts with the LAN, because a reach
-    // of nothing is what 只有本機 already means and an empty middle mode would
-    // be the same setting under a different name.
-    return setScopes(channel, channel.scopes.filter((s) => s !== 'wan').length
-      ? channel.scopes.filter((s) => s !== 'wan')
-      : ['lan']);
+    // Entering 選擇網路 from either end starts with the LAN: a reach of nothing
+    // is what 只有本機 already means, and an empty middle mode would be the
+    // same setting under a different name.
+    const kept = channel.scopes.filter((s) => s !== 'wan');
+    return setScopes(channel, kept.length ? kept : ['lan']);
   };
 
+  const host: NetworkHost | undefined =
+    network?.hosts.find((h) => h.key === hostKey) ?? network?.hosts[0];
+  const hostname = host?.host ?? window.location.hostname;
   const channels = state?.channels ?? [];
   const addresses = state?.addresses;
 
-  const switches = (
-    <Card title="管道" size="small" loading={state === null} style={{ height: '100%' }}>
-      <Table<Channel>
-        dataSource={channels}
-        rowKey="key"
-        size="small"
-        pagination={false}
-        locale={{ emptyText: '沒有可切換的管道。' }}
-        columns={[
-          {
-            title: '管道',
-            render: (_, channel) => (
-              <Space size={6}>
-                <Tooltip title={channel.note}>
-                  <Text strong style={{ fontSize: 13 }}>{channel.label}</Text>
-                </Tooltip>
-                {channel.encrypted ? (
-                  <Tooltip title="TLS 加密">
-                    <LockOutlined style={{ opacity: 0.5, fontSize: 12 }} />
-                  </Tooltip>
-                ) : (
-                  <Tooltip title="未加密：內容在區網上是明文">
-                    <UnlockOutlined style={{ color: ACCENT.warn, fontSize: 12 }} />
-                  </Tooltip>
-                )}
-                {!channel.present && <Tag color="error">設定檔遺失</Tag>}
-              </Space>
-            ),
-          },
-          {
-            // Every port it opens, not the first one. The ComfyUI channel is a
-            // site block per instance, so one switch here governs several.
-            title: '連接埠', width: 120, align: 'right' as const,
-            render: (_, channel) => (
-              <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
-                {channel.ports.map((port) => `:${port}`).join(' ') || '—'}
-              </Text>
-            ),
-          },
-          {
-            title: '誰能連', width: 250, align: 'right' as const,
-            render: (_, channel) => {
-              const reach = reachOf(channel);
-              return (
-                <Space direction="vertical" size={4} align="end" style={{ width: '100%' }}>
-                  <Segmented
-                    size="small"
-                    value={reach}
-                    disabled={!channel.enabled || busy !== null}
-                    options={REACH}
-                    onChange={(v) => setReach(channel, String(v))}
-                  />
-                  {reach === 'pick' && (
-                    <Checkbox.Group
-                      value={channel.scopes}
-                      disabled={busy !== null}
-                      onChange={(v) => setScopes(channel, v as string[])}
-                    >
-                      <Space size={10}>
-                        {NETWORKS.map((network) => {
-                          const address = addresses?.[network.key as 'lan' | 'tailscale'];
-                          return (
-                            <Tooltip
-                              key={network.key}
-                              title={address
-                                ? `${network.hint}（${address}）`
-                                : '這台機器上沒有這個網路'}
-                            >
-                              <Checkbox value={network.key} disabled={!address}>
-                                <Text style={{ fontSize: 12 }}>{network.label}</Text>
-                              </Checkbox>
-                            </Tooltip>
-                          );
-                        })}
-                      </Space>
-                    </Checkbox.Group>
-                  )}
-                </Space>
-              );
-            },
-          },
-          {
-            title: '', width: 60, align: 'right' as const,
-            render: (_, channel) => (
-              <Switch
-                size="small"
-                checked={channel.enabled}
-                loading={busy === channel.key}
-                disabled={!channel.present || busy !== null}
-                onChange={(next) => toggle(channel, next)}
-              />
-            ),
-          },
-        ]}
-      />
+  /** One row per way in: the endpoint, and the channel governing it if any. */
+  const rows = useMemo(() => endpoints.map((endpoint) => ({
+    endpoint,
+    channel: channels.find((c) => c.key === endpoint.key) ?? null,
+  })), [endpoints, channels]);
 
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginTop: 12 }}
-        icon={<GlobalOutlined />}
-        message="主控台自己的 :8443 不在這裡"
-        description="它留在 Caddyfile 主檔中、不受這些開關影響——否則就可能關掉正在操作的這個介面。「所有介面」也不等於對外網開放：那還需要在路由器上轉發埠號。"
-      />
-    </Card>
-  );
+  const urls = (row: { endpoint: Endpoint; channel: Channel | null }) => {
+    const path = row.endpoint.path === '/' ? '' : row.endpoint.path;
+    const ports = row.channel?.ports.length ? row.channel.ports : [row.endpoint.port];
+    return ports.map((port) => `${row.endpoint.scheme}://${hostname}:${port}${path}`);
+  };
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} xl={11}>{switches}</Col>
-        <Col xs={24} xl={13}><Endpoints /></Col>
-      </Row>
-      <ClientSnippets />
+      <Card
+        title="連線"
+        size="small"
+        loading={state === null}
+        extra={network && network.hosts.length > 1 && (
+          <Space size={8}>
+            <Text type="secondary" style={{ fontSize: 12 }}>從哪裡連</Text>
+            <Segmented
+              size="small"
+              value={hostKey}
+              onChange={(v) => setHostKey(v as string)}
+              options={network.hosts.map((h) => ({ label: h.label, value: h.key }))}
+            />
+          </Space>
+        )}
+      >
+        {host && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+            {host.host} ・ {host.note}
+          </Text>
+        )}
+
+        {host?.tailscale && (
+          <Alert
+            type={host.cert_available ? 'success' : 'info'}
+            showIcon
+            icon={<SafetyCertificateOutlined />}
+            style={{ marginBottom: 12 }}
+            message={host.cert_available
+              ? 'Tailscale 網域可取得公開信任的憑證'
+              : 'Tailscale 傳輸本身已由 WireGuard 加密'}
+            description={host.cert_available
+              ? '若瀏覽器仍顯示憑證警告，代表 Caddy 尚未取得憑證。在這台機器上執行一次 sudo tailscale set --operator=$USER 後即會自動取得，不需要改設定。'
+              : 'IP 位址無法簽發公開憑證，請改用上方的 Tailscale 網域名稱。走 Tailscale 時即使是純 HTTP 也不會有明文外洩，流量在網路層已加密。'}
+          />
+        )}
+
+        <Table
+          dataSource={rows}
+          rowKey={(row) => row.endpoint.key}
+          size="small"
+          pagination={false}
+          locale={{ emptyText: '讀取中…' }}
+          columns={[
+            {
+              title: '入口', width: 150,
+              render: (_, row) => (
+                <Space size={6}>
+                  <Tooltip title={row.endpoint.note}>
+                    <Text strong style={{ fontSize: 13 }}>{row.endpoint.label}</Text>
+                  </Tooltip>
+                  {row.endpoint.encrypted ? (
+                    <Tooltip title="TLS 加密">
+                      <LockOutlined style={{ opacity: 0.5, fontSize: 12 }} />
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="未加密：內容在區網上是明文">
+                      <UnlockOutlined style={{ color: ACCENT.warn, fontSize: 12 }} />
+                    </Tooltip>
+                  )}
+                  {row.channel && !row.channel.present && <Tag color="error">設定檔遺失</Tag>}
+                </Space>
+              ),
+            },
+            {
+              // One line per port: a channel is no longer one site block, so
+              // the ComfyUI row has an address per card.
+              title: '網址',
+              render: (_, row) => (
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  {urls(row).map((url) => (
+                    <Space key={url} size={4}>
+                      <Text code style={{ fontSize: 12 }}>{url}</Text>
+                      <Button type="text" size="small" icon={<CopyOutlined />}
+                              onClick={() => copy(url)} />
+                    </Space>
+                  ))}
+                  {!row.endpoint.listening && <Tag color="error">未監聽</Tag>}
+                </Space>
+              ),
+            },
+            {
+              title: '誰能連', width: 250, align: 'right' as const,
+              render: (_, row) => {
+                const channel = row.channel;
+                if (!channel) {
+                  // The console and the API it carries are the same site block
+                  // in the main Caddyfile. Saying so is more useful than an
+                  // empty cell, and the two want different words: one *is* the
+                  // console, the other rides on it.
+                  const rides = row.endpoint.key !== 'console';
+                  return (
+                    <Tooltip title="它在 Caddyfile 主檔中，不受這頁的開關影響——否則就可能關掉正在操作的這個介面">
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {rides ? '跟主控台一起' : '這個介面本身'}
+                      </Text>
+                    </Tooltip>
+                  );
+                }
+                const reach = reachOf(channel);
+                return (
+                  <Space direction="vertical" size={4} align="end" style={{ width: '100%' }}>
+                    <Segmented
+                      size="small"
+                      value={reach}
+                      disabled={!channel.enabled || busy !== null}
+                      options={REACH}
+                      onChange={(v) => setReach(channel, String(v))}
+                    />
+                    {reach === 'pick' && (
+                      <Checkbox.Group
+                        value={channel.scopes}
+                        disabled={busy !== null}
+                        onChange={(v) => setScopes(channel, v as string[])}
+                      >
+                        <Space size={10}>
+                          {NETWORKS.map((network_) => {
+                            const address = addresses?.[network_.key as 'lan' | 'tailscale'];
+                            return (
+                              <Tooltip
+                                key={network_.key}
+                                title={address ? `${network_.hint}（${address}）` : '這台機器上沒有這個網路'}
+                              >
+                                <Checkbox value={network_.key} disabled={!address}>
+                                  <Text style={{ fontSize: 12 }}>{network_.label}</Text>
+                                </Checkbox>
+                              </Tooltip>
+                            );
+                          })}
+                        </Space>
+                      </Checkbox.Group>
+                    )}
+                  </Space>
+                );
+              },
+            },
+            {
+              title: '範例', width: 80, align: 'right' as const,
+              render: (_, row) => (SNIPPET_FOR[row.endpoint.key] ? (
+                <Button type="link" size="small" style={{ padding: 0 }}
+                        onClick={() => setTab(SNIPPET_FOR[row.endpoint.key])}>
+                  設定範例
+                </Button>
+              ) : null),
+            },
+            {
+              title: '', width: 60, align: 'right' as const,
+              render: (_, row) => (row.channel ? (
+                <Switch
+                  size="small"
+                  checked={row.channel.enabled}
+                  loading={busy === row.channel.key}
+                  disabled={!row.channel.present || busy !== null}
+                  onChange={(next) => toggle(row.channel!, next)}
+                />
+              ) : null),
+            },
+          ]}
+        />
+
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginTop: 12 }}
+          icon={<GlobalOutlined />}
+          message="「所有介面」不等於對外網開放"
+          description="那還需要在路由器上轉發埠號。沒有開關的那幾列住在 Caddyfile 主檔裡，這頁關不掉它們——否則就可能關掉正在操作的這個介面。"
+        />
+      </Card>
+
+      <ClientSnippets endpoints={endpoints} hostname={hostname} tab={tab} onTab={setTab} />
     </Space>
   );
 }

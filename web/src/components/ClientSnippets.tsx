@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { App as AntApp, Button, Card, Segmented, Space, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
-import {
-  fetchEndpoints, fetchModels, fetchNetwork,
-  type Endpoint, type ModelInfo, type NetworkInfo,
-} from '../api';
+import { fetchModels, type Endpoint, type ModelInfo } from '../api';
 import { MONO } from '../theme';
 
 const { Paragraph } = Typography;
@@ -28,27 +25,30 @@ function urlFor(endpoint: Endpoint, host: string): string {
   return `${endpoint.scheme}://${host}:${endpoint.port}${path}`;
 }
 
-export default function ClientSnippets() {
+/**
+ * Which host these are written for is decided above, not here.
+ *
+ * This card had a host selector of its own, beside the one on the endpoint
+ * list, and the two did not agree. Copying an address from one and a config
+ * from the other produced a snippet pointing at a machine name the reader had
+ * not chosen -- so the choice moved to the page and this takes it as a prop.
+ */
+interface Props {
+  endpoints: Endpoint[];
+  hostname: string;
+  tab: string;
+  onTab: (key: string) => void;
+}
+
+export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Props) {
   const { message } = AntApp.useApp();
-  const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [network, setNetwork] = useState<NetworkInfo | null>(null);
-  const [hostKey, setHostKey] = useState<string>();
-  const [tab, setTab] = useState('opencode');
   // Which shell the second box is written for. Only some snippets have one, and
   // the difference is not cosmetic: `export` and `$env:` are different
   // languages, and on Windows the second one lasts only as long as the window.
   const [shell, setShell] = useState<'linux' | 'windows'>('linux');
 
-  useEffect(() => {
-    fetchEndpoints().then(setEndpoints).catch(() => undefined);
-    fetchModels().then(setModels).catch(() => undefined);
-    fetchNetwork().then((info) => {
-      setNetwork(info);
-      const current = info.hosts.find((h) => h.host === window.location.hostname);
-      setHostKey(current?.key ?? info.hosts[info.hosts.length - 1]?.key);
-    }).catch(() => undefined);
-  }, []);
+  useEffect(() => { fetchModels().then(setModels).catch(() => undefined); }, []);
 
   const copy = useCallback(async (text: string) => {
     try {
@@ -58,9 +58,6 @@ export default function ClientSnippets() {
       message.warning('瀏覽器不允許複製，請手動選取');
     }
   }, [message]);
-
-  const host = network?.hosts.find((h) => h.key === hostKey) ?? network?.hosts[0];
-  const hostname = host?.host ?? window.location.hostname;
 
   const apiBase = endpoints.find((e) => e.key === 'api-http')
     ?? endpoints.find((e) => e.key === 'api-https');
@@ -217,26 +214,13 @@ print(resp.choices[0].message.content)`,
   const active = snippets.find((s) => s.key === tab) ?? snippets[0];
 
   return (
-    <Card
-      title="用戶端設定範例"
-      size="small"
-      extra={
-        network && network.hosts.length > 1 && (
-          <Segmented
-            size="small"
-            value={hostKey}
-            onChange={(v) => setHostKey(v as string)}
-            options={network.hosts.map((h) => ({ label: h.label, value: h.key }))}
-          />
-        )
-      }
-    >
+    <Card title="用戶端設定範例" size="small">
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
         <Space size={10} wrap>
           <Segmented
             size="small"
             value={tab}
-            onChange={(v) => setTab(v as string)}
+            onChange={(v) => onTab(v as string)}
             options={snippets.map((s) => ({ label: s.label, value: s.key }))}
           />
           <Button type="text" size="small" icon={<CopyOutlined />}
