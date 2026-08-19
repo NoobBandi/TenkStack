@@ -33,6 +33,41 @@ const STATE_COLOUR: Record<string, string> = {
   restarting: 'orange', paused: 'orange', dead: 'red',
 };
 
+const STATE_LABEL: Record<string, string> = {
+  running: '執行中', exited: '已停止', created: '已建立',
+  restarting: '重啟中', paused: '已暫停', dead: '異常',
+};
+
+/**
+ * The time out of Docker's status line, in this page's language.
+ *
+ * `docker ps` answers with a sentence -- "Up 2 days", "Exited (0) 5 minutes
+ * ago" -- whose first half is the state the tag beside it already carries. So
+ * the state is dropped and only the duration kept, which is the part the tag
+ * cannot say. Left as it came if the shape is unfamiliar: a Docker version
+ * that words it differently should show something rather than nothing.
+ */
+const UNITS: [RegExp, string][] = [
+  [/\bLess than a second\b/, '不到 1 秒'],
+  // "About an hour" means one of them, and dropping the article would drop the
+  // count with it -- the result read 約 小時.
+  [/\bAbout an? \b/, '約 1 '],
+  [/\bseconds?\b/, '秒'], [/\bminutes?\b/, '分鐘'], [/\bhours?\b/, '小時'],
+  [/\bdays?\b/, '天'], [/\bweeks?\b/, '週'], [/\bmonths?\b/, '個月'],
+  [/\byears?\b/, '年'],
+];
+
+function since(status: string): string {
+  // The state word, and the exit code that comes with it, are what the tag
+  // beside this already says.
+  let text = status.trim()
+    .replace(/^(Exited|Restarting)\s*\([^)]*\)\s*/, '')
+    .replace(/^(Up|Created|Paused|Dead)\s*/, '')
+    .replace(/\s*\((healthy|unhealthy|health: starting)\)/, '');
+  for (const [pattern, word] of UNITS) text = text.replace(pattern, word);
+  return text.replace(/\s*ago$/, '前').trim() || '—';
+}
+
 export default function Runtime() {
   const { message } = AntApp.useApp();
   const [survey, setSurvey] = useState<RuntimeSurvey | null>(null);
@@ -150,7 +185,7 @@ export default function Runtime() {
               ),
             },
             {
-              title: '跑模型', width: 210,
+              title: '跑模型', width: 210, align: 'right' as const,
               render: (_, row) => {
                 const state = row.state;
                 const job = state?.install ?? null;
@@ -216,7 +251,7 @@ export default function Runtime() {
               },
             },
             {
-              title: '跑 ComfyUI', width: 240,
+              title: '跑 ComfyUI', width: 240, align: 'right' as const,
               render: (_, row) => {
                 const job = row.comfy.job;
                 if (job && ['pulling', 'starting'].includes(job.state)) {
@@ -429,16 +464,20 @@ export default function Runtime() {
               ),
             },
             {
-              title: '狀態', dataIndex: 'state', width: 150,
+              title: '狀態', dataIndex: 'state', width: 160, align: 'right' as const,
               render: (state: string, row) => (
-                <Space size={6}>
-                  <Tag color={STATE_COLOUR[state] ?? 'default'}>{state}</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>{row.status}</Text>
-                </Space>
+                <Tooltip title={row.status}>
+                  <Space size={6}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{since(row.status)}</Text>
+                    <Tag color={STATE_COLOUR[state] ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                      {STATE_LABEL[state] ?? state}
+                    </Tag>
+                  </Space>
+                </Tooltip>
               ),
             },
             {
-              title: '顯示卡', width: 220,
+              title: '顯示卡', width: 220, align: 'right' as const,
               render: (_, row) => {
                 if (!row.wants_gpu) return <Text type="secondary">—</Text>;
                 if (row.orphaned) return <Tag color="warning">找不到指定的卡</Tag>;
@@ -456,7 +495,7 @@ export default function Runtime() {
               },
             },
             {
-              title: '連接埠', dataIndex: 'ports', width: 190,
+              title: '連接埠', dataIndex: 'ports', width: 190, align: 'right' as const,
               render: (ports: string) => (
                 <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
                   {ports || '—'}
