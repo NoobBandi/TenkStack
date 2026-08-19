@@ -170,15 +170,20 @@ async def upsert_model(
 
         # Which card this model runs on, as llama-swap's per-model `env`.
         #
-        # A structured key rather than a flag inside `cmd`, because llama-swap
-        # already passes `env` through to the process it spawns and a YAML
-        # mapping does not have to be parsed back out of a command line. Only
-        # the variables the caller says it manages are cleared -- an
+        # A list of `NAME=value` strings, which is llama-swap's format and not
+        # the mapping YAML would tempt you into: a mapping here fails to
+        # unmarshal, and it fails for the *whole file*, so llama-swap keeps
+        # running on the last config it could read and every later edit --
+        # including a model somebody has just created -- silently does nothing.
+        #
+        # Only the variables the caller says it manages are cleared. An
         # environment variable somebody added by hand is not the UI's to
-        # remove, the same rule the rest of this entry now follows.
+        # remove, the same rule the rest of this entry follows.
         managed = managed_env or set()
-        kept = {k: v for k, v in (entry.get("env") or {}).items() if k not in managed}
-        merged = {**kept, **(env or {})}
+        kept = [item for item in _env_pairs(entry.get("env"))
+                if item.split("=", 1)[0] not in managed]
+        added = [f"{name}={value}" for name, value in (env or {}).items()]
+        merged = kept + added
         if merged:
             entry["env"] = merged
         else:
@@ -670,6 +675,30 @@ def canonical_model(name: str) -> str:
     return _aliases.get(name, name)
 
 
+def _env_pairs(value: Any) -> list[str]:
+    """A model entry's `env`, as the list of strings llama-swap wants.
+
+    Tolerant on the way in because this console wrote the wrong shape once: a
+    mapping is accepted and flattened rather than dropped, so a config edited
+    by that version repairs itself on the next save instead of losing the
+    setting.
+    """
+    if isinstance(value, dict):
+        return [f"{name}={item}" for name, item in value.items()]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value]
+    return []
+
+
+def env_map(value: Any) -> dict[str, str]:
+    """The same thing as a mapping, for comparing against a device's selector."""
+    out: dict[str, str] = {}
+    for item in _env_pairs(value):
+        name, _, text = item.partition("=")
+        out[name] = text
+    return out
+
+
 def read_model_spec(model_id: str) -> dict | None:
     """Parse a model's cmd back into the fields the editor shows.
 
@@ -711,9 +740,9 @@ def read_model_spec(model_id: str) -> dict | None:
 
     return {
         "id": model_id,
-        # Verbatim, so the UI can tell which device entry it corresponds to
-        # without this module knowing what a device is.
-        "env": dict(spec.get("env") or {}),
+        # As a mapping, so the UI can tell which device entry it corresponds to
+        # without either side handling llama-swap's list-of-strings shape.
+        "env": env_map(spec.get("env")),
         "name": spec.get("name") or model_id,
         "description": spec.get("description") or "",
         "model_file": values["model_file"] or "",
