@@ -4,14 +4,17 @@ The easiest of the three: a single `--query-gpu` call returns every field this
 console draws, in CSV, with units stripped. No sysfs, no second command, no
 per-tile nesting.
 
-UNVERIFIED. Written against nvidia-smi's documented query fields; there is no
-NVIDIA card on the machine this was developed on, so it has never produced a
-real reading. The field names are stable across driver versions and the parsing
-is defensive, but treat a first run as a test rather than as working code.
+One exception to the single call: peak memory bandwidth, which nvidia-smi does
+not report in any form. That comes from the CUDA driver instead -- see
+`_bandwidth` below.
+
+Verified against an RTX 3060 on driver 595.84.
 """
 
 from __future__ import annotations
 
+import asyncio
+import ctypes
 import logging
 import shutil
 
@@ -82,6 +85,86 @@ DETAIL_QUERY = [
     for _, fields in DETAIL_GROUPS
     for key, label, unit in fields
 ]
+
+# Queried but never shown: the bandwidth lookup below matches CUDA devices by
+# PCI address rather than by ordinal, because the two enumerations need not
+# agree -- CUDA_DEVICE_ORDER defaults to fastest-first, and CUDA_VISIBLE_DEVICES
+# can hide cards outright, so device 0 there is not necessarily index 0 here.
+BUS_ID = "pci.bus_id"
+
+# Peak memory bandwidth is the one number on this page nvidia-smi cannot answer:
+# there is no bus-width or bandwidth field in --query-gpu, and -q does not carry
+# one either. The CUDA driver has both operands as device attributes, so they
+# are read straight out of libcuda through ctypes -- no dependency to install,
+# and nothing to keep in sync with a card table.
+CU_MEMORY_CLOCK_RATE = 36        # kHz
+CU_GLOBAL_MEMORY_BUS_WIDTH = 37  # bits
+
+_bandwidths: dict[str, float] | None = None
+
+
+def _bus_key(address: str) -> str:
+    """A PCI address in the one form both tools agree on.
+
+    nvidia-smi pads the domain to eight digits and upper-cases the rest
+    ("00000000:0E:00.0"); the CUDA driver writes four and lower-cases
+    ("0000:0e:00.0"). The domain is dropped and the rest folded down, which is
+    safe because a machine with two domains would still differ in the bus.
+    """
+    return ":".join(address.strip().lower().split(":")[-2:])
+
+
+def _scan() -> dict[str, float]:
+    """{PCI address: peak GB/s} for every card the CUDA driver can see.
+
+    Blocking and slow enough to matter -- loading libcuda and calling cuInit is
+    a tenth of a second -- so it runs once, in a thread, and the answer is kept.
+    A machine with the driver but no CUDA runtime installed simply has no
+    libcuda to open, and gets an empty map rather than an error.
+    """
+    try:
+        cuda = ctypes.CDLL("libcuda.so.1")
+    except OSError:
+        return {}
+    if cuda.cuInit(0) != 0:
+        return {}
+    count = ctypes.c_int()
+    if cuda.cuDeviceGetCount(ctypes.byref(count)) != 0:
+        return {}
+
+    found: dict[str, float] = {}
+    for ordinal in range(count.value):
+        device = ctypes.c_int()
+        if cuda.cuDeviceGet(ctypes.byref(device), ordinal) != 0:
+            continue
+        address = ctypes.create_string_buffer(64)
+        if cuda.cuDeviceGetPCIBusId(address, len(address), device) != 0:
+            continue
+        reading = []
+        for attribute in (CU_MEMORY_CLOCK_RATE, CU_GLOBAL_MEMORY_BUS_WIDTH):
+            value = ctypes.c_int()
+            if cuda.cuDeviceGetAttribute(ctypes.byref(value), attribute, device) != 0:
+                break
+            reading.append(value.value)
+        if len(reading) != 2 or not all(reading):
+            continue
+        clock_khz, width_bits = reading
+        # Doubled because the memory is DDR: one transfer on each clock edge.
+        # This is the arithmetic nvidia's own deviceQuery sample prints, and it
+        # lands on the published figure exactly -- 192 bit x 7501 MHz gives the
+        # 360 GB/s an RTX 3060 is sold as.
+        found[_bus_key(address.value.decode())] = width_bits / 8 * clock_khz * 1000 * 2 / 1e9
+    return found
+
+
+async def _bandwidth(address: str | None) -> float | None:
+    global _bandwidths
+    if _bandwidths is None:
+        _bandwidths = await asyncio.to_thread(_scan)
+    if not address:
+        return None
+    return _bandwidths.get(_bus_key(address))
+
 
 
 def _row_value(raw: str | None, unit: str) -> str | None:
@@ -181,11 +264,12 @@ class Nvidia:
         )
 
     async def detail(self, index: int) -> dict | None:
-        fields = [key for key, _, _ in DETAIL_QUERY]
+        fields = [key for key, _, _ in DETAIL_QUERY] + [BUS_ID]
         rows = await _query(fields, index)
         if not rows:
             return None
         answers = dict(zip(fields, rows[0]))
+        peak = await _bandwidth(answers.get(BUS_ID))
 
         groups = []
         for title, spec in DETAIL_GROUPS:
@@ -194,6 +278,15 @@ class Nvidia:
                 value = _row_value(answers.get(key), unit)
                 if value is not None:
                     entries.append({"key": key, "label": label, "value": value})
+            # Below the capacity it is read with, and above the clock it is
+            # derived from. Omitted rather than guessed at when the driver
+            # cannot be asked -- a card whose bandwidth is unknown says nothing.
+            if title == "記憶體" and peak:
+                entries.insert(1, {
+                    "key": "memory.bandwidth",
+                    "label": "峰值頻寬",
+                    "value": f"{peak:.0f} GB/s",
+                })
             if entries:
                 groups.append({"title": title, "rows": entries})
 
