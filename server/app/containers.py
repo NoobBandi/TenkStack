@@ -243,6 +243,17 @@ async def port_cards(devices: list[dict]) -> dict[int, list[str]]:
     return mapping
 
 
+async def image_sizes() -> dict[str, str]:
+    """{image reference: human size} for what is on this disk."""
+    listing = await _docker("images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}")
+    found: dict[str, str] = {}
+    for line in (listing or "").splitlines():
+        name, _, size = line.partition("\t")
+        if name:
+            found[name.strip()] = size.strip()
+    return found
+
+
 async def by_card(devices: list[dict]) -> dict[str, list[dict]]:
     """{PCI address: the containers holding that card, with their state}.
 

@@ -508,24 +508,6 @@ def _script(vendor: str):
     return config.CONFIG_PATH.parent / f"llama-server-{vendor}.sh"
 
 
-async def _images() -> dict[str, str]:
-    """{image reference: human size} for what is actually on this disk."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.Size}}",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        )
-    except OSError:
-        return {}
-    out, _ = await proc.communicate()
-    found = {}
-    for line in out.decode("utf-8", "replace").splitlines():
-        name, _, size = line.partition("\t")
-        if name:
-            found[name.strip()] = size.strip()
-    return found
-
-
 async def state(vendor: str) -> dict:
     """What exists for one vendor: the script, the macro, the image.
 
@@ -533,12 +515,12 @@ async def state(vendor: str) -> dict:
     ways worth seeing: a disabled runtime is a script with no macro, and a
     half-removed one is a macro with no image.
     """
-    from . import config
+    from . import config, containers
 
     script = _script(vendor)
     macros = config.launcher_macros()
     macro = f"llama-{vendor}"
-    images = await _images()
+    images = await containers.image_sizes()
 
     # From the script when there is one: it records which variant was chosen,
     # and the table only knows what the default would have been.

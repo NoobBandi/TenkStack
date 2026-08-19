@@ -5,7 +5,8 @@ import {
 } from 'antd';
 import { DownOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
-  controlContainer, fetchRuntime, fetchRuntimes, runtimeAction, setCardRole,
+  comfyAction, controlContainer, fetchRuntime, fetchRuntimes, runtimeAction,
+  setCardRole,
   type RuntimeAction, type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
 } from '../api';
 import { MONO } from '../theme';
@@ -81,6 +82,21 @@ export default function Runtime() {
     setBusy(capability === 'llm' ? row.vendor : row.pci_bdf_address);
     try {
       await setCardRole(row.pci_bdf_address ?? '', capability, on);
+      load();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onComfy = async (
+    row: RuntimeCoverage, action: 'update' | 'remove', deleteImage = false,
+  ) => {
+    if (!row.comfy.container) return;
+    setBusy(row.pci_bdf_address);
+    try {
+      await comfyAction(row.comfy.container, action, deleteImage);
       load();
     } catch (error) {
       message.error((error as Error).message);
@@ -196,22 +212,48 @@ export default function Runtime() {
               },
             },
             {
-              title: '跑 ComfyUI', width: 200,
+              title: '跑 ComfyUI', width: 240,
               render: (_, row) => {
                 const none = row.containers.length === 0;
+                const template = row.comfy.template;
+                const control = (
+                  <Switch
+                    size="small"
+                    checked={row.images}
+                    disabled={none && !template}
+                    loading={busy === row.pci_bdf_address}
+                    onChange={none ? undefined : (on) => setRole(row, 'images', on)}
+                  />
+                );
                 return (
                   <Space size={8}>
-                    <Tooltip title={none ? '這張卡上沒有 ComfyUI 容器' : undefined}>
-                      <Switch
-                        size="small"
-                        checked={row.images}
-                        disabled={none}
-                        loading={busy === row.pci_bdf_address}
-                        onChange={(on) => setRole(row, 'images', on)}
-                      />
-                    </Tooltip>
+                    {/* Nothing on this card yet, so On is a build: a new
+                        container, its own output directory, and a download in
+                        the tens of gigabytes. Asks first, and names it. */}
+                    {none && template ? (
+                      <Popconfirm
+                        title="要在這張卡上建立 ComfyUI 嗎？"
+                        description={<>
+                          {template.image}<br />
+                          會下載映像（十幾 GB）並建立 comfyui-{row.comfy.slot}，
+                          模型目錄與現有實例共用。
+                          {!template.verified && <><br />這份設定沒有在這台機器上驗證過。</>}
+                        </>}
+                        okText="建立" cancelText="取消"
+                        onConfirm={() => setRole(row, 'images', true)}
+                      >
+                        {control}
+                      </Popconfirm>
+                    ) : (
+                      <Tooltip title={none && !template ? '沒有這家廠商的 ComfyUI 映像範本' : undefined}>
+                        {control}
+                      </Tooltip>
+                    )}
                     <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
-                      {none ? '—' : row.containers.map((c) => c.name).join('、')}
+                      {none
+                        ? (template ? '尚未建立' : '—')
+                        : `${row.containers.map((c) => c.name).join('、')}${
+                            row.comfy.image_size ? ` · ${row.comfy.image_size}` : ''}`}
                     </Text>
                   </Space>
                 );
@@ -221,20 +263,22 @@ export default function Runtime() {
               title: '', width: 90,
               render: (_, row) => {
                 const state = row.state;
-                if (!state?.managed) return null;
-                const used = state.used_by;
-                // Named, because a card row has two images behind it and
+                const comfy = row.comfy;
+                const used = state?.used_by ?? [];
+                const short = state?.image?.split('/').pop() ?? '映像';
+                const comfyShort = comfy.image?.split('/').pop() ?? '映像';
+                if (!state?.managed && !comfy.container) return null;
+                // Two groups, because a card row has two images behind it and
                 // they are nothing like the same size -- the RTX card here
                 // runs models from a 6.98 GB llama.cpp image and draws with a
                 // 16.5 GB ComfyUI one. "delete the image" without saying which
                 // is a question, not an instruction.
-                const short = state.image?.split('/').pop() ?? '映像';
                 return (
                   <Dropdown
                     menu={{
                       items: [
-                        {
-                          key: 'scope', type: 'group' as const,
+                        ...(state?.managed ? [{
+                          key: 'llm', type: 'group' as const,
                           label: `跑模型用的 ${short}`,
                           children: [
                             { key: 'update', label: '更新這個映像',
@@ -255,7 +299,29 @@ export default function Runtime() {
                               onClick: () => act(row, 'remove', { delete_image: true }),
                             },
                           ],
-                        },
+                        }] : []),
+                        ...(comfy.container ? [{
+                          key: 'comfy', type: 'group' as const,
+                          label: `跑 ComfyUI 用的 ${comfyShort}`,
+                          children: [
+                            {
+                              key: 'comfy-update', label: '更新並重建這個實例',
+                              onClick: () => onComfy(row, 'update'),
+                            },
+                            {
+                              key: 'comfy-remove',
+                              label: `移除 ${comfy.container}（保留映像與輸出）`,
+                              danger: true,
+                              onClick: () => onComfy(row, 'remove'),
+                            },
+                            {
+                              key: 'comfy-purge',
+                              label: `移除並刪除 ${comfyShort}${comfy.image_size ? `（釋出 ${comfy.image_size}）` : ''}`,
+                              danger: true,
+                              onClick: () => onComfy(row, 'remove', true),
+                            },
+                          ],
+                        }] : []),
                       ],
                     }}
                   >

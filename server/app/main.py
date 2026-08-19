@@ -28,9 +28,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
-    auth, backends, catalog, channels, chats, config, containers, files, gguf,
-    gpu, gpu_history, llamaswap, logs as journal, search, speed, system, users,
-    versions,
+    auth, backends, catalog, channels, chats, comfy, config, containers, files,
+    gguf, gpu, gpu_history, llamaswap, logs as journal, search, speed, system,
+    users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -336,8 +336,12 @@ async def read_backend_devices(refresh: bool = False):
 
 @app.get("/api/runtimes")
 async def read_runtimes():
-    """Every card in the machine, and whether anything here can run a model on it."""
-    return await backends.coverage(await gpu.list_devices())
+    """Every card in the machine, and what each one is currently for."""
+    cards = await gpu.list_devices()
+    rows = await backends.coverage(cards)
+    for row, card in zip(rows, cards):
+        row["comfy"] = await comfy.state(card, cards, row["containers"])
+    return rows
 
 
 @app.post("/api/runtimes/card")
@@ -368,8 +372,14 @@ async def set_card_role(payload: dict = Body(...),
     if capability == "images":
         held = (await containers.by_card(cards)).get(containers.bus_key(address), [])
         if not held:
-            raise HTTPException(status_code=400,
-                                detail="這張卡上沒有 ComfyUI 容器，先建立一個再切換")
+            # Nothing on this card yet, so switching it on is the install --
+            # the same shape as the model side, where the first On is a pull.
+            if not on:
+                raise HTTPException(status_code=400, detail="這張卡上沒有 ComfyUI 容器")
+            try:
+                return {"ok": True, "created": await comfy.create(card, cards)}
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         for box in held:
             await containers.control(box["name"], "start" if on else "stop")
         return {"ok": True}
@@ -388,6 +398,47 @@ async def set_card_role(payload: dict = Body(...),
         return {"ok": True}
 
     raise HTTPException(status_code=400, detail=f"不認識的項目：{capability}")
+
+
+@app.post("/api/runtimes/comfy")
+async def comfy_action(payload: dict = Body(...),
+                       _: dict = Depends(auth.require_owner)):
+    """Update or remove the ComfyUI instance on one card.
+
+    Separate from the model side's endpoint because they are separate images
+    on the same row -- the RTX card here runs models from a 7 GB llama.cpp
+    image and draws with a 16 GB ComfyUI one -- and one endpoint taking a
+    vendor could not say which of the two it meant.
+    """
+    name = str(payload.get("name") or "")
+    action = str(payload.get("action") or "")
+    try:
+        if action == "remove":
+            await comfy.destroy(name, bool(payload.get("delete_image")))
+        elif action == "update":
+            # Pull first, then recreate: the container names a tag, so the new
+            # image is only picked up by starting a new container from it.
+            detail = await containers._inspect([name])
+            image = ((detail.get(name) or {}).get("Config") or {}).get("Image")
+            if not image:
+                raise ValueError(f"沒有這個容器：{name}")
+            cards = await gpu.list_devices()
+            held = await containers.by_card(cards)
+            card = next((c for c in cards
+                         if any(b["name"] == name
+                                for b in held.get(containers.bus_key(c["pci_bdf_address"]), []))),
+                        None)
+            if card is None:
+                raise ValueError(f"{name} 沒有對應到任何一張卡")
+            if await containers._docker("pull", image) is None:
+                raise ValueError(f"無法下載 {image}")
+            await comfy.destroy(name, False)
+            await comfy.create(card, cards)
+        else:
+            raise ValueError(f"不認識的動作：{action}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @app.post("/api/runtimes/action")

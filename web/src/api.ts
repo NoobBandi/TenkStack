@@ -332,6 +332,15 @@ export interface RuntimeCoverage {
   /** A launcher belongs to a backend, not a card: with two cards of one vendor
    *  the model switch moves both, and the row says so before it is touched. */
   shared_switch: boolean;
+  /** The image side of the row. A card has two images behind it and they are
+   *  nothing like the same size, so each names its own. */
+  comfy: {
+    template: { vendor: string; label: string; image: string; verified: boolean } | null;
+    container: string | null;
+    image: string | null;
+    image_size: string | null;
+    slot: string;
+  };
   runtime: {
     vendor: string; label: string; image: string;
     requires: string | null;
@@ -367,6 +376,10 @@ export const setCardRole = (
   variant?: string,
 ) => send<unknown>('/runtimes/card', 'POST',
   { pci_bdf_address, capability, on, variant });
+
+export const comfyAction = (
+  name: string, action: 'update' | 'remove', delete_image = false,
+) => send<{ ok: boolean }>('/runtimes/comfy', 'POST', { name, action, delete_image });
 
 export const runtimeAction = (
   vendor: string, action: RuntimeAction,
