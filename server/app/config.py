@@ -67,9 +67,114 @@ def _dump(data: Any) -> None:
             "產生的設定檔無法解析，已保留原檔未修改。"
         ) from exc
 
+    _write(text)
+
+
+def _write(text: str) -> None:
+    """Replace the config atomically, so no reader ever sees half a file."""
     tmp = CONFIG_PATH.with_suffix(".yaml.tmp")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(CONFIG_PATH)
+
+
+# How long llama-swap may take to notice a write and come back with the new
+# model list. It watches the file, so this is a debounce plus a parse, not a
+# restart.
+RELOAD_TIMEOUT = 10.0
+
+
+# What llama-swap says about a config it has just read. These two lines are the
+# only place the outcome appears -- there is no reload endpoint and no status
+# field, and /v1/models is no help because a rejected config leaves the previous
+# one serving, which for most edits lists exactly the same models.
+_RELOADED = "configuration reloaded"
+_REJECTED = "failed to reload config"
+
+
+async def _journal(*args: str) -> str | None:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "journalctl", "--user", "-u", "llama-swap.service", "--no-pager", *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    out, _ = await proc.communicate()
+    return out.decode("utf-8", "replace") if proc.returncode == 0 else None
+
+
+async def _mark() -> str | None:
+    """A cursor for the last line llama-swap has logged so far.
+
+    A cursor rather than a timestamp: the journal's `--since` granularity is one
+    second, and the second containing the write also contains the reload from
+    whatever was saved just before it. Reading from a cursor cannot see a
+    verdict that was already there.
+    """
+    text = await _journal("-n", "1", "-o", "cat", "--show-cursor")
+    if not text:
+        return None
+    for line in reversed(text.splitlines()):
+        if line.startswith("-- cursor:"):
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+async def _accepted(mark: str | None) -> bool | None:
+    """Whether llama-swap took the config written just now.
+
+    None when no verdict arrives: llama-swap is not running, the journal cannot
+    be read, or the write changed nothing it cares about. Unknown must not
+    block an edit -- the console has to stay usable while the thing it
+    configures is down.
+    """
+    if mark is None:
+        return None
+    deadline = asyncio.get_running_loop().time() + RELOAD_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        text = await _journal("--after-cursor", mark, "-o", "cat")
+        if text is None:
+            return None
+        if _REJECTED in text:
+            return False
+        if _RELOADED in text:
+            return True
+        await asyncio.sleep(0.5)
+    return None
+
+
+async def _apply(data: Any) -> None:
+    """Write the config, and put it back if llama-swap will not have it.
+
+    The check exists because of how llama-swap answers a config it cannot
+    parse: it logs one WARN and *keeps serving the last config it could read*.
+    Nothing else surfaces. A file that is valid YAML but the wrong shape --
+    `env` written as a mapping where a list of strings belongs -- therefore
+    produced a console where every edit appeared to work and none of them did,
+    including creating a model, until somebody noticed the list had stopped
+    changing.
+
+    Validating the YAML here cannot catch that, because the YAML was fine. Only
+    llama-swap knows its own schema, so it is asked.
+    """
+    previous = CONFIG_PATH.read_text(encoding="utf-8")
+    mark = await _mark()
+    _dump(data)
+
+    accepted = await _accepted(mark)
+    if accepted is None:
+        logger.warning("no reload verdict from llama-swap; leaving the config in place")
+        return
+    if accepted:
+        return
+
+    _write(previous)
+    logger.error("llama-swap did not accept the new config; rolled back")
+    raise ValueError(
+        "llama-swap 不接受這份設定，已還原成修改前的內容。"
+        "詳細原因在 llama-swap 的日誌裡（設定沒有被套用）。"
+    )
 
 
 def read() -> dict:
@@ -190,7 +295,7 @@ async def upsert_model(
             entry.pop("env", None)
 
         _sync_group_membership(data, model_id, group)
-        _dump(data)
+        await _apply(data)
     logger.info("upserted model %s (group=%s)", model_id, group)
 
 
@@ -431,7 +536,7 @@ async def delete_model(model_id: str, delete_files: bool = False) -> dict | None
         candidates = files_for_model(model_id) if delete_files else []
         del models[model_id]
         _sync_group_membership(data, model_id, None)
-        _dump(data)
+        await _apply(data)
 
     deleted: list[dict] = []
     kept: list[dict] = []

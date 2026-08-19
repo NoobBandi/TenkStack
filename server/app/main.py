@@ -315,6 +315,20 @@ async def read_backend_devices(refresh: bool = False):
 
 @app.post("/api/models")
 async def create_model(spec: ModelSpec):
+    """Write a model entry, or say why it could not be written.
+
+    A rejected config is reported as a 400 rather than a 500: the config was
+    written and taken back, nothing is broken, and the caller needs the reason
+    rather than a stack trace. See `config._apply` for why llama-swap has to be
+    asked at all.
+    """
+    try:
+        return await _write_model(spec)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def _write_model(spec: ModelSpec):
     await config.upsert_model(
         spec.id,
         name=spec.name or spec.id,
@@ -354,7 +368,10 @@ async def model_files(model_id: str):
 
 @app.delete("/api/models/{model_id}")
 async def remove_model(model_id: str, delete_files: bool = False):
-    result = await config.delete_model(model_id, delete_files=delete_files)
+    try:
+        result = await config.delete_model(model_id, delete_files=delete_files)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="no such model")
     return {"ok": True, **result}
