@@ -223,25 +223,38 @@ export default function Runtime() {
                 const state = row.state;
                 if (!state?.managed) return null;
                 const used = state.used_by;
+                // Named, because a card row has two images behind it and
+                // they are nothing like the same size -- the RTX card here
+                // runs models from a 6.98 GB llama.cpp image and draws with a
+                // 16.5 GB ComfyUI one. "delete the image" without saying which
+                // is a question, not an instruction.
+                const short = state.image?.split('/').pop() ?? '映像';
                 return (
                   <Dropdown
                     menu={{
                       items: [
-                        { key: 'update', label: '更新映像', onClick: () => act(row, 'update') },
-                        { type: 'divider' as const },
-                        // Two removals, because reclaiming disk and changing
-                        // what a card does are different decisions and only
-                        // one of them takes a long download to undo.
                         {
-                          key: 'remove', label: '解除安裝（保留映像）', danger: true,
-                          disabled: used.length > 0,
-                          onClick: () => act(row, 'remove'),
-                        },
-                        {
-                          key: 'purge',
-                          label: `解除安裝並刪除映像${state.image_size ? `（釋出 ${state.image_size}）` : ''}`,
-                          danger: true, disabled: used.length > 0,
-                          onClick: () => act(row, 'remove', { delete_image: true }),
+                          key: 'scope', type: 'group' as const,
+                          label: `跑模型用的 ${short}`,
+                          children: [
+                            { key: 'update', label: '更新這個映像',
+                              onClick: () => act(row, 'update') },
+                            // Two removals, because reclaiming disk and
+                            // changing what a card does are different
+                            // decisions, and only one takes a long download to
+                            // undo.
+                            {
+                              key: 'remove', label: '解除安裝（保留映像）', danger: true,
+                              disabled: used.length > 0,
+                              onClick: () => act(row, 'remove'),
+                            },
+                            {
+                              key: 'purge',
+                              label: `解除安裝並刪除 ${short}${state.image_size ? `（釋出 ${state.image_size}）` : ''}`,
+                              danger: true, disabled: used.length > 0,
+                              onClick: () => act(row, 'remove', { delete_image: true }),
+                            },
+                          ],
                         },
                       ],
                     }}
