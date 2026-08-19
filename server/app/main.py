@@ -340,6 +340,56 @@ async def read_runtimes():
     return await backends.coverage(await gpu.list_devices())
 
 
+@app.post("/api/runtimes/card")
+async def set_card_role(payload: dict = Body(...),
+                        _: dict = Depends(auth.require_owner)):
+    """Turn one of a card's two jobs on or off.
+
+    The two are not symmetrical underneath, and pretending otherwise would make
+    the failures confusing. Images are a container: switching them off stops
+    it, and on starts it, immediately and reversibly. Models are a launcher,
+    which belongs to a backend rather than to a card -- so switching them on
+    may mean a multi-gigabyte pull the first time, and on a machine with two
+    cards of one vendor the switch moves both. The row says so before it is
+    touched.
+    """
+    address = str(payload.get("pci_bdf_address") or "")
+    capability = str(payload.get("capability") or "")
+    on = bool(payload.get("on"))
+
+    cards = await gpu.list_devices()
+    card = next((c for c in cards
+                 if c.get("pci_bdf_address")
+                 and containers.bus_key(c["pci_bdf_address"]) == containers.bus_key(address)),
+                None)
+    if card is None:
+        raise HTTPException(status_code=404, detail="沒有這張卡")
+
+    if capability == "images":
+        held = (await containers.by_card(cards)).get(containers.bus_key(address), [])
+        if not held:
+            raise HTTPException(status_code=400,
+                                detail="這張卡上沒有 ComfyUI 容器，先建立一個再切換")
+        for box in held:
+            await containers.control(box["name"], "start" if on else "stop")
+        return {"ok": True}
+
+    if capability == "llm":
+        vendor = card.get("vendor") or ""
+        try:
+            state = await backends.state(vendor) if vendor in backends.RUNTIMES else None
+            if on and state and not state["managed"]:
+                # Nothing installed for this vendor yet, so turning the switch
+                # on is the install. The variant stays the caller's choice.
+                return await backends.install(vendor, str(payload.get("variant") or "vendor"))
+            await backends.enable(vendor, on)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True}
+
+    raise HTTPException(status_code=400, detail=f"不認識的項目：{capability}")
+
+
 @app.post("/api/runtimes/action")
 async def runtime_action(payload: dict = Body(...),
                          _: dict = Depends(auth.require_owner)):
@@ -529,9 +579,9 @@ async def read_runtime():
     return await containers.survey(await gpu.list_devices())
 
 
-@app.post("/api/runtime/restart")
-async def runtime_restart(payload: dict = Body(...),
-                          _: dict = Depends(auth.require_owner)):
+@app.post("/api/runtime/container")
+async def runtime_container(payload: dict = Body(...),
+                            _: dict = Depends(auth.require_owner)):
     """Restart one container.
 
     Owner-only, and in a browser, for the same reason the filesystem routes are:
@@ -542,8 +592,9 @@ async def runtime_restart(payload: dict = Body(...),
     root shell when the process runs in the `docker` group.
     """
     name = str(payload.get("name") or "")
-    if not await containers.restart(name):
-        raise HTTPException(status_code=404, detail=f"沒有這個容器：{name}")
+    verb = str(payload.get("verb") or "restart")
+    if not await containers.control(name, verb):
+        raise HTTPException(status_code=404, detail=f"無法對 {name} 執行 {verb}")
     return {"ok": True}
 
 

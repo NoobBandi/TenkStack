@@ -343,29 +343,48 @@ _installs: dict[str, Install] = {}
 
 
 async def coverage(cards: list[dict]) -> list[dict]:
-    """One row per card in the machine: can anything here run a model on it?
+    """What each card in this machine is currently allowed to do.
 
-    The question the console is uniquely able to answer, because it is the only
-    thing that sees both lists. A card with no runtime is not broken and not an
-    error -- it is a card doing something else, or one waiting for an image --
-    so this reports rather than warns.
+    One row per card, not per vendor and not per runtime, because the question
+    being answered is "what is this card for" -- models, images, both, or
+    nothing. The console is the only thing that can answer it, being the only
+    thing that sees the launchers and the containers at once.
+
+    Every field is observed. Whether a card can run a model is whether a
+    configured launcher enumerates it; whether it runs images is whether a
+    container bound to it is up. Neither is a setting stored somewhere that
+    could disagree with the machine.
     """
     from . import containers
 
     devices = match(await usable(), cards)
     driven = {containers.bus_key(d["pci_bdf_address"])
               for d in devices if d.get("pci_bdf_address")}
+    held = await containers.by_card(cards)
+    same_vendor = {}
+    for card in cards:
+        same_vendor[card.get("vendor") or ""] = same_vendor.get(card.get("vendor") or "", 0) + 1
 
     rows = []
     for card in cards:
         address = card.get("pci_bdf_address")
         vendor = card.get("vendor") or ""
         spec = RUNTIMES.get(vendor)
+        boxes = held.get(containers.bus_key(address), []) if address else []
         rows.append({
             "pci_bdf_address": address,
             "name": card.get("name"),
             "vendor": vendor,
-            "covered": bool(address and containers.bus_key(address) in driven),
+            # Models: on when something here can drive this card.
+            "llm": bool(address and containers.bus_key(address) in driven),
+            # Images: on when a container bound to this card is running. Listed
+            # too, because "which one" matters as soon as there are two.
+            "containers": boxes,
+            "images": any(box["state"] == "running" for box in boxes),
+            # A launcher belongs to a backend, not to a card, so on a machine
+            # with two cards of one vendor the model switch moves both. Said
+            # here rather than discovered by flipping it.
+            "shared_switch": same_vendor.get(vendor, 0) > 1,
             # What would be installed for it. An unverified recipe is worth
             # saying before the download, not after.
             "runtime": {**spec, "vendor": vendor} if spec else None,

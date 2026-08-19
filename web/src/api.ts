@@ -324,7 +324,14 @@ export interface RuntimeCoverage {
   pci_bdf_address: string | null;
   name: string | null;
   vendor: string;
-  covered: boolean;
+  /** Whether a configured llama-server enumerates this card. */
+  llm: boolean;
+  /** Whether a container bound to this card is running, and which they are. */
+  images: boolean;
+  containers: { name: string; state: string; image: string; ports: string }[];
+  /** A launcher belongs to a backend, not a card: with two cards of one vendor
+   *  the model switch moves both, and the row says so before it is touched. */
+  shared_switch: boolean;
   runtime: {
     vendor: string; label: string; image: string;
     requires: string | null;
@@ -355,6 +362,12 @@ export interface RuntimeCoverage {
 export type RuntimeAction = 'install' | 'update' | 'enable' | 'disable' | 'remove';
 
 export const fetchRuntimes = () => get<RuntimeCoverage[]>('/runtimes');
+export const setCardRole = (
+  pci_bdf_address: string, capability: 'llm' | 'images', on: boolean,
+  variant?: string,
+) => send<unknown>('/runtimes/card', 'POST',
+  { pci_bdf_address, capability, on, variant });
+
 export const runtimeAction = (
   vendor: string, action: RuntimeAction,
   options: { variant?: string; delete_image?: boolean } = {},
@@ -512,8 +525,8 @@ export interface RuntimeSurvey {
 }
 
 export const fetchRuntime = () => get<RuntimeSurvey>('/runtime');
-export const restartContainer = (name: string) =>
-  send<{ ok: boolean }>('/runtime/restart', 'POST', { name });
+export const controlContainer = (name: string, verb: 'restart' | 'start' | 'stop') =>
+  send<{ ok: boolean }>('/runtime/container', 'POST', { name, verb });
 
 export const searchCatalog = (q: string) =>
   get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20`);

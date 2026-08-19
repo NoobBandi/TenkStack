@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Dropdown, Empty, Progress, Space, Table, Tag,
-  Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Empty, Popconfirm, Progress, Space,
+  Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
+import { DownOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
-  CloudDownloadOutlined, DownOutlined, ReloadOutlined,
-} from '@ant-design/icons';
-import {
-  fetchRuntime, fetchRuntimes, restartContainer, runtimeAction,
+  controlContainer, fetchRuntime, fetchRuntimes, runtimeAction, setCardRole,
   type RuntimeAction, type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
 } from '../api';
 import { MONO } from '../theme';
@@ -57,7 +55,7 @@ export default function Runtime() {
   const onRestart = async (row: RuntimeContainer) => {
     setBusy(row.name);
     try {
-      await restartContainer(row.name);
+      await controlContainer(row.name, 'restart');
       message.success(`已重啟 ${row.name}`);
       load();
     } catch (error) {
@@ -77,6 +75,20 @@ export default function Runtime() {
 
   const orphans = survey?.containers.filter((c) => c.orphaned) ?? [];
 
+  const setRole = async (
+    row: RuntimeCoverage, capability: 'llm' | 'images', on: boolean,
+  ) => {
+    setBusy(capability === 'llm' ? row.vendor : row.pci_bdf_address);
+    try {
+      await setCardRole(row.pci_bdf_address ?? '', capability, on);
+      load();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const act = async (
     row: RuntimeCoverage, action: RuntimeAction,
     options: { variant?: string; delete_image?: boolean } = {},
@@ -94,11 +106,14 @@ export default function Runtime() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {/* Above the containers, because it answers the question they raise: a
-          card with no runtime cannot run a model no matter what is installed
-          beside it. Rows are the cards in the machine, so a host with one
-          vendor, or three, needs nothing edited here. */}
-      <Card title="推論執行環境" size="small" loading={cards.length === 0}>
+      {/* What each card is for.
+          
+          One row per card, two switches, because that is the decision anyone
+          actually makes about a machine with more than one GPU: this one
+          serves models, that one draws images, the big one does both. Neither
+          switch is a stored preference -- both read the machine, and flipping
+          one changes the machine rather than a record of intent. */}
+      <Card title="顯示卡用途" size="small" loading={cards.length === 0}>
         <Table<RuntimeCoverage>
           dataSource={cards}
           rowKey={(row) => row.pci_bdf_address ?? row.name ?? row.vendor}
@@ -115,123 +130,108 @@ export default function Runtime() {
               ),
             },
             {
-              title: 'llama-server', width: 330,
+              title: '跑模型', width: 210,
               render: (_, row) => {
-                if (row.covered) {
-                  return (
-                    <Space size={6} wrap>
-                      <Tag color="green">可以跑模型</Tag>
-                      {row.state?.image_size && (
-                        <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
-                          {row.state.image?.split('/').pop()} · {row.state.image_size}
-                        </Text>
-                      )}
-                    </Space>
-                  );
-                }
-                if (row.state?.managed && !row.state.enabled) {
-                  return <Tag>已安裝，未啟用</Tag>;
-                }
-                const job = row.state?.install ?? null;
-                if (job && job.state !== 'error') {
-                  const done = job.state === 'done';
+                const state = row.state;
+                const job = state?.install ?? null;
+                const working = !!job && ['pulling', 'writing'].includes(job.state);
+                if (working) {
                   return (
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        {done ? '已寫入啟動器' : job.state === 'writing' ? '寫入啟動器…' : '下載映像…'}
+                        {job!.state === 'writing' ? '寫入啟動器…' : '下載映像…'}
                       </Text>
-                      <Progress
-                        size="small"
-                        status={done ? 'success' : 'active'}
-                        percent={done ? 100 : job.layers_total
-                          ? Math.round((job.layers_done / job.layers_total) * 100) : 0}
-                      />
+                      <Progress size="small" status="active"
+                                percent={job!.layers_total
+                                  ? Math.round((job!.layers_done / job!.layers_total) * 100) : 0} />
                     </Space>
                   );
                 }
-                if (job?.state === 'error') {
-                  return <Tooltip title={job.message}><Tag color="error">安裝失敗</Tag></Tooltip>;
+                if (!row.runtime && !row.llm) {
+                  return <Text type="secondary" style={{ fontSize: 12 }}>沒有這家廠商的範本</Text>;
                 }
-                if (!row.runtime) {
-                  return <Text type="secondary">沒有這家廠商的範本</Text>;
-                }
+                // Turning it on for the first time is a multi-gigabyte pull, so
+                // it asks; every later flip is instant and does not.
+                const needsPull = !row.llm && !state?.managed;
+                const why = row.llm
+                  ? (state?.managed
+                      ? `${state.image?.split('/').pop()}${state.image_size ? ` · ${state.image_size}` : ''}`
+                      : '原生建置，非主控台安裝')
+                  : state?.managed ? '已安裝，未啟用' : `要下載 ${row.runtime?.image.split('/').pop()}`;
+                const control = (
+                  <Switch
+                    size="small"
+                    checked={row.llm}
+                    loading={busy === row.vendor}
+                    disabled={!row.runtime && !row.llm}
+                    onChange={needsPull ? undefined : (on) => setRole(row, 'llm', on)}
+                    onClick={needsPull ? () => undefined : undefined}
+                  />
+                );
                 return (
-                  <Space size={6} wrap>
-                    <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
-                      {row.runtime.image.split('/').pop()}
-                    </Text>
-                    {!row.runtime.verified && (
-                      <Tooltip title="這份設定是照官方文件寫的，沒有在這台機器上跑過">
-                        <Tag color="warning">未驗證</Tag>
-                      </Tooltip>
-                    )}
-                    {row.runtime.requires && (
-                      <Tooltip title={`主機需要 ${row.runtime.requires}`}>
-                        <Tag>需要 {row.runtime.requires}</Tag>
-                      </Tooltip>
-                    )}
+                  <Space size={8}>
+                    {needsPull ? (
+                      <Popconfirm
+                        title="要下載這個執行環境嗎？"
+                        description={<>
+                          {row.runtime?.image}<br />
+                          {row.runtime && !row.runtime.verified && '這份設定沒有在這台機器上驗證過。'}
+                        </>}
+                        okText="下載並啟用"
+                        cancelText="取消"
+                        onConfirm={() => setRole(row, 'llm', true)}
+                      >
+                        {control}
+                      </Popconfirm>
+                    ) : control}
+                    <Tooltip title={row.shared_switch
+                      ? '這台有多張同廠商的卡，這個開關會一起影響它們'
+                      : undefined}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {why}{row.shared_switch ? '（同廠商共用）' : ''}
+                      </Text>
+                    </Tooltip>
                   </Space>
                 );
               },
             },
             {
-              title: '', width: 180,
+              title: '跑 ComfyUI', width: 200,
               render: (_, row) => {
-                if (!row.runtime) return null;
+                const none = row.containers.length === 0;
+                return (
+                  <Space size={8}>
+                    <Tooltip title={none ? '這張卡上沒有 ComfyUI 容器' : undefined}>
+                      <Switch
+                        size="small"
+                        checked={row.images}
+                        disabled={none}
+                        loading={busy === row.pci_bdf_address}
+                        onChange={(on) => setRole(row, 'images', on)}
+                      />
+                    </Tooltip>
+                    <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
+                      {none ? '—' : row.containers.map((c) => c.name).join('、')}
+                    </Text>
+                  </Space>
+                );
+              },
+            },
+            {
+              title: '', width: 90,
+              render: (_, row) => {
                 const state = row.state;
-                const working = !!state?.install
-                  && ['pulling', 'writing'].includes(state.install.state);
-
-                // A launcher this console did not write is not its business.
-                // The native SYCL build covers the Arc here, and offering to
-                // remove it would be offering to delete somebody's own work.
-                if (!state?.managed) {
-                  return row.covered ? (
-                    <Text type="secondary" style={{ fontSize: 12 }}>非主控台安裝</Text>
-                  ) : (
-                    <Dropdown.Button
-                      size="small"
-                      loading={busy === row.vendor || working}
-                      icon={<DownOutlined />}
-                      onClick={() => act(row, 'install')}
-                      menu={{
-                        items: [{
-                          key: 'vulkan',
-                          label: '改用 Vulkan 通用映像（約 290 MB）',
-                          onClick: () => act(row, 'install', { variant: 'vulkan' }),
-                        }],
-                      }}
-                    >
-                      <CloudDownloadOutlined /> 安裝
-                    </Dropdown.Button>
-                  );
-                }
-
+                if (!state?.managed) return null;
                 const used = state.used_by;
                 return (
-                  <Dropdown.Button
-                    size="small"
-                    loading={busy === row.vendor || working}
-                    icon={<DownOutlined />}
-                    onClick={() => act(row, state.enabled ? 'update' : 'enable')}
+                  <Dropdown
                     menu={{
                       items: [
-                        {
-                          key: 'update', label: '更新映像',
-                          onClick: () => act(row, 'update'),
-                        },
-                        {
-                          key: 'disable',
-                          label: used.length
-                            ? `停用（${used.length} 個模型在用）`
-                            : '停用（保留映像）',
-                          disabled: !state.enabled || used.length > 0,
-                          onClick: () => act(row, 'disable'),
-                        },
+                        { key: 'update', label: '更新映像', onClick: () => act(row, 'update') },
                         { type: 'divider' as const },
                         {
-                          key: 'remove', label: '移除啟動器',
-                          danger: true, disabled: used.length > 0,
+                          key: 'remove', label: '移除啟動器', danger: true,
+                          disabled: used.length > 0,
                           onClick: () => act(row, 'remove'),
                         },
                         {
@@ -243,14 +243,17 @@ export default function Runtime() {
                       ],
                     }}
                   >
-                    {state.enabled ? '更新' : '啟用'}
-                  </Dropdown.Button>
+                    <Button size="small" type="text">
+                      維護 <DownOutlined />
+                    </Button>
+                  </Dropdown>
                 );
               },
             },
           ]}
         />
       </Card>
+
 
       {orphans.length > 0 && (
         <Alert

@@ -243,20 +243,46 @@ async def port_cards(devices: list[dict]) -> dict[int, list[str]]:
     return mapping
 
 
+async def by_card(devices: list[dict]) -> dict[str, list[dict]]:
+    """{PCI address: the containers holding that card, with their state}.
+
+    The other direction from `port_cards`, and what a per-card view needs: the
+    question on that page is "what is this card doing", and the answer is the
+    containers bound to it.
+    """
+    survey_result = await survey(devices)
+    held: dict[str, list[dict]] = {}
+    for container in survey_result["containers"]:
+        for card in container["cards"]:
+            held.setdefault(bus_key(card["pci_bdf_address"]), []).append({
+                "name": container["name"],
+                "state": container["state"],
+                "image": container["image"],
+                "ports": container["ports"],
+            })
+    return held
+
+
 async def names() -> list[str]:
     """Just the container names, without the inspect pass the survey needs."""
     listing = await _docker("ps", "-a", "--format", "{{.Names}}")
     return listing.split() if listing else []
 
 
-async def restart(name: str) -> bool:
-    """Restart one container, by a name that is on this machine.
+# The three verbs this module has, and the reason it has only these: each one
+# acts on a container that already exists, with a configuration somebody with
+# access to this machine already chose. `run` and `exec` would be
+# indistinguishable from a root shell, because the console's own user is in the
+# `docker` group.
+VERBS = {"restart", "start", "stop"}
 
-    Checked rather than trusted: the name arrives from a request, and `docker
-    restart` would otherwise take whatever string it was handed. Restarting
-    something that already exists is the only thing being allowed here, and
-    that has to stay true of the argument as well as of the verb.
+
+async def control(name: str, verb: str) -> bool:
+    """Start, stop or restart one container that is on this machine.
+
+    Both arguments are checked rather than trusted: the name arrives from a
+    request, and `docker` would otherwise take whatever string it was handed.
     """
-    if name not in await names():
+    if verb not in VERBS or name not in await names():
         return False
-    return await _docker("restart", name) is not None
+    return await _docker(verb, name) is not None
