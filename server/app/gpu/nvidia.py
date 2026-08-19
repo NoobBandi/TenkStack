@@ -68,12 +68,6 @@ DETAIL_GROUPS = [
         ("clocks.max.sm", "最高 SM 時脈", "MHz"),
         ("enforced.power.limit", "功耗上限", "W"),
     ]),
-    ("匯流排", [
-        ("pci.bus_id", "PCI 位址", ""),
-        ("pci.device_id", "裝置 ID", ""),
-        ("pcie.link.gen.max", "PCIe 世代", ""),
-        ("pcie.link.width.max", "PCIe 通道", ""),
-    ]),
     ("驅動與韌體", [
         ("driver_version", "驅動版本", ""),
         ("vbios_version", "VBIOS", ""),

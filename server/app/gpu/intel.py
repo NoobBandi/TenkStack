@@ -57,15 +57,6 @@ DETAIL_GROUPS = [
         ("number_of_media_engines", "媒體引擎"),
         ("number_of_media_enh_engines", "媒體加強引擎"),
     ]),
-    ("匯流排", [
-        ("pci_bdf_address", "PCI 位址"),
-        ("pci_vendor_id", "廠商 ID"),
-        ("pci_device_id", "裝置 ID"),
-        ("pcie_generation", "PCIe 世代"),
-        ("pcie_max_link_width", "PCIe 通道"),
-        ("pcie_max_bandwidth", "PCIe 頻寬"),
-        ("pci_slot", "插槽"),
-    ]),
     ("驅動與韌體", [
         ("drm_device", "DRM 裝置"),
         ("driver_version", "驅動版本"),
