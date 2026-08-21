@@ -29,8 +29,8 @@ from pydantic import BaseModel, Field
 
 from . import (
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
-    gguf, gpu, gpu_history, llamaswap, logs as journal, paths, search, settings,
-    speed, system, users, versions,
+    blobs, gguf, gpu, gpu_history, llamaswap, logs as journal, paths, search,
+    settings, speed, system, users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -333,6 +333,23 @@ async def read_backend_devices(refresh: bool = False):
     """
     devices, cards = await asyncio.gather(backends.usable(refresh), gpu.list_devices())
     return backends.match(devices, cards)
+
+
+@app.get("/api/blobs/{digest}")
+async def read_blob(digest: str):
+    """One stored image.
+
+    Cached for a year without revalidation, which is safe in the one case where
+    it always is: the name is the SHA-256 of the contents, so a given URL can
+    never answer with something else.
+    """
+    found = blobs.resolve(f"blob:{digest}")
+    if found is None:
+        raise HTTPException(status_code=404, detail="沒有這個檔案")
+    path, media = found
+    return FileResponse(path, media_type=media, headers={
+        "cache-control": "public, max-age=31536000, immutable",
+    })
 
 
 @app.get("/api/runtimes")

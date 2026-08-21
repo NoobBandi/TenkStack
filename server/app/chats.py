@@ -16,7 +16,7 @@ import json
 import logging
 import sqlite3
 import time
-from . import db, paths
+from . import blobs, db, paths
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,10 @@ def get_conversation(conversation_id: int) -> dict | None:
                     continue
                 if column == "meta" and isinstance(value, dict):
                     message.update(value)
+                elif column == "images":
+                    # References become URLs; a data URI from before there was
+                    # a blob directory is passed through and still renders.
+                    message[column] = blobs.to_urls(value)
                 else:
                     message[column] = value
         return message
@@ -159,7 +163,11 @@ def save(
             m.get("role", "user"),
             m.get("content", ""),
             m.get("reasoning") or None,
-            json.dumps(m["images"], ensure_ascii=False) if m.get("images") else None,
+            # Written to disk first and stored as a reference. The order
+            # matters: a file with no row is collected by the sweep, a row with
+            # no file is a broken image.
+            json.dumps(blobs.to_refs(m["images"]), ensure_ascii=False)
+            if m.get("images") else None,
             json.dumps(
                 # `model` is per-message, not per-conversation: a thread can be
                 # continued by a different model, and attributing an old reply

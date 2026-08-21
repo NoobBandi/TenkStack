@@ -782,7 +782,51 @@ export interface ChatDelta {
  * and the request body is the whole conversation. The SSE framing is therefore
  * parsed here by hand.
  */
+/**
+ * A stored image, as the bytes the model needs.
+ *
+ * Images live on disk now and reach the browser as `/api/blobs/…`, which is
+ * what an `<img src>` wants and not what llama-server does -- it is handed a
+ * conversation, not a page, and cannot fetch a relative URL from a host it
+ * knows nothing about. So a reference is read back and inlined here, in the
+ * one place a request is built.
+ *
+ * Cached because a long thread re-sends the same picture on every turn. The
+ * blob URL is content-addressed and immutable, so the cache can never be
+ * stale.
+ */
+const inlined = new Map<string, string>();
+
+async function inline(source: string): Promise<string> {
+  if (source.startsWith('data:')) return source;
+  const already = inlined.get(source);
+  if (already) return already;
+  const response = await fetch(source, { credentials: 'same-origin' });
+  if (!response.ok) return source;
+  const blob = await response.blob();
+  const encoded = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+  inlined.set(source, encoded);
+  return encoded;
+}
+
 export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelta> {
+  const withImages = await Promise.all(([
+    ...(options.params.system.trim()
+      ? [{ role: 'system' as const, content: options.params.system.trim() }]
+      : []),
+    ...options.messages,
+  ] as ChatMessage[]).map(async (message) => ({
+    ...message,
+    images: message.images?.length
+      ? await Promise.all(message.images.map(inline))
+      : undefined,
+  })));
+
   const response = await fetch('/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -801,12 +845,7 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
       // A message with images has to use the content-parts form; plain text
       // stays a plain string, because some servers reject the array form when
       // no mmproj is loaded.
-      messages: ([
-        ...(options.params.system.trim()
-          ? [{ role: 'system' as const, content: options.params.system.trim() }]
-          : []),
-        ...options.messages,
-      ] as ChatMessage[]).map(({ role, content, images }) =>
+      messages: withImages.map(({ role, content, images }) =>
         images?.length
           ? {
               role,
