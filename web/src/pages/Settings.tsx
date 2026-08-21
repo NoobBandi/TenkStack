@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, InputNumber, Space, Table, Tag, Tooltip,
+  Alert, App as AntApp, Button, Card, Col, InputNumber, Row, Space, Tag, Tooltip,
   Typography,
 } from 'antd';
 import Versions from '../components/Versions';
@@ -8,7 +8,7 @@ import {
   fetchConfig, fetchMachine, fetchSettings, saveConfigRaw, saveSettings,
   type MachinePath, type MachineUnit, type Setting,
 } from '../api';
-import { MONO } from '../theme';
+import { LINE, MONO } from '../theme';
 
 const { Text } = Typography;
 
@@ -22,19 +22,51 @@ const { Text } = Typography;
  * which shows it live; the containers went to the runtime page, which reads
  * them from Docker.
  *
- * What is left is what the name promised: things somebody would change, and
- * the few facts about this install that nothing else answers.
+ * The layout is a list rather than a table. Tables with their headers hidden
+ * are what this was, and they read as a grid whose columns mean nothing: every
+ * row here is a label, a sentence and one control, which is a list.
  */
 
 const GROUPS: { key: string; label: string; note: string }[] = [
-  { key: 'chat', label: '對話與預估', note: '影響 Agent 與模型目錄的預估' },
-  { key: 'vram', label: '顯存政策', note: '決定聊天請求何時把 ComfyUI 清出顯示卡' },
-  { key: 'history', label: '保留量', note: '伺服器端緩衝的大小' },
+  { key: 'chat', label: '對話與預估', note: 'Agent 與模型目錄' },
+  { key: 'vram', label: '顯存政策', note: '聊天請求何時把 ComfyUI 清出顯示卡' },
+  { key: 'history', label: '保留量', note: '伺服器端緩衝' },
 ];
 
 const UNIT_COLOUR: Record<string, string> = {
   active: 'green', activating: 'orange', failed: 'red', inactive: 'default',
 };
+
+/** A small-caps heading, matching the version block's. */
+function Heading({ children, note }: { children: React.ReactNode; note?: string }) {
+  return (
+    <Space size={8} align="baseline" style={{ marginBottom: 2 }}>
+      <Text style={{ fontSize: 10, letterSpacing: 1, opacity: 0.4 }}>{children}</Text>
+      {note && <Text style={{ fontSize: 11, opacity: 0.35 }}>{note}</Text>}
+    </Space>
+  );
+}
+
+function Line({ label, note, right }: {
+  label: React.ReactNode; note?: string; right: React.ReactNode;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 16, minHeight: 40,
+      padding: '6px 0', borderBottom: `1px solid ${LINE.faint}`,
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13 }}>{label}</div>
+        {note && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 1 }}>
+            {note}
+          </Text>
+        )}
+      </div>
+      <div style={{ flex: 'none' }}>{right}</div>
+    </div>
+  );
+}
 
 export default function Settings() {
   const { message } = AntApp.useApp();
@@ -88,6 +120,7 @@ export default function Settings() {
     <Card
       title="主控台行為"
       size="small"
+      style={{ height: '100%' }}
       loading={settings.length === 0}
       extra={
         <Space>
@@ -99,144 +132,89 @@ export default function Settings() {
         </Space>
       }
     >
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        {GROUPS.map((group) => {
-          const rows = settings.filter((s) => s.group === group.key);
-          if (rows.length === 0) return null;
-          return (
-            <div key={group.key}>
-              <Space size={8} style={{ marginBottom: 6 }}>
-                <Text strong style={{ fontSize: 13 }}>{group.label}</Text>
-                <Text type="secondary" style={{ fontSize: 12 }}>{group.note}</Text>
-              </Space>
-              <Table<Setting>
-                dataSource={rows}
-                rowKey="name"
-                size="small"
-                pagination={false}
-                showHeader={false}
-                columns={[
-                  {
-                    title: '',
-                    render: (_, row) => (
-                      <Space direction="vertical" size={0}>
-                        <Text style={{ fontSize: 13 }}>{row.label}</Text>
-                        <Text type="secondary" style={{ fontSize: 12 }}>{row.note}</Text>
-                      </Space>
-                    ),
-                  },
-                  {
-                    title: '', width: 190, align: 'right' as const,
-                    render: (_, row) => (
-                      <Space size={6}>
-                        {/* The default is worth showing beside the field: it is
-                            the answer to "what was this before I touched it",
-                            and clearing a value back to it deletes the row
-                            rather than storing a duplicate of the default. */}
-                        {valueOf(row) !== row.default && (
-                          <Tooltip title={`預設 ${row.default}`}>
-                            <Tag style={{ marginInlineEnd: 0 }}>已改</Tag>
-                          </Tooltip>
-                        )}
-                        <InputNumber
-                          size="small"
-                          min={row.minimum}
-                          max={row.maximum}
-                          value={valueOf(row)}
-                          onChange={(v) => setDraft((prev) => ({
-                            ...prev, [row.name]: Number(v ?? row.default),
-                          }))}
-                          style={{ width: 110 }}
-                          addonAfter={<span style={{ fontSize: 11 }}>{row.unit}</span>}
-                        />
-                      </Space>
-                    ),
-                  },
-                ]}
+      {GROUPS.map((group, index) => {
+        const rows = settings.filter((s) => s.group === group.key);
+        if (rows.length === 0) return null;
+        return (
+          <div key={group.key} style={{ marginTop: index === 0 ? 0 : 14 }}>
+            <Heading note={group.note}>{group.label}</Heading>
+            {rows.map((row) => (
+              <Line
+                key={row.name}
+                label={row.label}
+                note={row.note}
+                right={(
+                  <Space size={6}>
+                    {/* Shown only when it differs, because "this one was
+                        changed" is the useful signal and every row carrying a
+                        default would be noise. */}
+                    {valueOf(row) !== row.default && (
+                      <Tooltip title={`預設 ${row.default} ${row.unit}`}>
+                        <Tag style={{ marginInlineEnd: 0 }}>已改</Tag>
+                      </Tooltip>
+                    )}
+                    <InputNumber
+                      size="small"
+                      min={row.minimum}
+                      max={row.maximum}
+                      value={valueOf(row)}
+                      onChange={(v) => setDraft((prev) => ({
+                        ...prev, [row.name]: Number(v ?? row.default),
+                      }))}
+                      style={{ width: 128 }}
+                      addonAfter={<span style={{ fontSize: 11 }}>{row.unit}</span>}
+                    />
+                  </Space>
+                )}
               />
-            </div>
-          );
-        })}
-      </Space>
+            ))}
+          </div>
+        );
+      })}
     </Card>
   );
 
   const machine = (
-    <Card title="這台機器" size="small" loading={paths.length === 0}>
-      <Table<MachinePath>
-        dataSource={paths}
-        rowKey="variable"
-        size="small"
-        pagination={false}
-        showHeader={false}
-        columns={[
-          {
-            title: '', width: 130,
-            render: (_, row) => <Text style={{ fontSize: 13 }}>{row.label}</Text>,
-          },
-          {
-            title: '',
-            render: (_, row) => (
-              <Space size={6}>
-                <Text style={{ fontFamily: MONO, fontSize: 12 }}>{row.path}</Text>
-                {!row.exists && <Tag color="warning">不存在</Tag>}
-              </Space>
-            ),
-          },
-          {
-            // The variable, not just the value: every path here is an
-            // environment variable with a default, and this is the only place
-            // that says which one moves it.
-            title: '', width: 230, align: 'right' as const,
-            render: (_, row) => (
-              <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
-                {row.variable}
-              </Text>
-            ),
-          },
-        ]}
-      />
-
-      <div style={{ marginTop: 12 }}>
-        <Text strong style={{ fontSize: 13 }}>服務</Text>
-        <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-          systemd user unit；容器在「執行環境」頁
-        </Text>
-        <Table<MachineUnit>
-          style={{ marginTop: 6 }}
-          dataSource={units}
-          rowKey="name"
-          size="small"
-          pagination={false}
-          showHeader={false}
-          columns={[
-            {
-              title: '', width: 130,
-              render: (_, row) => (
-                <Text style={{ fontFamily: MONO, fontSize: 12 }}>
-                  {row.name.replace(/\.service$/, '')}
-                </Text>
-              ),
-            },
-            {
-              title: '',
-              render: (_, row) => (
-                <Text type="secondary" style={{ fontSize: 12 }}>{row.note}</Text>
-              ),
-            },
-            {
-              title: '', width: 120, align: 'right' as const,
-              render: (_, row) => (
-                <Tooltip title={row.since || undefined}>
-                  <Tag color={UNIT_COLOUR[row.active] ?? 'default'}
-                       style={{ marginInlineEnd: 0 }}>
-                    {row.active === 'active' ? '執行中' : row.active}
-                  </Tag>
-                </Tooltip>
-              ),
-            },
-          ]}
+    <Card title="這台機器" size="small" style={{ height: '100%' }}
+          loading={paths.length === 0}>
+      <Heading note="環境變數可移動">路徑</Heading>
+      {paths.map((path) => (
+        <Line
+          key={path.variable}
+          label={(
+            <Space size={6}>
+              <span>{path.label}</span>
+              {!path.exists && <Tag color="warning">不存在</Tag>}
+            </Space>
+          )}
+          note={path.path}
+          right={(
+            <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
+              {path.variable}
+            </Text>
+          )}
         />
+      ))}
+
+      <div style={{ marginTop: 14 }}>
+        <Heading note="容器在「執行環境」頁">systemd 服務</Heading>
+        {units.map((unit) => (
+          <Line
+            key={unit.name}
+            label={<span style={{ fontFamily: MONO, fontSize: 12 }}>
+              {unit.name.replace(/\.service$/, '')}
+            </span>}
+            note={unit.note}
+            right={(
+              <Tooltip title={unit.since || undefined}>
+                <Tag color={UNIT_COLOUR[unit.active] ?? 'default'}
+                     style={{ marginInlineEnd: 0 }}>
+                  {unit.active === 'active' ? '執行中' : unit.active}
+                </Tag>
+              </Tooltip>
+            )}
+          />
+        ))}
       </div>
     </Card>
   );
@@ -269,7 +247,7 @@ export default function Settings() {
         style={{
           width: '100%', height: '52vh', fontFamily: 'ui-monospace, monospace',
           fontSize: 12, lineHeight: 1.5, padding: 12, borderRadius: 6,
-          border: '1px solid rgba(128,128,128,0.35)', background: 'transparent',
+          border: `1px solid ${LINE.faint}`, background: 'transparent',
           color: 'inherit', resize: 'vertical',
         }}
       />
@@ -278,8 +256,10 @@ export default function Settings() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {behaviour}
-      {machine}
+      <Row gutter={[16, 16]} align="stretch">
+        <Col xs={24} xl={13}>{behaviour}</Col>
+        <Col xs={24} xl={11}>{machine}</Col>
+      </Row>
       <Versions />
       {configCard}
     </Space>

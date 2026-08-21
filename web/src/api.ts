@@ -1079,12 +1079,25 @@ export async function setChannelScopes(key: string, scopes: string[]) {
   return body as { changed: boolean } & ChannelState;
 }
 
-export interface VersionGroup {
-  title: string;
-  rows: { label: string; value: string }[];
+/** What is installed, shaped the way the machine is arranged rather than as a
+ *  flat list: one launcher row per vendor, one ComfyUI row per instance. */
+export interface VersionReport {
+  inference: {
+    launchers: { launcher: string; version: string; built: string }[];
+    /** The build serving right now, when a model is loaded. It can differ from
+     *  what the launcher reports if the binary was replaced underneath it. */
+    running: string | null;
+    source: string | null;
+    swap: string | null;
+  };
+  comfyui: {
+    port: number; device: string;
+    comfyui: string | null; pytorch: string | null; python: string | null;
+  }[];
+  system: { label: string; value: string }[];
 }
 
-export const fetchVersions = () => get<VersionGroup[]>('/versions');
+export const fetchVersions = () => get<VersionReport>('/versions');
 
 // ---------------------------------------------------------------------------
 // The console's own settings, and the machine it is installed on
