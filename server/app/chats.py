@@ -16,7 +16,7 @@ import json
 import logging
 import sqlite3
 import time
-from . import paths
+from . import db, paths
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,10 @@ TITLE_LENGTH = 48
 
 
 def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    # Foreign keys on top of the shared settings: deleting a conversation is
+    # supposed to take its messages with it, and SQLite does not enforce that
+    # unless asked, per connection.
+    conn = db.connect()
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
