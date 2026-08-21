@@ -211,7 +211,25 @@ async def write_raw(text: str) -> None:
     async with _lock:
         backup = CONFIG_PATH.with_suffix(".yaml.bak")
         shutil.copy2(CONFIG_PATH, backup)
-        CONFIG_PATH.write_text(text, encoding="utf-8")
+        previous = CONFIG_PATH.read_text(encoding="utf-8")
+
+        mark = await _mark()
+        _write(text)
+
+        # The same check every other write here goes through, and this was the
+        # one path still missing it. Parsing as YAML says nothing about whether
+        # llama-swap will accept the shape -- and a config it rejects leaves it
+        # serving the last one it could read, which looks exactly like success.
+        accepted = await _accepted(mark)
+        if accepted is False:
+            _write(previous)
+            logger.error("llama-swap did not accept the pasted config; rolled back")
+            raise ValueError(
+                "llama-swap 不接受這份設定，已還原成修改前的內容。"
+                "詳細原因在 llama-swap 的日誌裡（設定沒有被套用）。"
+            )
+        if accepted is None:
+            logger.warning("no reload verdict from llama-swap; leaving the config in place")
 
 
 def launcher_macros() -> dict[str, str]:

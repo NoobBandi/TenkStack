@@ -22,7 +22,8 @@ import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
 import { ChatProvider } from './chat';
 import { PythonRuntimeProvider } from './components/pythonRuntime';
-import { fetchAuth, logout, type AuthState } from './api';
+import { fetchAuth, fetchSettings, logout, type AuthState } from './api';
+import { setMaxSteps } from './sandboxTool';
 import { darkTheme, LINE, MONO } from './theme';
 
 const { Header, Content } = Layout;
@@ -126,6 +127,18 @@ export default function App() {
   }, []);
 
   useEffect(() => { refreshAuth(); }, [refreshAuth]);
+
+  // Applied once, at the top, because the agent loop imports the limit as a
+  // module binding rather than taking it as a prop. Failing to reach the API
+  // leaves the built-in default, which is what it was before it was settable.
+  useEffect(() => {
+    fetchSettings()
+      .then((all) => {
+        const steps = all.find((s) => s.name === 'agent_max_steps');
+        if (steps) setMaxSteps(steps.value);
+      })
+      .catch(() => undefined);
+  }, [auth?.identity?.username]);
 
   if (auth === null) {
     return (

@@ -40,7 +40,20 @@ export function describeCall(call: ToolCall): { heading: string; shown: string }
   return { heading, shown };
 }
 
-export const MAX_STEPS = 8;
+/**
+ * How many tool calls one answer may make.
+ *
+ * A live binding rather than a constant: it is a setting now, and the agent
+ * loop imports this name directly. ES modules make imported bindings live, so
+ * updating it here updates it there without threading a value through every
+ * call site. Set once at startup from the server's settings; the default is
+ * what it always was, so a console that cannot reach the API behaves as before.
+ */
+export let MAX_STEPS = 8;
+
+export function setMaxSteps(steps: number): void {
+  if (Number.isFinite(steps) && steps > 0) MAX_STEPS = Math.floor(steps);
+}
 
 /**
  * Searching and reading, which the sandbox cannot do.

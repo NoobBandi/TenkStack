@@ -31,7 +31,7 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-CAPACITY = 4000
+CAPACITY_DEFAULT = 4000
 # Enough to fill a screen on arrival without making the first payload heavy.
 BACKFILL = 400
 
@@ -69,7 +69,7 @@ NOISE_IDENTIFIERS = {"xpu-smi"}
 # show up as literal escape sequences in the browser.
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
-_lines: deque[dict] = deque(maxlen=CAPACITY)
+_lines: deque[dict] = deque(maxlen=CAPACITY_DEFAULT)
 _subscribers: set[asyncio.Queue] = set()
 _tasks: list[asyncio.Task] = []
 # The readers hold long-lived children. Cancelling the task that awaits them is
@@ -452,6 +452,20 @@ async def _watch_containers() -> None:
                 _tasks.append(asyncio.create_task(_read_container(container)))
                 logger.info("following container %s", container)
         await asyncio.sleep(60)
+
+
+def set_capacity(lines: int) -> None:
+    """Resize the buffer, keeping the newest of what is already in it.
+
+    A deque's maxlen cannot be changed, so this builds a new one -- which is
+    also what drops the oldest lines when the size goes down, in the same order
+    they would have been dropped anyway.
+    """
+    global _lines
+    if lines == _lines.maxlen:
+        return
+    _lines = deque(_lines, maxlen=lines)
+    logger.info("log buffer resized to %d lines", lines)
 
 
 def start() -> None:

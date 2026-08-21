@@ -46,8 +46,8 @@ KV_BYTES_PER_ELEMENT = 34 / 32
 # The depth the estimate is quoted at. Generation slows as the cache fills --
 # measured 33.2 t/s at 1K against 24.9 at 32K -- so a single number has to name
 # the point it was taken at, and a few thousand tokens is where a conversation
-# actually sits.
-DEPTH = 4096
+# actually sits. Settable, because whose conversation is not this module's call.
+DEPTH_DEFAULT = 4096
 
 # One card, and the compute buffers have to live in it beside the weights.
 VRAM_BYTES = 32 * 1024**3
@@ -96,18 +96,21 @@ def estimate(head: dict, file_bytes: int = 0) -> dict:
     because every one of them can move it by more than the number's own
     precision.
     """
+    from . import settings
+    depth = settings.get("estimate_depth")
+
     blocks = head.get("layers") or 0
     weights = _weight_bytes(head)
     kv_per_token = _kv_bytes_per_token(head)
     resident = file_bytes or (head.get("dense_bytes", 0) + head.get("routed_bytes", 0))
 
-    seconds = (weights + DEPTH * kv_per_token) / BYTES_PER_SECOND
+    seconds = (weights + depth * kv_per_token) / BYTES_PER_SECOND
     seconds += blocks * OVERHEAD_PER_BLOCK
     tok_s = 1 / seconds if seconds > 0 else 0.0
 
     # VRAM at a window worth having, not at the model's advertised maximum:
     # quoting 262144 would condemn models that run happily at 32K.
-    window = min(int(head.get("context_length") or DEPTH), 32768)
+    window = min(int(head.get("context_length") or depth), 32768)
     needed = resident + window * kv_per_token + COMPUTE_RESERVE
 
     # A K-quant behaves like its byte count; an i-quant does not. Qwen3.8-27B
@@ -151,7 +154,7 @@ def estimate(head: dict, file_bytes: int = 0) -> dict:
         "ms_per_token": round(seconds * 1000, 1),
         "read_gib_per_token": round(weights / 1024**3, 3),
         "kv_kib_per_token": round(kv_per_token / 1024, 1),
-        "depth": DEPTH,
+        "depth": depth,
         "vram_gib": round(needed / 1024**3, 1),
         "window": window,
         "fits": needed <= VRAM_BYTES,

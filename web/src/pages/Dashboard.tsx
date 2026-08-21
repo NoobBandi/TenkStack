@@ -4,7 +4,6 @@ import { PictureOutlined } from '@ant-design/icons';
 import GpuChart from '../components/GpuChart';
 import StatTile, { StatBody } from '../components/StatTile';
 import SystemStats from '../components/SystemStats';
-import Versions from '../components/Versions';
 import { useStream } from '../stream';
 import {
   fetchComfyInstances, unloadAll, type ComfyInstance, type GpuSample, type ModelInfo,
@@ -271,7 +270,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <Versions />
 
     </div>
   );

@@ -1086,6 +1086,45 @@ export interface VersionGroup {
 
 export const fetchVersions = () => get<VersionGroup[]>('/versions');
 
+// ---------------------------------------------------------------------------
+// The console's own settings, and the machine it is installed on
+// ---------------------------------------------------------------------------
+
+/** One knob: what it is, what it is now, and what it may be. The bounds are
+ *  enforced by the server too — the API is reachable without this page. */
+export interface Setting {
+  name: string;
+  label: string;
+  note: string;
+  value: number;
+  default: number;
+  minimum: number;
+  maximum: number;
+  unit: string;
+  group: string;
+}
+
+export interface MachinePath {
+  variable: string;
+  label: string;
+  path: string;
+  exists: boolean;
+}
+
+export interface MachineUnit {
+  name: string;
+  active: string;
+  sub: string;
+  since: string;
+  note: string;
+}
+
+export const fetchSettings = () => get<Setting[]>('/settings');
+export const saveSettings = (values: Record<string, number>) =>
+  send<Setting[]>('/settings', 'PUT', values);
+export const fetchMachine = () =>
+  get<{ paths: MachinePath[]; units: MachineUnit[] }>('/machine');
+
 export const fetchModelSpec = (id: string) =>
   get<ModelSpec>(`/models/${encodeURIComponent(id)}/spec`);
 export const unloadModel = (id: string) =>

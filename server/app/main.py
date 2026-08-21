@@ -29,8 +29,8 @@ from pydantic import BaseModel, Field
 
 from . import (
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
-    gguf, gpu, gpu_history, llamaswap, logs as journal, search, speed, system,
-    users, versions,
+    gguf, gpu, gpu_history, llamaswap, logs as journal, paths, search, settings,
+    speed, system, users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -83,6 +83,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def _startup() -> None:
     users.init()
+    settings.init()
     chats.init()
     # Sampling starts with the process, not with the first browser: the chart
     # should show the last hour on load rather than begin at zero.
@@ -612,9 +613,113 @@ async def write_config(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="'raw' must be a string")
     try:
         await config.write_raw(text)
+    except ValueError as exc:
+        # Already a sentence about what went wrong -- llama-swap refused it, and
+        # it has been rolled back. Prefixing "invalid YAML" would be a second,
+        # wrong diagnosis on top of the right one.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid YAML: {exc}") from exc
+        raise HTTPException(status_code=400, detail=f"YAML 無法解析：{exc}") from exc
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------
+# The console's own settings, and the machine it is installed on
+# --------------------------------------------------------------------------
+
+# Where this install lives, read from `paths` rather than written out again.
+#
+# The settings page used to list these as literal strings -- `~/ai/models` and
+# so on -- which was true of exactly one machine. Every one of them is an
+# environment variable with a default, so the variable is named beside the
+# resolved value: this is the only place in the console that answers "where
+# does this install actually live", and it has to answer for the reader's
+# machine rather than for the author's.
+_PATHS = [
+    ("CONSOLE_AI_DIR", "根目錄", lambda: paths.AI_DIR),
+    ("CONSOLE_MODELS_DIR", "模型權重", lambda: paths.MODELS_DIR),
+    ("CONSOLE_LLAMA_SWAP_CONFIG", "llama-swap 設定", lambda: paths.LLAMA_SWAP_CONFIG),
+    ("CONSOLE_CADDY_DIR", "Caddy 設定", lambda: paths.CADDY_DIR),
+    ("CONSOLE_COMFYUI_DIR", "ComfyUI 儲存", lambda: paths.COMFY_DIR),
+    ("CONSOLE_STATE_DIR", "主控台資料", lambda: paths.STATE_DIR),
+]
+
+# The user units this console shares a machine with. Containers are not here --
+# the runtime page reads those from Docker, and listing them twice is how two
+# lists start disagreeing.
+_UNITS = [
+    ("llama-swap.service", "模型生命週期，OpenAI／Anthropic 端點"),
+    ("caddy.service", "TLS 與單一入口"),
+    ("ai-console.service", "本服務"),
+]
+
+
+@app.get("/api/machine")
+async def read_machine():
+    """Where this install lives and which of its units are running."""
+    async def unit(name: str) -> dict:
+        """One unit's state, asked of systemd rather than assumed.
+
+        `show` rather than `is-active`: it answers for a unit that does not
+        exist too, which is the case on a machine that runs one of these some
+        other way.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "show", name,
+                "-p", "ActiveState", "-p", "SubState", "-p", "ExecMainStartTimestamp",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+        except OSError:
+            return {"name": name, "active": "unknown", "sub": "", "since": ""}
+        fields = dict(
+            line.split("=", 1) for line in out.decode().splitlines() if "=" in line
+        )
+        return {
+            "name": name,
+            "active": fields.get("ActiveState") or "unknown",
+            "sub": fields.get("SubState") or "",
+            "since": fields.get("ExecMainStartTimestamp") or "",
+        }
+
+    units = []
+    for name, note in _UNITS:
+        state = await unit(name)
+        units.append({**state, "note": note})
+
+    return {
+        "paths": [
+            {"variable": variable, "label": label, "path": str(resolve()),
+             "exists": resolve().exists()}
+            for variable, label, resolve in _PATHS
+        ],
+        "units": units,
+    }
+
+
+@app.get("/api/settings")
+async def read_settings():
+    return settings.describe()
+
+
+@app.put("/api/settings")
+async def write_settings(payload: dict = Body(...),
+                         _: dict = Depends(auth.require_owner)):
+    """Change the console's own knobs.
+
+    Owner-only: these decide whether a chat request may evict somebody's image
+    generation, and how many steps an agent may spend.
+    """
+    try:
+        values = settings.save(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Two of them own a buffer that already exists, so they are applied rather
+    # than waited for.
+    journal.set_capacity(values["log_lines"])
+    gpu_history.set_hours(values["gpu_history_hours"])
+    return settings.describe()
 
 
 # --------------------------------------------------------------------------
@@ -990,15 +1095,25 @@ async def comfyui_image(
 # passes through it, so this is where the two are made to take turns.
 # --------------------------------------------------------------------------
 
-# Below this ComfyUI is not in anyone's way -- an idle instance still holds a
-# few hundred MB of context and buffers.
-COMFYUI_IDLE_VRAM = 1 * 1024**3
+# Both of these were constants and are now settings, because they are the two
+# numbers that decide whether a chat request evicts somebody's image generation
+# -- a judgement about how this particular machine is shared, which is not the
+# same on every machine. Read at the point of use so a change takes effect
+# without a restart.
+def _comfyui_idle_vram() -> int:
+    """Below this ComfyUI is not in anyone's way -- an idle instance still holds
+    a few hundred MB of context and buffers."""
+    return settings.get("comfyui_idle_gib") * 1024**3
 
-# Added to a model's file size to decide whether it needs the card cleared.
-# Generous on purpose: KV cache and compute buffers are not in the file size,
-# and the two ways of being wrong are not equal. Freeing when it was not needed
-# costs a reload; not freeing when it was needed is a failed request.
-VRAM_MARGIN = 4 * 1024**3
+
+def _vram_margin() -> int:
+    """Added to a model's file size to decide whether it needs the card cleared.
+
+    Generous on purpose: KV cache and compute buffers are not in the file size,
+    and the two ways of being wrong are not equal. Freeing when it was not
+    needed costs a reload; not freeing when it was needed is a failed request.
+    """
+    return settings.get("vram_margin_gib") * 1024**3
 
 # One eviction at a time. Two chat requests arriving together would otherwise
 # both decide to clear the card and both wait for it.
@@ -1098,7 +1213,7 @@ async def _comfyui_held_vram() -> list[tuple[dict, int]]:
         if instance is None:
             continue
         held = (instance.get("device") or {}).get("torch_vram_total") or 0
-        if held >= COMFYUI_IDLE_VRAM:
+        if held >= _comfyui_idle_vram():
             out.append((instance, held))
     return out
 
@@ -1155,7 +1270,7 @@ async def make_room_for(model_id: str) -> None:
         # target card rather than on device 0: with one card those were the
         # same number, and with two they are not.
         sample = (await gpu.sample_dict(target["index"]) if target else None) or {}
-        need = sum(f["size_bytes"] for f in config.files_for_model(model_id)) + VRAM_MARGIN
+        need = sum(f["size_bytes"] for f in config.files_for_model(model_id)) + _vram_margin()
         total = (sample.get("memory_total_mib") or 0) * 1024**2
         used = (sample.get("memory_used_mib") or 0) * 1024**2
         if total and (total - used) >= need:

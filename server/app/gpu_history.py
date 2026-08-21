@@ -26,6 +26,18 @@ SAMPLE_INTERVAL = 2.0
 # Two hours at one sample every two seconds. Enough to cover a long generation
 # or a model load and still be a few hundred KB of JSON at worst.
 CAPACITY = int(2 * 3600 / SAMPLE_INTERVAL)
+
+
+def set_hours(hours: int) -> None:
+    """How long a card's samples are kept, applied to the buffers already open."""
+    global CAPACITY
+    wanted = int(hours * 3600 / SAMPLE_INTERVAL)
+    if wanted == CAPACITY:
+        return
+    CAPACITY = wanted
+    for index, samples in list(_history.items()):
+        _history[index] = deque(samples, maxlen=CAPACITY)
+    logger.info("GPU history resized to %d hours", hours)
 # How often the device list is re-read. Cards do not appear at runtime, but the
 # poller starts before xpu-smi is necessarily answering, so this is what lets a
 # late-arriving device be picked up without a restart.
