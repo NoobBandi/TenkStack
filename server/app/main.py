@@ -408,7 +408,7 @@ async def set_card_role(payload: dict = Body(...),
     if capability == "llm":
         vendor = card.get("vendor") or ""
         try:
-            state = await backends.state(vendor) if vendor in backends.RUNTIMES else None
+            state = await backends.state(vendor) if backends.runtime_for(vendor) else None
             if on and state and not state["managed"]:
                 # Nothing installed for this vendor yet, so turning the switch
                 # on is the install. The variant stays the caller's choice.

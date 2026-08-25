@@ -33,7 +33,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, paths
+from . import config, paths, vendors
 
 logger = logging.getLogger(__name__)
 
@@ -43,12 +43,9 @@ _DEVICE = re.compile(r"^\s*([A-Za-z]+)(\d+):\s*(.*?)\s*\((\d+)\s*MiB")
 # How a backend is told to use one card. The variable is what a model entry
 # carries as its `env`; the value is the backend's own numbering, which is not
 # the console's -- a CUDA ordinal counts NVIDIA cards alone.
-_SELECTOR = {
-    "SYCL": ("ONEAPI_DEVICE_SELECTOR", "level_zero:{}"),
-    "CUDA": ("CUDA_VISIBLE_DEVICES", "{}"),
-    "ROCM": ("HIP_VISIBLE_DEVICES", "{}"),
-    "VULKAN": ("GGML_VK_VISIBLE_DEVICES", "{}"),
-}
+# Backend name (as `--list-devices` prints it) -> how to pin one of its
+# devices. Assembled from the vendor records rather than written here, so a new
+# card brings its own and this file never learns its name.
 
 # The SYCL wrapper pins one card by default, which is right for running and
 # wrong for enumerating. It defaults the variable rather than assigning it, so
@@ -128,7 +125,7 @@ async def _ask(launcher: str) -> list[dict]:
         if not match:
             continue
         backend, index, name, total = match.groups()
-        variable, template = _SELECTOR.get(backend.upper(), ("", ""))
+        variable, template = vendors.backend_selectors().get(backend.upper(), ("", ""))
         devices.append({
             "backend": backend,
             "index": int(index),
@@ -149,7 +146,7 @@ def selector_vars() -> set[str]:
     Handed to the config writer so it can clear a previous choice without
     touching a variable somebody added by hand.
     """
-    return {variable for variable, _ in _SELECTOR.values()}
+    return vendors.selector_variables()
 
 
 async def usable(refresh: bool = False) -> list[dict]:
@@ -215,37 +212,53 @@ def match(devices: list[dict], cards: list[dict]) -> list[dict]:
 # toolchain, and that is what these are for.
 # --------------------------------------------------------------------------
 
-RUNTIMES: dict[str, dict] = {
-    "nvidia": {
-        "label": "NVIDIA (CUDA)",
-        "image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
-        # --gpus needs nvidia-container-toolkit on the host; the kernel driver
-        # alone is not enough.
-        "flags": ["--gpus", "all"],
-        "requires": "nvidia-container-toolkit",
-        "verified": True,
-    },
-    "intel": {
-        "label": "Intel (SYCL)",
-        "image": "ghcr.io/ggml-org/llama.cpp:server-intel",
-        # By path, not by number: render node numbering is probe order, so a
-        # second card can silently move renderD128 to another device.
-        "flags": ["--device", "/dev/dri"],
-        "requires": None,
-        "verified": False,
-    },
-    "amd": {
-        "label": "AMD (ROCm)",
-        "image": "ghcr.io/ggml-org/llama.cpp:server-rocm",
-        "flags": ["--device", "/dev/kfd", "--device", "/dev/dri",
-                  "--group-add", "video", "--security-opt", "seccomp=unconfined"],
-        "requires": None,
-        # No AMD card has ever been in this machine. Written from the
-        # documented recipe and never run, which is worth saying out loud
-        # rather than discovering at load time.
-        "verified": False,
-    },
-}
+def _runtimes() -> dict[str, dict]:
+    """llama.cpp's server image per vendor, from the vendor records.
+
+    Building llama.cpp from source is the right answer for exactly one card,
+    the one whose owner is measuring it; for every other card the goal is that
+    it works without anyone installing a ten gigabyte toolchain, which is what
+    these are for.
+    """
+    return {
+        vendor.key: {
+            "label": vendor.label,
+            "image": vendor.llama.image,
+            "requires": vendor.llama.requires,
+            "verified": vendor.llama.verified,
+            "flags": list(vendor.llama.flags) or _card_flags(vendor),
+        }
+        for vendor in vendors.all_vendors() if vendor.llama
+    }
+
+
+def runtime_for(vendor: str) -> dict | None:
+    """One vendor's llama.cpp image, or None for a vendor with no template."""
+    return _runtimes().get(vendor)
+
+
+def _card_flags(vendor) -> list[str]:
+    """The device arguments for this vendor, without naming a card.
+
+    A launcher script serves whichever card its selector variable picks, so it
+    is written with the vendor's passthrough for the machine rather than for
+    one device -- `--gpus all` and `--device /dev/dri` rather than a specific
+    ordinal or render node. The selector inside the container then narrows it.
+    """
+    broad = {"--gpus": "all"}
+    flags = vendor.device_flags({"pci_bdf_address": ""}, [])
+    out: list[str] = []
+    index = 0
+    while index < len(flags):
+        flag = flags[index]
+        if flag in broad:
+            out += [flag, broad[flag]]
+            index += 2
+            continue
+        out.append(flag)
+        index += 1
+    return out
+
 
 # The fallback, and deliberately not a default. It is one tenth the size and
 # runs on any vendor, but it needs a Vulkan ICD on the host -- and a
@@ -274,7 +287,8 @@ def wrapper_text(vendor: str, models_dir: str, variant: str = "vendor") -> str:
     """
     spec = _spec_for(vendor, variant) or FALLBACK
     flags = " ".join(shlex.quote(f) for f in spec["flags"])
-    selector = _SELECTOR_FOR_VENDOR.get(vendor)
+    found = vendors.get(vendor)
+    selector = found.selector[0] if found else None
     forward = ""
     if selector:
         forward = f'''
@@ -314,11 +328,7 @@ exec docker run --rm --init \\
 '''
 
 
-_SELECTOR_FOR_VENDOR = {
-    "nvidia": "CUDA_VISIBLE_DEVICES",
-    "intel": "ONEAPI_DEVICE_SELECTOR",
-    "amd": "HIP_VISIBLE_DEVICES",
-}
+
 
 
 @dataclass
@@ -369,7 +379,7 @@ async def coverage(cards: list[dict]) -> list[dict]:
     for card in cards:
         address = card.get("pci_bdf_address")
         vendor = card.get("vendor") or ""
-        spec = RUNTIMES.get(vendor)
+        spec = _runtimes().get(vendor)
         boxes = held.get(containers.bus_key(address), []) if address else []
         rows.append({
             "pci_bdf_address": address,
@@ -388,7 +398,7 @@ async def coverage(cards: list[dict]) -> list[dict]:
             # What would be installed for it. An unverified recipe is worth
             # saying before the download, not after.
             "runtime": {**spec, "vendor": vendor} if spec else None,
-            "state": await state(vendor) if vendor in RUNTIMES else None,
+            "state": await state(vendor) if vendor in _runtimes() else None,
         })
     return rows
 
@@ -468,7 +478,7 @@ _IMAGE_LINE = re.compile(r'IMAGE="\$\{LLAMA_IMAGE:-([^}"]+)\}"')
 def _spec_for(vendor: str, variant: str = "vendor") -> dict | None:
     if variant == "vulkan":
         return {**FALLBACK, "vendor": vendor}
-    spec = RUNTIMES.get(vendor)
+    spec = _runtimes().get(vendor)
     return {**spec, "vendor": vendor} if spec else None
 
 

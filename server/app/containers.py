@@ -100,49 +100,26 @@ async def _inspect(names: list[str]) -> dict[str, dict]:
 def _claimed_cards(host: dict, devices: list[dict]) -> tuple[list[str], bool]:
     """(PCI addresses this container asked for, whether it asked for a GPU).
 
-    The two vendors ask in different ways and both have to be read. Intel and
-    AMD pass a render node straight through as a device; NVIDIA goes through
-    its container toolkit, which arrives as a device *request* naming CUDA
-    ordinals -- or nothing at all, which means every card.
+    Every vendor is asked, and every one that recognises the container's
+    configuration contributes. The mechanisms are not variations on one thing:
+    a render node passed through as a device and a CUDA device request are
+    different fields of `HostConfig`, and a card whose runtime uses neither
+    reads whatever its own does -- which is why this asks rather than parses.
     """
+    from . import vendors
+
     wants = False
-    claimed: list[str] = []
-
-    for entry in host.get("Devices") or []:
-        path = str(entry.get("PathOnHost") or "")
-        if not path.startswith("/dev/dri/render"):
-            continue
-        wants = True
-        address = _pci_for_render(Path(path).name)
-        if address:
-            claimed.append(address)
-
-    for request in host.get("DeviceRequests") or []:
-        if not any("gpu" in group for group in (request.get("Capabilities") or [])):
-            continue
-        wants = True
-        ordinals = request.get("DeviceIDs") or []
-        nvidia = [d for d in devices if d.get("vendor") == "nvidia"]
-        if not ordinals or "all" in ordinals:
-            claimed += [d["pci_bdf_address"] for d in nvidia if d.get("pci_bdf_address")]
-            continue
-        for wanted in ordinals:
-            text = str(wanted)
-            if text.isdigit():
-                # A CUDA ordinal counts NVIDIA cards and nothing else, while the
-                # console numbers every card in the machine -- so the `0` in the
-                # request is not the `index` of the console's first device. It
-                # is a position within the NVIDIA cards, in the order the
-                # provider found them.
-                if int(text) < len(nvidia) and nvidia[int(text)].get("pci_bdf_address"):
-                    claimed.append(nvidia[int(text)]["pci_bdf_address"])
-                continue
-            for device in nvidia:
-                if text in str((device.get("raw") or {}).get("uuid") or ""):
-                    if device.get("pci_bdf_address"):
-                        claimed.append(device["pci_bdf_address"])
-
-    return claimed, wants
+    seen: dict[str, None] = {}
+    for vendor in vendors.all_vendors():
+        found, asked = vendor.claims(host, devices)
+        # Deduplicated, because a mechanism can be shared: everything that is
+        # not NVIDIA passes a render node, so Intel and AMD both recognise the
+        # same `--device` and both name the card behind it. Which vendor it
+        # actually is comes from the card list, not from who spotted it.
+        for address in found:
+            seen.setdefault(address, None)
+        wants = wants or asked
+    return list(seen), wants
 
 
 async def survey(devices: list[dict]) -> dict:

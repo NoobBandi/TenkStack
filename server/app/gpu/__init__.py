@@ -31,16 +31,21 @@ import logging
 from dataclasses import asdict, replace
 
 from .base import GpuSample, Provider
-from .amd import Amd
-from .intel import Intel
-from .nvidia import Nvidia
 
 logger = logging.getLogger(__name__)
 
-# Intel first, deliberately. It is the vendor this console exists for -- the
-# others print a GPU panel in llama-swap already -- and it is the card the
-# models here are built and flagged for, which is what makes it device 0.
-PROVIDERS: list[Provider] = [Intel(), Nvidia(), Amd()]
+
+def _providers() -> list[Provider]:
+    """The telemetry half of every registered vendor.
+
+    Imported inside the function rather than at module scope: a vendor module
+    imports its provider from this package, and doing this at the top would be
+    a cycle. Intel is still first -- see `vendors.all_vendors` for why that
+    order is fixed rather than incidental.
+    """
+    from .. import vendors
+
+    return [vendor.provider for vendor in vendors.all_vendors()]
 
 # Which vendors have hardware, probed once and remembered. Separate from the
 # routing table below because probing is the expensive half: it runs up to
@@ -71,7 +76,7 @@ async def providers() -> list[Provider]:
         if _live:
             return _live
         found: list[Provider] = []
-        for candidate in PROVIDERS:
+        for candidate in _providers():
             try:
                 devices = await candidate.discover()
             except Exception:

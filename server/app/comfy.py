@@ -27,32 +27,26 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import channels, containers, paths
+from . import channels, containers, paths, vendors
 
 logger = logging.getLogger(__name__)
 
 # One image per vendor, from the same publisher, so the entrypoint and the
 # storage layout are identical across cards and this module needs one recipe
 # rather than three.
-IMAGES: dict[str, dict] = {
-    "intel": {
-        "label": "Intel (XPU)",
-        "image": "yanwk/comfyui-boot:xpu",
-        "verified": True,
-    },
-    "nvidia": {
-        "label": "NVIDIA (CUDA)",
-        "image": "yanwk/comfyui-boot:cu130-slim-v2",
-        "verified": True,
-    },
-    "amd": {
-        "label": "AMD (ROCm)",
-        "image": "yanwk/comfyui-boot:rocm",
-        # No AMD card has been in this machine. Written from the same recipe
-        # the other two use, never run.
-        "verified": False,
-    },
-}
+def _images() -> dict[str, dict]:
+    """ComfyUI's image per vendor, from the vendor records.
+
+    One image per vendor from the same publisher, so the entrypoint and the
+    storage layout are identical across cards and this module needs one recipe
+    rather than three.
+    """
+    return {
+        vendor.key: {"label": vendor.label, "image": vendor.comfy.image,
+                     "verified": vendor.comfy.verified}
+        for vendor in vendors.all_vendors() if vendor.comfy
+    }
+
 
 # Where the console probes for instances, and therefore where a new one has to
 # land to be seen at all.
@@ -69,43 +63,26 @@ def _slot(card: dict, cards: list[dict]) -> str:
     Follows what is already here -- `comfyui-xpu`, `comfyui-nv0` -- because the
     names appear in logs, in the container list and in the output directory,
     and a machine whose first instance is called one thing and second another
-    is a machine nobody can read.
+    is a machine nobody can read. The naming is the vendor's, since only it
+    knows what its cards are usually called.
     """
-    vendor = card.get("vendor") or "gpu"
-    same = [c for c in cards if (c.get("vendor") or "gpu") == vendor]
+    key = card.get("vendor") or "gpu"
+    same = [c for c in cards if (c.get("vendor") or "gpu") == key]
     index = same.index(card) if card in same else 0
-    if vendor == "intel":
-        return "xpu" if index == 0 else f"xpu{index}"
-    if vendor == "nvidia":
-        return f"nv{index}"
-    return f"{vendor}{index}"
+    vendor = vendors.get(key)
+    return vendor.slot(index) if vendor else f"{key}{index}"
 
 
 def _device_flags(card: dict, cards: list[dict]) -> list[str]:
     """How this vendor's card is handed to a container.
 
-    Three different mechanisms, which is why this is a function and not a
-    string in the table above. Intel and AMD pass a render node through; NVIDIA
-    goes through its container toolkit and names a CUDA ordinal, which counts
-    NVIDIA cards alone and is not the console's own index.
+    Asked of the vendor, because the mechanisms are genuinely different rather
+    than differently spelled: Intel and AMD pass a render node through, NVIDIA
+    goes through its container toolkit and names a CUDA ordinal, and a card
+    whose runtime does neither supplies its own.
     """
-    vendor = card.get("vendor") or ""
-    address = card.get("pci_bdf_address") or ""
-    if vendor == "nvidia":
-        nvidia = [c for c in cards if c.get("vendor") == "nvidia"]
-        ordinal = nvidia.index(card) if card in nvidia else 0
-        return ["--gpus", f"device={ordinal}"]
-
-    # By path rather than by number: render node numbering is probe order, so a
-    # card added later can move renderD128 to another device. Falls back to the
-    # whole of /dev/dri when the machine has no by-path links, which gives the
-    # container every render node rather than the wrong one.
-    node = Path(f"/dev/dri/by-path/pci-{address.lower()}-render")
-    flags = ["--device", str(node) if node.exists() else "/dev/dri"]
-    if vendor == "amd":
-        flags += ["--device", "/dev/kfd", "--group-add", "video",
-                  "--security-opt", "seccomp=unconfined"]
-    return flags
+    vendor = vendors.get(card.get("vendor") or "")
+    return vendor.device_flags(card, cards) if vendor else []
 
 
 async def _free_port(taken: set[int]) -> int | None:
@@ -124,7 +101,7 @@ async def create(card: dict, cards: list[dict]) -> str:
     range the console already looks at.
     """
     vendor = card.get("vendor") or ""
-    spec = IMAGES.get(vendor)
+    spec = _images().get(vendor)
     if spec is None:
         raise ValueError(f"沒有 {vendor} 的 ComfyUI 映像範本")
 
@@ -190,7 +167,7 @@ async def state(card: dict, cards: list[dict], boxes: list[dict]) -> dict:
     for the same reason: what is installed beats what would be.
     """
     vendor = card.get("vendor") or ""
-    spec = IMAGES.get(vendor)
+    spec = _images().get(vendor)
     box = boxes[0] if boxes else None
     image = (box or {}).get("image") or (spec or {}).get("image")
     sizes = await containers.image_sizes()
@@ -287,7 +264,7 @@ async def start(card: dict, cards: list[dict], action: str, name: str = "") -> d
         return running.as_dict()
 
     vendor = card.get("vendor") or ""
-    spec = IMAGES.get(vendor)
+    spec = _images().get(vendor)
     if spec is None:
         raise ValueError(f"沒有 {vendor} 的 ComfyUI 映像範本")
 
