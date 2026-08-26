@@ -15,6 +15,7 @@ import json
 import logging
 import mimetypes
 import socket
+import time
 import tomllib
 from pathlib import Path
 from typing import AsyncIterator
@@ -847,6 +848,16 @@ def _comfyui_base(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+# Ports that answered 404 for ComfyUI-Manager, and when to ask them again.
+# Emptied when a container is recreated, since the survey keys on the port and a
+# new container on that port is a new image.
+_manager_absent: dict[int, float] = {}
+
+# Long enough that a permanently Manager-less instance costs nothing, short
+# enough that installing Manager into a running one is noticed without a
+# restart.
+MANAGER_RECHECK = 600.0
+
 # The last good answer from each port.
 #
 # ComfyUI is aiohttp with a synchronous torch underneath, so while a sampling
@@ -892,19 +903,36 @@ async def _probe_comfyui(port: int) -> dict | None:
         # controls. Asked on every poll instead of only while an update is
         # running, so progress survives a page reload and shows up even when
         # the update was started from ComfyUI's own interface.
-        try:
-            mgr = await client.get("/api/manager/queue/status")
-            mgr.raise_for_status()
-            m = mgr.json()
-            manager = {
-                "processing": bool(m.get("is_processing")),
-                "done": m.get("done_count") or 0,
-                "total": m.get("total_count") or 0,
-            }
-        except (httpx.HTTPError, ValueError):
-            # Same reasoning: a busy instance should not lose its update
-            # controls, so the last known queue state stands in.
-            manager = (_comfyui_seen.get(port) or {}).get("manager")
+        #
+        # Except on an instance that has already said it does not have it. A
+        # 404 here is a fact about the image -- the slim ComfyUI build ships no
+        # custom nodes at all -- and it does not change while that container
+        # runs, so asking every five seconds produced a thousand requests and a
+        # thousand log lines a day for an answer nobody was waiting for. Rechecked
+        # occasionally rather than never, because somebody can install Manager
+        # into a running instance and should not have to restart anything.
+        manager = (_comfyui_seen.get(port) or {}).get("manager")
+        if _manager_absent.get(port, 0) > time.monotonic():
+            pass
+        else:
+            try:
+                mgr = await client.get("/api/manager/queue/status")
+                if mgr.status_code == 404:
+                    _manager_absent[port] = time.monotonic() + MANAGER_RECHECK
+                    manager = None
+                else:
+                    mgr.raise_for_status()
+                    m = mgr.json()
+                    _manager_absent.pop(port, None)
+                    manager = {
+                        "processing": bool(m.get("is_processing")),
+                        "done": m.get("done_count") or 0,
+                        "total": m.get("total_count") or 0,
+                    }
+            except (httpx.HTTPError, ValueError):
+                # A busy instance should not lose its update controls, so the
+                # last known queue state stands in.
+                pass
 
     s, q = stats.json(), queue.json()
     system = s.get("system") or {}
