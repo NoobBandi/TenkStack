@@ -145,15 +145,33 @@ function GpuPanel({ gpus, showTemp }: { gpus: GpuSample[]; showTemp: boolean }) 
               </Tag>
             </>
           ) : (
+            // Outlined, like the one on the chart below. A borderless select in
+            // a card title has nothing to say it can be opened -- it reads as a
+            // heading that happens to have a caret.
             <Select
-              size="small" variant="borderless"
+              size="small"
               value={shown.length ? choice : ALL} onChange={setChoice}
-              style={{ minWidth: 148 }} popupMatchSelectWidth={260}
+              style={{ minWidth: 168 }} popupMatchSelectWidth={260}
               options={[
-                { value: ALL, label: `全部 ${gpus.length} 張卡` },
+                {
+                  value: ALL,
+                  label: (
+                    <span style={{ fontFamily: MONO, fontSize: 11 }}>
+                      全部
+                      <span style={{ opacity: 0.45, marginLeft: 6 }}>
+                        {gpus.length} 張卡
+                      </span>
+                    </span>
+                  ),
+                },
                 ...gpus.map((g) => ({
                   value: String(g.index),
-                  label: `${deviceTag(g.vendor, g.index)} ・ ${g.name}`,
+                  label: (
+                    <span style={{ fontFamily: MONO, fontSize: 11 }}>
+                      {deviceTag(g.vendor, g.index)}
+                      <span style={{ opacity: 0.45, marginLeft: 6 }}>{g.name}</span>
+                    </span>
+                  ),
                 })),
               ]}
             />

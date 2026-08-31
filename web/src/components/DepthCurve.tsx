@@ -88,11 +88,14 @@ export default function DepthCurve({
 
   const picker = (
     <Select
-      size="small" variant="borderless"
+      size="small"
       value={model} onChange={setChosen}
-      style={{ minWidth: 130, maxWidth: 200 }}
-      popupMatchSelectWidth={220}
-      options={models.map((m) => ({ value: m.id, label: m.name || m.id }))}
+      style={{ minWidth: 150, maxWidth: 220 }}
+      popupMatchSelectWidth={240}
+      options={models.map((m) => ({
+        value: m.id,
+        label: <span style={{ fontFamily: MONO, fontSize: 11 }}>{m.name || m.id}</span>,
+      }))}
     />
   );
 
