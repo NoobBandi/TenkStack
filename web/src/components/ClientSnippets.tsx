@@ -1,10 +1,44 @@
 import { useCallback, useEffect, useState } from 'react';
 import { App as AntApp, Button, Card, Segmented, Space, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
+import hljs from 'highlight.js/lib/core';
+import bash from 'highlight.js/lib/languages/bash';
+import ini from 'highlight.js/lib/languages/ini';
+import json from 'highlight.js/lib/languages/json';
+import python from 'highlight.js/lib/languages/python';
+import powershell from 'highlight.js/lib/languages/powershell';
 import { fetchModels, type Endpoint, type ModelInfo } from '../api';
 import { LINE, MONO } from '../theme';
 
 const { Paragraph, Text } = Typography;
+
+// Registered by hand rather than pulling the full bundle: five languages
+// against highlight.js's two hundred is the difference between a few kilobytes
+// and half a megabyte in a page that shows one snippet at a time. TOML is read
+// by the ini grammar, which is what highlight.js itself maps it to.
+hljs.registerLanguage('json', json);
+hljs.registerLanguage('ini', ini);
+hljs.registerLanguage('bash', bash);
+hljs.registerLanguage('powershell', powershell);
+hljs.registerLanguage('python', python);
+
+/**
+ * One snippet, coloured by highlight.js and painted by the palette in
+ * index.css -- the same one the markdown renderer uses, so a config here and a
+ * fenced block in a reply look like the same kind of thing.
+ *
+ * dangerouslySetInnerHTML is safe here because highlight.js escapes what it is
+ * given before wrapping it in spans; a model id containing markup comes back as
+ * entities. Checked rather than assumed.
+ */
+function Code({ body, lang }: { body: string; lang: string }) {
+  const html = hljs.highlight(body, { language: lang, ignoreIllegals: true }).value;
+  return (
+    <pre style={BOX}>
+      <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+    </pre>
+  );
+}
 
 const BOX: React.CSSProperties = {
   background: 'rgba(255,255,255,0.04)', padding: 12, borderRadius: 6,
@@ -41,6 +75,8 @@ interface Block {
   /** The file this is, or what it is for. Shown above the box. */
   title: string;
   body: string;
+  /** A highlight.js language id, from the five registered above. */
+  lang: string;
   note?: string;
 }
 
@@ -130,6 +166,7 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
       blocks: [
         {
           title: '~/.config/opencode/opencode.json',
+          lang: 'json',
           body: JSON.stringify({
             $schema: 'https://opencode.ai/config.json',
             provider: {
@@ -180,6 +217,7 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
       blocks: [
         {
           title: '~/.claude/settings.json',
+          lang: 'json',
           body: JSON.stringify({
             env: {
               ANTHROPIC_BASE_URL: origin,
@@ -221,6 +259,7 @@ claude`,
       blocks: [
         {
           title: '~/.codex/config.toml',
+          lang: 'ini',
           body: `model_provider = "tenks"
 model = "${modelId}"
 
@@ -254,6 +293,7 @@ wire_api = "responses"`,
       blocks: [
         {
           title: '~/.grok/config.toml',
+          lang: 'ini',
           body: `[model.tenks-${modelId}]
 model = "${modelId}"
 base_url = "${base}"
@@ -289,6 +329,7 @@ auto_compact_threshold_percent = 75`,
       blocks: [
         {
           title: 'Chat Completions',
+          lang: 'bash',
           body: `curl ${base}/chat/completions \\
   -H "Authorization: Bearer $TENKS_KEY" \\
   -H "Content-Type: application/json" \\
@@ -309,6 +350,7 @@ auto_compact_threshold_percent = 75`,
       blocks: [
         {
           title: 'openai',
+          lang: 'python',
           body: `from openai import OpenAI
 
 client = OpenAI(base_url="${base}", api_key="sk-console-...")
@@ -370,7 +412,7 @@ print(resp.choices[0].message.content)`,
                 複製
               </Button>
             </Space>
-            <pre style={BOX}><code>{block.body}</code></pre>
+            <Code body={block.body} lang={block.lang} />
             {block.note && (
               <Paragraph type="secondary" style={{
                 fontSize: 11.5, margin: '6px 0 0', opacity: 0.75,
@@ -408,7 +450,7 @@ print(resp.choices[0].message.content)`,
                 {active.shellCaption}
               </Paragraph>
             )}
-            <pre style={BOX}><code>{active.shell[shell]}</code></pre>
+            <Code body={active.shell[shell]} lang={shell === 'windows' ? 'powershell' : 'bash'} />
           </div>
         )}
       </Space>

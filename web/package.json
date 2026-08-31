@@ -14,6 +14,7 @@
     "@ant-design/icons": "^6.3.2",
     "antd": "^6.5.4",
     "dayjs": "^1.11.21",
+    "highlight.js": "^11.12.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-markdown": "^10.1.0",

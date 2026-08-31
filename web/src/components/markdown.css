@@ -132,21 +132,9 @@
   background: #ffffff;
 }
 
-/* Syntax colours, hand-picked instead of importing a highlight.js theme:
- * every shipped theme assumes a fixed background, and this one has to sit on
- * a translucent panel in both light and dark mode. These hues stay legible on
- * either. */
-.hljs-comment, .hljs-quote { opacity: 0.6; font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: #c678dd; }
-.hljs-string, .hljs-regexp, .hljs-addition { color: #98c379; }
-.hljs-number, .hljs-symbol, .hljs-bullet { color: #d19a66; }
-.hljs-title, .hljs-section, .hljs-name { color: #61afef; }
-.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: #e06c75; }
-.hljs-built_in, .hljs-class .hljs-title { color: #e5c07b; }
-.hljs-meta { opacity: 0.75; }
-.hljs-deletion { color: #e06c75; }
-.hljs-emphasis { font-style: italic; }
-.hljs-strong { font-weight: 600; }
+/* Syntax colours live in index.css: the same palette now paints the client
+ * configuration snippets on the connections page, and a token scheme shared by
+ * two components is not a markdown concern. */
 
 /* The frame and whatever is waiting over it share one box.
  *

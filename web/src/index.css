@@ -157,3 +157,28 @@ body {
   height: 100%;
   border-radius: 1px;
 }
+
+
+/* ── Syntax colours ────────────────────────────────────────────────────
+ * Hand-picked instead of importing a highlight.js theme: every shipped theme
+ * assumes a fixed background, and these have to sit on a translucent panel in
+ * both light and dark mode. The hues stay legible on either.
+ *
+ * Global rather than beside one component, because two now paint with them --
+ * the markdown renderer and the connections page's configuration snippets --
+ * and a config box wants to look like the fenced block a reply would show.
+ *
+ * There is deliberately no rule for .hljs-punctuation: braces and colons are
+ * structure, not meaning, and they read better in the surrounding ink.
+ */
+.hljs-comment, .hljs-quote { opacity: 0.6; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-type { color: #c678dd; }
+.hljs-string, .hljs-regexp, .hljs-addition { color: #98c379; }
+.hljs-number, .hljs-symbol, .hljs-bullet { color: #d19a66; }
+.hljs-title, .hljs-section, .hljs-name { color: #61afef; }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable { color: #e06c75; }
+.hljs-built_in, .hljs-class .hljs-title { color: #e5c07b; }
+.hljs-meta { opacity: 0.75; }
+.hljs-deletion { color: #e06c75; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 600; }
