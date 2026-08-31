@@ -1,5 +1,5 @@
 import { Card, Typography } from 'antd';
-import { MONO } from '../theme';
+import { ACCENT, MONO, meterFill } from '../theme';
 
 const { Text } = Typography;
 
@@ -26,16 +26,27 @@ interface Props {
   percent?: number;
   footnote?: string;
   warn?: boolean;
+  /** Where this reading turns amber and where it turns red, as percentages of
+   *  its own ceiling. Given these, the bar grades across the thresholds rather
+   *  than flipping colour all at once, so the reader sees how far into the
+   *  warning they are and not merely that they are in it. */
+  thresholds?: [number, number];
 }
 
-export function StatBody({ label, value, unit, percent, footnote, warn }: Props) {
+export function StatBody({
+  label, value, unit, percent, footnote, warn, thresholds,
+}: Props) {
+  const [amber, red] = thresholds ?? [Infinity, Infinity];
+  const level = percent === undefined ? 0
+    : percent >= red ? 2 : percent >= amber ? 1 : 0;
+  const ink = level === 2 ? ACCENT.error : level === 1 || warn ? ACCENT.warn : undefined;
   return (
     <div style={{ minWidth: 0 }}>
       <Text style={{ fontSize: 10, letterSpacing: 1.2, opacity: 0.45 }}>{label}</Text>
 
       <div style={{
         fontFamily: MONO, fontSize: 24, lineHeight: 1.25, marginTop: 2,
-        color: warn ? '#e0a83c' : undefined,
+        color: ink,
         // Tabular figures, against the usual advice for a standalone value
         // ("equal-width digits look loose at display sizes"). That advice
         // assumes a static hero number. This one is replaced every two seconds,
@@ -52,7 +63,8 @@ export function StatBody({ label, value, unit, percent, footnote, warn }: Props)
         {percent !== undefined && (
           <div style={{
             height: '100%', width: `${Math.max(0, Math.min(100, percent))}%`,
-            background: warn ? '#e0a83c' : 'rgba(255,255,255,0.8)',
+            background: thresholds ? meterFill(percent, amber, red)
+              : warn ? ACCENT.warn : 'rgba(255,255,255,0.8)',
             borderRadius: 1, transition: 'width 400ms ease',
           }} />
         )}

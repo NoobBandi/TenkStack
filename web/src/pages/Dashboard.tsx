@@ -10,7 +10,7 @@ import { useStream } from '../stream';
 import {
   fetchComfyInstances, unloadAll, type ComfyInstance, type GpuSample, type ModelInfo,
 } from '../api';
-import { ACCENT, LINE, MONO } from '../theme';
+import { ACCENT, LINE, MONO, VRAM_AMBER, VRAM_RED, meterFill } from '../theme';
 import { clockCeiling, deviceTag, powerCeiling, tempCeiling } from '../hardware';
 
 const { Text } = Typography;
@@ -43,6 +43,7 @@ interface Reading {
   percent?: number;
   footnote: string;
   warn?: boolean;
+  thresholds?: [number, number];
 }
 
 const ALL = 'all';
@@ -78,7 +79,7 @@ function readingsFor(gpus: GpuSample[], showTemp: boolean): Reading[] {
     {
       label: 'VRAM', value: (used / 1024).toFixed(1),
       unit: `/ ${(total / 1024).toFixed(0)} GiB`,
-      percent: vramPercent, warn: vramPercent > 92,
+      percent: vramPercent, thresholds: [VRAM_AMBER, VRAM_RED],
       footnote: `${many ? '合計 ・ ' : ''}剩餘 ${((total - used) / 1024).toFixed(1)} GiB`,
     },
     {
@@ -175,7 +176,8 @@ function GpuPanel({ gpus, showTemp }: { gpus: GpuSample[]; showTemp: boolean }) 
         {readingsFor(effective, showTemp).map((r) => (
           <StatBody
             key={r.label} label={r.label} value={r.value} unit={r.unit}
-            percent={r.percent} warn={r.warn} footnote={r.footnote}
+            percent={r.percent} warn={r.warn} thresholds={r.thresholds}
+            footnote={r.footnote}
           />
         ))}
       </div>
@@ -215,7 +217,7 @@ function GpuPanel({ gpus, showTemp }: { gpus: GpuSample[]; showTemp: boolean }) 
                   <span style={{
                     display: 'block', height: '100%', borderRadius: 1,
                     width: `${Math.min(100, percent)}%`,
-                    background: percent > 92 ? ACCENT.warn : 'rgba(255,255,255,0.7)',
+                    background: meterFill(percent, VRAM_AMBER, VRAM_RED),
                     transition: 'width 400ms ease',
                   }} />
                 </span>

@@ -28,6 +28,37 @@ export const ACCENT = {
 };
 
 /**
+ * Where a meter turns amber and where it turns red.
+ *
+ * From what this box actually does rather than from round numbers: VRAM at
+ * 91% ran at full speed, 96% was still fine, and 99.2% collapsed to 0.6 t/s --
+ * the SYCL allocator falls back to host memory over PCIe and every token pays
+ * for it. So red sits below the cliff rather than on it, and amber marks where
+ * there stops being room for anything else on the card.
+ */
+export const VRAM_AMBER = 85;
+export const VRAM_RED = 95;
+
+/**
+ * A meter fill that changes colour where it crosses its thresholds, instead of
+ * the whole bar changing at once.
+ *
+ * The stops are in the fill's own coordinates, not the track's -- a fill drawn
+ * at 70% width has to place the 85% mark at 85/70 of itself -- which is why
+ * this is computed rather than written as a fixed gradient. Past 100% the stop
+ * falls outside the fill and that colour simply does not appear, so a bar
+ * below the first threshold is a plain one with no special case.
+ */
+export function meterFill(percent: number, amber: number, red: number): string {
+  if (percent <= 0) return 'transparent';
+  const at = (mark: number) => (mark / percent) * 100;
+  return `linear-gradient(90deg,`
+    + ` rgba(255,255,255,0.8) 0 ${at(amber)}%,`
+    + ` ${ACCENT.warn} ${at(amber)}% ${at(red)}%,`
+    + ` ${ACCENT.error} ${at(red)}% 100%)`;
+}
+
+/**
  * Chart series colours.
  *
  * A cool set, deliberately clear of ACCENT: amber, red and green mean warning,
