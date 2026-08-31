@@ -17,6 +17,22 @@ export interface GpuSample {
   busy: boolean;
 }
 
+/** One llama-server slot's live occupancy.
+ *
+ *  A slot that reaches n_ctx truncates the reply it is producing, and a reply
+ *  truncated inside a tool call leaves the client holding malformed JSON it
+ *  will replay on every turn afterwards -- which llama.cpp then rejects, so the
+ *  session is dead until it is started over. There is no warning before that
+ *  happens, which is what this is for.
+ */
+export interface SlotInfo {
+  id: number;
+  /** This slot's own ceiling: --ctx-size divided by --parallel. */
+  n_ctx: number;
+  used: number;
+  busy: boolean;
+}
+
 export interface ModelInfo {
   id: string;
   name?: string;
@@ -37,6 +53,9 @@ export interface ModelInfo {
    *  quantisation carry the same name and the same everything else, so this is
    *  what tells them apart -- and what says how much of the card each wants. */
   weights?: ModelWeight[];
+  /** Live slot occupancy. Undefined for a model that is not running, and null
+   *  when its server was started with --no-slots; neither means "empty". */
+  slots?: SlotInfo[] | null;
 }
 
 export interface ModelWeight {
@@ -205,11 +224,50 @@ export async function unloadAll(): Promise<boolean> {
   return res.ok;
 }
 
+/** One tick of a request's lifecycle, parsed from llama-server's own progress
+ *  lines. Slot and task together identify the request; neither does alone. */
+export interface ProgressTick {
+  slot: number;
+  task: number;
+  phase: 'prefill' | 'decode' | 'done';
+  tokens: number;
+  /** tokens/sec: ingestion rate while prefilling, tg_3s while decoding. */
+  rate?: number;
+  /** decode only: the cumulative average, which the 3s window is read against. */
+  average?: number;
+  progress?: number;
+  elapsed?: number;
+  /** done only: the reply ran into the context ceiling and was cut short. */
+  truncated?: boolean;
+}
+
+/** One completed request, out of llama-swap's own store. */
+export interface ActivityRow {
+  ts: number;
+  model: string;
+  input: number;
+  output: number;
+  /** Tokens already in the window when this request began -- the x axis of the
+   *  depth chart, and the thing generation speed falls off against. */
+  depth: number;
+  prompt_per_second: number;
+  tokens_per_second: number;
+  duration_ms: number;
+  status: number | null;
+}
+
+export function fetchActivity(limit = 400, model?: string): Promise<ActivityRow[]> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (model) query.set('model', model);
+  return get<ActivityRow[]>(`/activity?${query}`);
+}
+
 export type StreamEvent =
   | { type: 'gpu'; data: GpuSample[] }
   | { type: 'journal'; data: JournalLine }
   | { type: 'modelStatus'; data: ModelInfo[] }
   | { type: 'throughput'; data: Throughput }
+  | { type: 'progress'; data: ProgressTick }
   | { type: 'inflight'; data: { operation: string; request?: InflightRequest } }
   | { type: 'logData'; data: { data: string; source: string } }
   | { type: string; data: unknown };
@@ -295,7 +353,9 @@ export interface ModelSpec {
   mmproj?: string | null;
   /** `backend:index` -- `SYCL:0`, `CUDA:1`. Empty means unpinned, which is the
    *  only answer on a machine with one usable card. */
-  device?: string;
+  /** One or more `backend:index` choices. A list is how a model is given both
+   *  cards, which is what --split-mode needs to have any effect. */
+  device?: string | string[];
   /** What is actually written in llama-swap's `env` for this model. Returned
    *  when reading a spec, so the form can tell which device it corresponds to;
    *  never sent back, because the device choice is what gets written. */
@@ -712,7 +772,10 @@ export const DEFAULT_PARAMS: ChatParams = {
   // target. llama.cpp clamps n_predict to whatever context is left after the
   // prompt, so a model with a smaller window stops at its own limit rather
   // than erroring -- which is what makes one default safe across models.
-  max_tokens: 65536,
+  //
+  // Matched to the 131072 the served models are configured with, so the
+  // ceiling never lands below the window a model actually has.
+  max_tokens: 131072,
   // Qwen's own generation_config; llama.cpp picks these up from the GGUF, and
   // repeating them here keeps the panel honest about what is in effect.
   top_p: 0.95,

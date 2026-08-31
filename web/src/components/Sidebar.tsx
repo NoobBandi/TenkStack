@@ -59,7 +59,7 @@ function Meter({ label, value, percent, warn }: {
         <Text style={{ fontSize: 10, opacity: 0.5, letterSpacing: 0.4 }}>{label}</Text>
         <Text style={{ fontSize: 10, fontFamily: MONO, opacity: 0.8 }}>{value}</Text>
       </div>
-      <div style={{ height: 2, background: LINE.faint, borderRadius: 1 }}>
+      <div className="meter">
         <div style={{
           height: '100%', width: `${Math.min(100, percent)}%`, borderRadius: 1,
           background: warn ? '#e0a83c' : 'rgba(255,255,255,0.7)',

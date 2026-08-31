@@ -85,3 +85,75 @@ body {
 .slide:hover > span {
   transform: translateX(min(0px, calc(100cqw - 100%)));
 }
+
+/* ── Composer ──────────────────────────────────────────────────────────
+ * The controls sit inside the input's own border rather than on a row
+ * beneath it, so the whole thing reads as one field. The border tracks
+ * focus-within, which is what makes an enclosing box feel like an input
+ * instead of a panel that happens to contain one.
+ */
+.composer-shell {
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 14px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 150ms ease;
+}
+.composer-shell:focus-within { border-color: rgba(255, 255, 255, 0.45); }
+
+/* Square, quiet, and tactile: the press scale is the only feedback these
+ * get, since they carry no fill at rest. */
+.composer-btn.ant-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border-radius: 8px;
+  transition: background-color 150ms ease, color 150ms ease, opacity 150ms ease,
+              transform 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.composer-btn.ant-btn:not(:disabled):active { transform: scale(0.94); }
+/* The Agent toggle carries a word, so it is the one control that is wider
+   than it is tall. */
+.composer-btn.composer-btn-wide.ant-btn { width: auto; padding-inline: 7px; }
+
+/* Send keeps its square footprint whether it is sending or stopping, so the
+   row does not reflow the moment a reply starts. */
+.composer-send.ant-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  border-radius: 9px;
+  transition: background-color 200ms ease, color 200ms ease,
+              transform 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.composer-send.ant-btn:not(:disabled):active { transform: scale(0.94); }
+
+/* ── Meters ────────────────────────────────────────────────────────────
+ * The 2px value bars, drawn as segments rather than as one continuous run.
+ *
+ * The mask sits on the track, so the gaps cut through the fill and the
+ * remainder alike and the bar reads as a row of cells with some of them lit --
+ * a gauge rather than a stripe. It is applied here rather than per-instance
+ * because the same bar appears in five places (the GPU readings, the per-card
+ * strip, the models table, the chat context meter, the sidebar) and one of
+ * them being segmented while the others were not would read as a mistake.
+ *
+ * 5px lit against a 2px gap: at this height a smaller lit run reads as a
+ * dotted line rather than as segments, and a larger one loses the effect.
+ */
+.meter {
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.07);
+  -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 7px);
+  mask-image: repeating-linear-gradient(90deg, #000 0 5px, transparent 5px 7px);
+}
+.meter > * {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+}

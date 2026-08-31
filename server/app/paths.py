@@ -55,6 +55,11 @@ MODELS_DIR = _path("CONSOLE_MODELS_DIR", AI_DIR / "models")
 LLAMA_SWAP_DIR = _path("CONSOLE_LLAMA_SWAP_DIR", AI_DIR / "llama-swap")
 LLAMA_SWAP_CONFIG = _path("CONSOLE_LLAMA_SWAP_CONFIG", LLAMA_SWAP_DIR / "config.yaml")
 LLAMA_SWAP_BIN = _path("CONSOLE_LLAMA_SWAP_BIN", LLAMA_SWAP_DIR / "llama-swap")
+# llama-swap's own per-request record, written because config.yaml points its
+# `store` here. Read-only from this side: it is llama-swap's file, and the
+# console has no business writing rows into somebody else's schema.
+LLAMA_SWAP_ACTIVITY = _path("CONSOLE_LLAMA_SWAP_ACTIVITY",
+                            LLAMA_SWAP_DIR / "activity.sqlite")
 
 # The llama.cpp checkout, read only to report which commit the source sits at.
 LLAMA_CPP_DIR = _path("CONSOLE_LLAMA_CPP_DIR", AI_DIR / "llama.cpp")

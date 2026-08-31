@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (
+    activity,
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
     blobs, gguf, gpu, gpu_history, llamaswap, logs as journal, paths, search,
     settings, speed, system, users, versions,
@@ -229,14 +230,16 @@ class ModelSpec(BaseModel):
     group: str | None = "large"
     extra: str = ""
     mmproj: str | None = None
-    # Which card to run on, as `backend:index` -- `SYCL:0`, `CUDA:1`.
+    # Which cards to run on, as `backend:index` -- `SYCL:0`, `CUDA:1` -- either
+    # one or a list of them. A list is how a model gets both cards, which is
+    # what --split-mode has to have to do anything at all.
     #
     # Three states, and they are not the same. `null` (or absent) means the
     # caller did not mention a card, so whatever the entry already says is left
-    # alone -- an edit that does not name a card must not unpin one. `""` means
-    # the caller cleared it, which is what the form sends when its select is
-    # emptied. A value pins.
-    device: str | None = None
+    # alone -- an edit that does not name a card must not unpin one. `""` (or
+    # `[]`) means the caller cleared it, which is what the form sends when its
+    # select is emptied. A value pins.
+    device: str | list[str] | None = None
 
 
 @app.get("/api/models")
@@ -250,8 +253,15 @@ async def read_models():
     # Ask each running model what it actually loaded. Only running models can
     # answer, so stopped ones fall back to what their command line declares.
     proxies = {mid: entry.get("proxy") for mid, entry in by_id.items() if entry.get("proxy")}
-    props_list = await asyncio.gather(*(llamaswap.get_props(p) for p in proxies.values()))
+    props_list, slots_list = await asyncio.gather(
+        asyncio.gather(*(llamaswap.get_props(p) for p in proxies.values())),
+        # Asked alongside props rather than from a route of its own: both are
+        # per-running-model reads of the same server, and a second endpoint
+        # would mean a second poll to keep in step with this one.
+        asyncio.gather(*(llamaswap.get_slots(p) for p in proxies.values())),
+    )
     props = dict(zip(proxies.keys(), props_list))
+    slots = dict(zip(proxies.keys(), slots_list))
 
     sampling = config.sampling_defaults()
     weights = config.weights()
@@ -276,6 +286,10 @@ async def read_models():
             # name, same everything -- and they compete for the same card, so
             # the sizes belong next to them.
             "weights": weights.get(model_id, []),
+            # How full each slot is now. None for a model that is not running,
+            # and for one whose server was started with --no-slots -- neither
+            # is the same as empty, so the UI says nothing rather than zero.
+            "slots": slots.get(model_id),
             "capabilities": {
                 "vision": bool(modalities.get("vision")) if live else declared.get(model_id, False),
                 "audio": bool(modalities.get("audio")) if live else False,
@@ -290,35 +304,72 @@ async def read_models():
     return result
 
 
-async def _device_env(chosen: str | None) -> dict:
-    """The environment a `backend:index` choice means, or nothing.
+async def _device_env(chosen: str | list[str] | None) -> dict | None:
+    """The environment one or more `backend:index` choices mean.
 
     Resolved against what llama-server actually enumerates rather than
     constructed from the string, so a stale choice -- a card that has since
     been removed -- writes no selector at all instead of one pointing at a
     device that is not there.
+
+    Several cards compose into one selector rather than several: both vendors
+    express the choice as a single variable holding a list, so the indices are
+    joined and put through the same template. `level_zero:0,1`, `0,1`.
+
+    Returns `{}` for "no card asked for" and `None` for "a card was asked for
+    and could not be resolved". They have to be distinguishable: the caller
+    clears the stored selector for the first and must leave it alone for the
+    second, or an edit made through a form that could not display the current
+    value would silently delete it.
     """
-    if not chosen:
+    wanted = [chosen] if isinstance(chosen, str) else list(chosen or [])
+    wanted = [item for item in wanted if item]
+    if not wanted:
         return {}
-    backend, _, index = chosen.partition(":")
-    for device in await backends.usable():
-        if device["backend"] == backend and str(device["index"]) == index:
-            return device["env"]
-    logger.warning("model asked for device %s, which no launcher sees", chosen)
-    return {}
+
+    devices = await backends.usable()
+    by_backend: dict[str, list[str]] = {}
+    for item in wanted:
+        backend, _, index = item.partition(":")
+        hit = next((d for d in devices
+                    if d["backend"] == backend and str(d["index"]) == index), None)
+        if hit is None:
+            logger.warning("model asked for device %s, which no launcher sees", item)
+            return None
+        by_backend.setdefault(backend, []).append(index)
+
+    if len(by_backend) > 1:
+        # One llama-server process, one backend. Splitting a model across an
+        # Intel card and an NVIDIA one is not something the launcher can do.
+        logger.warning("model asked for devices across backends: %s", wanted)
+        return None
+
+    selectors = backends.selector_templates()
+    backend, indices = next(iter(by_backend.items()))
+    template = selectors.get(backend.upper())
+    if template is None:
+        return None
+    variable, pattern = template
+    return {variable: pattern.format(",".join(indices))}
 
 
-async def _device_wrapper(chosen: str | None) -> str | None:
-    """The launcher macro for a chosen card, or None to leave it alone.
+async def _device_wrapper(chosen: str | list[str] | None) -> str | None:
+    """The launcher macro for the chosen cards, or None to leave it alone.
 
     None is not a default -- it means the caller did not name a card, and an
     edit that does not name one must keep the launcher the entry already has.
     Choosing for it would move a working model to another vendor's backend
     because a form field was left empty.
+
+    Several cards resolve to one launcher, because one llama-server process
+    runs on one backend; the first is enough, and _device_env has already
+    refused a selection that spans two.
     """
-    if not chosen:
+    wanted = [chosen] if isinstance(chosen, str) else list(chosen or [])
+    wanted = [item for item in wanted if item]
+    if not wanted:
         return None
-    backend, _, index = chosen.partition(":")
+    backend, _, index = wanted[0].partition(":")
     for device in await backends.usable():
         if device["backend"] == backend and str(device["index"]) == index:
             return config.wrapper_for(device.get("launcher"))
@@ -507,6 +558,7 @@ async def create_model(spec: ModelSpec):
 
 
 async def _write_model(spec: ModelSpec):
+    device_env = await _device_env(spec.device)
     await config.upsert_model(
         spec.id,
         name=spec.name or spec.id,
@@ -518,11 +570,16 @@ async def _write_model(spec: ModelSpec):
         group=spec.group,
         extra=spec.extra,
         mmproj=spec.mmproj,
-        env=await _device_env(spec.device),
-        # Only when the caller said something about the card. Clearing the
-        # selector on an edit that never mentioned one would unpin a model as a
-        # side effect of changing its context size.
-        managed_env=backends.selector_vars() if spec.device is not None else None,
+        env=device_env or {},
+        # Only when the caller said something about the card, and only when
+        # what it said resolved. An unresolvable choice used to clear the
+        # selector: the form sends "" for a select it could not populate, and a
+        # multi-card selector was exactly the value it could not populate, so
+        # editing a two-card model through the UI silently dropped it back to
+        # one card -- without an error, and without the entry saying so.
+        managed_env=(backends.selector_vars()
+                     if spec.device is not None and device_env is not None
+                     else None),
         wrapper=await _device_wrapper(spec.device),
     )
     return {"ok": True, "id": spec.id}
@@ -743,6 +800,17 @@ async def write_settings(payload: dict = Body(...),
 # --------------------------------------------------------------------------
 # Runtime containers
 # --------------------------------------------------------------------------
+
+@app.get("/api/activity")
+async def read_activity(limit: int = 400, model: str | None = None):
+    """Completed requests with their depth and their rate.
+
+    Read straight out of llama-swap's store on each call rather than cached:
+    the file is small, the query is indexed by rowid, and a cache here would
+    only ever be a stale copy of a table another process owns.
+    """
+    return activity.recent(limit=max(1, min(limit, 2000)), model_id=model)
+
 
 @app.get("/api/runtime")
 async def read_runtime():

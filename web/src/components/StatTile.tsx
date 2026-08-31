@@ -1,5 +1,5 @@
 import { Card, Typography } from 'antd';
-import { LINE, MONO } from '../theme';
+import { MONO } from '../theme';
 
 const { Text } = Typography;
 
@@ -48,7 +48,7 @@ export function StatBody({ label, value, unit, percent, footnote, warn }: Props)
         {unit && <span style={{ fontSize: 12, opacity: 0.45, marginLeft: 4 }}>{unit}</span>}
       </div>
 
-      <div style={{ height: 2, background: LINE.faint, borderRadius: 1, margin: '9px 0 6px' }}>
+      <div className="meter" style={{ margin: '9px 0 6px' }}>
         {percent !== undefined && (
           <div style={{
             height: '100%', width: `${Math.max(0, Math.min(100, percent))}%`,

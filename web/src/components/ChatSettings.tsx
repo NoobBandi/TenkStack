@@ -1,7 +1,7 @@
 import { Button, Divider, Input, InputNumber, Slider, Space, Switch, Tooltip, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { DEFAULT_PARAMS, type ChatParams, type ModelInfo } from '../api';
-import { LINE, MONO } from '../theme';
+import { MONO } from '../theme';
 
 const { Text } = Typography;
 
@@ -91,7 +91,7 @@ export default function ChatSettings({ params, onChange, model, onReset, context
                 / {(ctxLimit / 1024).toFixed(0)}K
               </Text>
             </div>
-            <div style={{ height: 2, background: LINE.faint, borderRadius: 1 }}>
+            <div className="meter">
               <div style={{
                 height: '100%', width: `${ctxPercent}%`, borderRadius: 1,
                 background: ctxPercent > 85 ? '#e0a83c' : 'rgba(255,255,255,0.75)',

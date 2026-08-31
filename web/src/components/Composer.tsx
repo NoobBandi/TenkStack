@@ -38,6 +38,14 @@ const MAX_TEXT_BYTES = 512 << 10;
  * The backdrop renders the same text, transparent, so it wraps identically --
  * shading has to follow soft-wrapped lines, which a per-line-height overlay
  * could not do.
+ *
+ * The controls live inside the field's border rather than on a row beneath it.
+ * That is the whole visual idea here: one bordered object that tracks
+ * focus-within, so the model picker and the attach button read as part of the
+ * act of writing rather than as a toolbar that happens to sit nearby. The
+ * textarea keeps its own full-width row instead of sharing one with the
+ * controls -- this box is typed into in paragraphs and pasted into with code,
+ * so a single-line composer that grows would be wrong for it.
  */
 
 const FONT = "ui-monospace, SFMono-Regular, Menlo, 'Noto Sans Mono CJK TC', monospace";
@@ -45,7 +53,9 @@ const FONT = "ui-monospace, SFMono-Regular, Menlo, 'Noto Sans Mono CJK TC', mono
 /** Typography must be identical in both layers or the shading drifts. */
 const SHARED: React.CSSProperties = {
   margin: 0,
-  padding: 12,
+  // The shell adds 6 of its own; 10 here keeps the text off the border
+  // without the doubled inset a full 12 would give.
+  padding: 10,
   fontSize: 14,
   lineHeight: 1.6,
   fontFamily: 'inherit',
@@ -294,108 +304,112 @@ export default function Composer({
   };
 
   const segments = segment(value);
+  const canSend = (value.trim().length > 0 || images.length > 0) && !disabled;
 
   return (
     <div>
-      <div style={{
-        position: 'relative',
-        borderRadius: 8,
-        border: '1px solid rgba(128,128,128,0.35)',
-        background: 'transparent',
-        overflow: 'hidden',
-      }}>
-        <div
-          ref={backdrop}
-          aria-hidden
-          style={{
-            ...SHARED,
-            position: 'absolute', inset: 0, overflow: 'hidden',
-            color: 'transparent', pointerEvents: 'none',
-          }}
-        >
-          {segments.map((seg, index) =>
-            seg.code ? (
-              <span key={index} style={{
-                background: 'rgba(128,128,128,0.20)',
-                borderRadius: 3,
-                fontFamily: FONT,
-              }}>
-                {seg.text}
-              </span>
-            ) : (
-              <span key={index}>{seg.text}</span>
-            ),
-          )}
-          {/* Trailing newline needs a character or the last empty line collapses. */}
-          {'​'}
+      <div className="composer-shell">
+        {/* Thumbnails sit inside the shell, above the text, so an attached
+            image reads as part of the message being written rather than as a
+            separate tray parked underneath it. */}
+        {images.length > 0 && (
+          <Space wrap size={6} style={{ paddingInline: 4, paddingTop: 2 }}>
+            {images.map((src, index) => (
+              <div key={index} style={{ position: 'relative' }}>
+                <Image src={src} width={56} height={56}
+                       style={{ objectFit: 'cover', borderRadius: 8 }} />
+                <Button
+                  size="small" type="primary" danger shape="circle" icon={<CloseOutlined />}
+                  style={{ position: 'absolute', top: -6, right: -6, minWidth: 18, width: 18, height: 18 }}
+                  onClick={() => onImagesChange(images.filter((_, i) => i !== index))}
+                />
+              </div>
+            ))}
+          </Space>
+        )}
+
+        <div style={{ position: 'relative' }}>
+          <div
+            ref={backdrop}
+            aria-hidden
+            style={{
+              ...SHARED,
+              position: 'absolute', inset: 0, overflow: 'hidden',
+              color: 'transparent', pointerEvents: 'none',
+            }}
+          >
+            {segments.map((seg, index) =>
+              seg.code ? (
+                <span key={index} style={{
+                  background: 'rgba(128,128,128,0.20)',
+                  borderRadius: 3,
+                  fontFamily: FONT,
+                }}>
+                  {seg.text}
+                </span>
+              ) : (
+                <span key={index}>{seg.text}</span>
+              ),
+            )}
+            {/* Trailing newline needs a character or the last empty line collapses. */}
+            {'​'}
+          </div>
+
+          <textarea
+            ref={textarea}
+            value={value}
+            disabled={disabled}
+            onChange={(e) => { onChange(e.target.value); syncCaret(); }}
+            onScroll={syncScroll}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onKeyUp={syncCaret}
+            onClick={syncCaret}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={() => setComposing(false)}
+            placeholder="輸入訊息…  ``` 開啟程式碼區塊，Enter 送出，Shift+Enter 換行"
+            rows={3}
+            style={{
+              ...SHARED,
+              position: 'relative',
+              width: '100%',
+              minHeight: 92,
+              resize: 'none',
+              outline: 'none',
+              background: 'transparent',
+              color: 'inherit',
+              display: 'block',
+            }}
+          />
         </div>
 
-        <textarea
-          ref={textarea}
-          value={value}
-          disabled={disabled}
-          onChange={(e) => { onChange(e.target.value); syncCaret(); }}
-          onScroll={syncScroll}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-          onKeyUp={syncCaret}
-          onClick={syncCaret}
-          onCompositionStart={() => setComposing(true)}
-          onCompositionEnd={() => setComposing(false)}
-          placeholder="輸入訊息…  ``` 開啟程式碼區塊，Enter 送出，Shift+Enter 換行"
-          rows={3}
-          style={{
-            ...SHARED,
-            position: 'relative',
-            width: '100%',
-            minHeight: 96,
-            resize: 'none',
-            outline: 'none',
-            background: 'transparent',
-            color: 'inherit',
-            display: 'block',
-          }}
-        />
-      </div>
+        {/* Left of the divide is what this message will be -- what is attached
+            to it, which model answers it, whether the model may run code.
+            Right of it is the view and the act of sending. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 4,
+          paddingInline: 2, paddingBottom: 1,
+        }}>
+          <Tooltip title={capabilities?.vision
+            ? '附加檔案或圖片，圖片也可直接貼上'
+            : '附加文字或程式碼檔。這個模型沒有載入視覺投影檔，無法讀圖'}>
+            <Button type="text" className="composer-btn"
+                    icon={capabilities?.vision ? <PaperClipOutlined /> : <FileTextOutlined />}
+                    onClick={() => filePicker.current?.click()} />
+          </Tooltip>
 
-      {images.length > 0 && (
-        <Space wrap size={8} style={{ marginTop: 8 }}>
-          {images.map((src, index) => (
-            <div key={index} style={{ position: 'relative' }}>
-              <Image src={src} width={64} height={64}
-                     style={{ objectFit: 'cover', borderRadius: 6 }} />
-              <Button
-                size="small" type="primary" danger shape="circle" icon={<CloseOutlined />}
-                style={{ position: 'absolute', top: -6, right: -6, minWidth: 18, width: 18, height: 18 }}
-                onClick={() => onImagesChange(images.filter((_, i) => i !== index))}
-              />
-            </div>
-          ))}
-        </Space>
-      )}
+          <Tooltip title="插入程式碼區塊">
+            <Button type="text" className="composer-btn" icon={<CodeOutlined />}
+                    onClick={() => insertAtCaret('```\n', '\n```')} />
+          </Tooltip>
 
-      <input
-        ref={filePicker}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => { if (e.target.files) void attach(e.target.files); e.target.value = ''; }}
-      />
-
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: 8, marginTop: 8, flexWrap: 'wrap',
-      }}>
-        <Space size={4} wrap>
-          {/* The model belongs here, next to send: it is part of the act of
-              sending, not a page-level setting. */}
           <Select
             size="small"
             value={model}
             onChange={onModelChange}
             // Shrinks rather than forcing the row to wrap: on a narrow window a
             // 190px minimum pushed the send button onto its own line.
-            style={{ minWidth: 120, maxWidth: 220 }}
+            style={{ minWidth: 110, maxWidth: 210 }}
             popupMatchSelectWidth={240}
             variant="borderless"
             options={models.map((m) => ({
@@ -404,8 +418,8 @@ export default function Composer({
                 <Space size={6}>
                   <span style={{
                     width: 6, height: 6, borderRadius: '50%', display: 'inline-block',
-                    background: m.state === 'ready' ? '#5ccf8f'
-                      : m.state === 'starting' ? '#e0a83c' : LINE.strong,
+                    background: m.state === 'ready' ? ACCENT.ok
+                      : m.state === 'starting' ? ACCENT.warn : LINE.strong,
                   }} />
                   <span style={{ fontSize: 12 }}>{m.name || m.id}</span>
                 </Space>
@@ -413,27 +427,6 @@ export default function Composer({
             }))}
           />
 
-          <Tooltip title="插入程式碼區塊">
-            <Button type="text" size="small" icon={<CodeOutlined />}
-                    onClick={() => insertAtCaret('```\n', '\n```')} />
-          </Tooltip>
-          <Tooltip title={capabilities?.vision
-            ? '附加檔案或圖片，圖片也可直接貼上'
-            : '附加文字或程式碼檔。這個模型沒有載入視覺投影檔，無法讀圖'}>
-            <Button type="text" size="small"
-                    icon={capabilities?.vision ? <PaperClipOutlined /> : <FileTextOutlined />}
-                    onClick={() => filePicker.current?.click()} />
-          </Tooltip>
-          <Tooltip title={historyOpen ? '隱藏對話紀錄' : '顯示對話紀錄'}>
-            <Button type="text" size="small" icon={<HistoryOutlined />}
-                    onClick={onToggleHistory}
-                    style={{ opacity: historyOpen ? 1 : 0.45 }} />
-          </Tooltip>
-          <Tooltip title={settingsOpen ? '隱藏參數' : '顯示參數'}>
-            <Button type="text" size="small" icon={<SlidersOutlined />}
-                    onClick={onToggleSettings}
-                    style={{ opacity: settingsOpen ? 1 : 0.45 }} />
-          </Tooltip>
           {capabilities?.tools && (
             <Tooltip title={agent
               ? 'Agent 已開啟：模型可以自己寫 Python 執行、讀結果，再決定下一步'
@@ -442,42 +435,66 @@ export default function Composer({
                   changes what a reply costs and how long it takes, and a bare
                   glyph makes that a guess. */}
               <Button
-                type="text" size="small" icon={<CodeOutlined />}
+                type="text" className="composer-btn composer-btn-wide"
                 onClick={() => onAgentChange(!agent)}
-                style={{
-                  opacity: agent ? 1 : 0.5,
-                  color: agent ? ACCENT.ok : undefined,
-                  paddingInline: 6,
-                }}
+                style={{ opacity: agent ? 1 : 0.5, color: agent ? ACCENT.ok : undefined }}
               >
                 <span style={{ fontSize: 11, letterSpacing: 0.3 }}>Agent</span>
               </Button>
             </Tooltip>
           )}
-          <Tooltip title="開始新對話">
-            <Button type="text" size="small" icon={<ClearOutlined />}
-                    disabled={!canClear} onClick={onClear} />
-          </Tooltip>
+
+          <span style={{ flex: 1, minWidth: 8 }} />
 
           {/* Hint text is the first thing to go when space is short: it is a
               reminder, not a control. */}
           <Text className="composer-hint" style={{
-            fontSize: 10.5, opacity: 0.35, fontFamily: MONO, marginInlineStart: 4,
+            fontSize: 10.5, opacity: 0.35, fontFamily: MONO, marginInlineEnd: 4,
             whiteSpace: 'nowrap',
           }}>
             {inCode ? 'CODE ・ ENTER 換行 ・ TAB 縮排' : 'ENTER 送出 ・ SHIFT+ENTER 換行'}
           </Text>
-        </Space>
 
-        {streaming ? (
-          <Button danger icon={<StopOutlined />} onClick={onStop}>停止</Button>
-        ) : (
-          <Button type="primary" icon={<SendOutlined />} onClick={onSend}
-                  disabled={(!value.trim() && images.length === 0) || disabled}>
-            送出
-          </Button>
-        )}
+          <Tooltip title={historyOpen ? '隱藏對話紀錄' : '顯示對話紀錄'}>
+            <Button type="text" className="composer-btn" icon={<HistoryOutlined />}
+                    onClick={onToggleHistory}
+                    style={{ opacity: historyOpen ? 1 : 0.45 }} />
+          </Tooltip>
+
+          <Tooltip title={settingsOpen ? '隱藏參數' : '顯示參數'}>
+            <Button type="text" className="composer-btn" icon={<SlidersOutlined />}
+                    onClick={onToggleSettings}
+                    style={{ opacity: settingsOpen ? 1 : 0.45 }} />
+          </Tooltip>
+
+          <Tooltip title="開始新對話">
+            <Button type="text" className="composer-btn" icon={<ClearOutlined />}
+                    disabled={!canClear} onClick={onClear} />
+          </Tooltip>
+
+          {/* One square that changes job rather than two buttons that swap
+              places: the row keeps its geometry the moment a reply starts. */}
+          {streaming ? (
+            <Tooltip title="停止產生">
+              <Button danger type="primary" className="composer-send"
+                      icon={<StopOutlined />} onClick={onStop} />
+            </Tooltip>
+          ) : (
+            <Tooltip title={canSend ? '送出 (Enter)' : '先輸入訊息'}>
+              <Button type="primary" className="composer-send"
+                      icon={<SendOutlined />} onClick={onSend} disabled={!canSend} />
+            </Tooltip>
+          )}
+        </div>
       </div>
+
+      <input
+        ref={filePicker}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => { if (e.target.files) void attach(e.target.files); e.target.value = ''; }}
+      />
     </div>
   );
 }

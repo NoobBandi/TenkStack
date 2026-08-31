@@ -140,6 +140,16 @@ async def _ask(launcher: str) -> list[dict]:
     return devices
 
 
+def selector_templates() -> dict[str, tuple[str, str]]:
+    """Per backend, the variable that pins a card and the pattern it takes.
+
+    ("ONEAPI_DEVICE_SELECTOR", "level_zero:{}") and ("CUDA_VISIBLE_DEVICES",
+    "{}"). The pattern holds one index or a comma-joined list of them, which is
+    how a model is given more than one card.
+    """
+    return vendors.backend_selectors()
+
+
 def selector_vars() -> set[str]:
     """The environment variables this module writes into a model entry.
 

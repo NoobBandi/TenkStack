@@ -26,7 +26,7 @@ const STATE_COLOURS: Record<string, string> = {
 const EMPTY: ModelSpec = {
   id: '', name: '', description: '', model_file: '',
   ctx_size: 16384, n_gpu_layers: 99, ttl: 900, group: 'large', extra: '', mmproj: null,
-  device: '',
+  device: [] as string[],
 };
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
@@ -117,14 +117,32 @@ export default function Models() {
     fetchBackendDevices().then(setDevices).catch(() => setDevices([]));
   }, []);
 
-  /** Which device entry a model's stored environment corresponds to. Matched
+  /** Which device entries a model's stored environment corresponds to. Matched
    *  on the variables themselves rather than on a name written beside them, so
-   *  an entry edited by hand is still recognised. */
-  const deviceOf = (env?: Record<string, string>) => {
-    if (!env) return '';
-    const hit = devices.find((d) => Object.keys(d.env).length > 0
-      && Object.entries(d.env).every(([key, value]) => env[key] === value));
-    return hit ? `${hit.backend}:${hit.index}` : '';
+   *  an entry edited by hand is still recognised.
+   *
+   *  A selector can name more than one card -- `level_zero:0,1` is how a model
+   *  gets both -- so each card is tested against its own index inside whatever
+   *  the stored variable holds, rather than against the whole string. Matching
+   *  the whole string was why a two-card model came back as "unspecified": the
+   *  form then showed an empty select, and saving that empty select deleted
+   *  the selector and dropped the model to one card.
+   */
+  const deviceOf = (env?: Record<string, string>): string[] => {
+    if (!env) return [];
+    return devices
+      .filter((d) => Object.entries(d.env).every(([key, value]) => {
+        const stored = env[key];
+        if (stored === undefined) return false;
+        if (stored === value) return true;
+        // `level_zero:0` against a stored `level_zero:0,1`: same prefix, and
+        // this card's index is one of the listed ones.
+        const cut = value.lastIndexOf(':') + 1;
+        const prefix = value.slice(0, cut);
+        return stored.startsWith(prefix)
+          && stored.slice(prefix.length).split(',').includes(value.slice(cut));
+      }))
+      .map((d) => `${d.backend}:${d.index}`);
   };
 
   const onSave = async () => {
@@ -136,7 +154,7 @@ export default function Models() {
       await saveModel({
         ...values,
         name: values.name || values.id,
-        device: devices.length > 1 ? values.device ?? '' : undefined,
+        device: devices.length > 1 ? values.device ?? [] : undefined,
       });
       message.success('已寫入設定，llama-swap 會自動重載');
       setOpen(false);
@@ -585,8 +603,14 @@ export default function Models() {
               and the paginator's size list. */}
           {devices.length > 1 && (
             <Form.Item name="device" label="顯示卡"
-                       extra="只列出這台的 llama-server 真的看得到的卡。留空表示不指定。">
+                       extra="只列出這台的 llama-server 真的看得到的卡。留空表示不指定；選兩張以上要搭配 --split-mode。">
+              {/* Multiple, because one llama-server can hold more than one
+                  card and splitting a model across them is the reason to own
+                  a second. A single-value select could not represent that, so
+                  it showed nothing for a two-card model and then saved the
+                  nothing it showed. */}
               <Select
+                mode="multiple"
                 allowClear
                 placeholder="不指定"
                 options={devices.map((d) => ({
