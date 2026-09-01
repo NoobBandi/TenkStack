@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Descriptions, Drawer, Empty, Image, Space, Spin, Table, Tag, Typography,
+  Button, Descriptions, Drawer, Empty, Image, Segmented, Space, Spin, Switch, Table, Tag, Typography,
 } from 'antd';
 import { DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { fetchFsPeek, fsRawUrl, type FsEntry, type FsPeek } from '../api';
 import { MONO } from '../theme';
 import Markdown from './Markdown';
+import CodeView from './CodeView';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 /**
  * What one file is, without leaving the browser.
@@ -106,6 +107,10 @@ export default function FilePreview({ root, path, entries, index, onIndex, onClo
       open
       onClose={onClose}
       width="min(920px, 92vw)"
+      // The body becomes the height CodeMirror measures against. Without it the
+      // editor's `height: 100%` resolves against an auto-height parent and
+      // collapses to nothing -- the file loads, and shows as an empty strip.
+      styles={{ body: { display: 'flex', flexDirection: 'column', minHeight: 0 } }}
       title={
         <Space size={10}>
           <Text style={{ fontSize: 13, fontFamily: MONO }} ellipsis>{entry.name}</Text>
@@ -138,7 +143,9 @@ export default function FilePreview({ root, path, entries, index, onIndex, onClo
         </Space>
       }
     >
-      <Body entry={entry} src={src} peek={peek} loading={loading} />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Body entry={entry} src={src} peek={peek} loading={loading} />
+      </div>
     </Drawer>
   );
 }
@@ -194,21 +201,45 @@ function Body({ entry, src, peek, loading }: {
 }
 
 function TextBody({ peek, name }: { peek: Extract<FsPeek, { kind: 'text' }>; name: string }) {
-  // Markdown renders as itself; everything else goes through a fence, which is
-  // what puts it through highlight.js. Reusing the chat renderer rather than
-  // adding a second one means one set of styles and one code path.
-  const markdown = name.toLowerCase().endsWith('.md')
-    ? peek.text
-    : `\`\`\`${peek.language}\n${peek.text}\n\`\`\``;
+  // Two readers, because .md has two audiences. A README is prose and wants to
+  // be read as prose; the same file being edited is source and wants line
+  // numbers. Everything else has only ever been source.
+  const isMarkdown = name.toLowerCase().endsWith('.md');
+  const [asSource, setAsSource] = useState(!isMarkdown);
+  const [wrap, setWrap] = useState(false);
+
   return (
-    <>
-      {peek.truncated && (
-        <Paragraph type="warning" style={{ fontSize: 11 }}>
-          檔案 {bytes(peek.size)}，這裡只顯示開頭 256 KiB。
-        </Paragraph>
-      )}
-      <Markdown>{markdown}</Markdown>
-    </>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <Space size={10} style={{ marginBottom: 8, flexWrap: 'wrap' }}>
+        {isMarkdown && (
+          <Segmented
+            size="small"
+            value={asSource ? 'source' : 'rendered'}
+            onChange={(v) => setAsSource(v === 'source')}
+            options={[{ label: '排版', value: 'rendered' }, { label: '原始碼', value: 'source' }]}
+          />
+        )}
+        {asSource && (
+          <Space size={5}>
+            <Text type="secondary" style={{ fontSize: 11 }}>換行</Text>
+            <Switch size="small" checked={wrap} onChange={setWrap} />
+          </Space>
+        )}
+        {asSource && (
+          <Text type="secondary" style={{ fontSize: 11 }}>Ctrl+F 在檔案內搜尋</Text>
+        )}
+        {peek.truncated && (
+          <Text type="warning" style={{ fontSize: 11 }}>
+            檔案 {bytes(peek.size)}，只讀了開頭 256 KiB
+          </Text>
+        )}
+      </Space>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        {asSource
+          ? <CodeView text={peek.text} suffix={peek.language} wrap={wrap} />
+          : <Markdown>{peek.text}</Markdown>}
+      </div>
+    </div>
   );
 }
 
