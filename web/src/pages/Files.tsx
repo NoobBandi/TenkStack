@@ -5,9 +5,9 @@ import {
 } from 'antd';
 import type { InputRef } from 'antd';
 import {
-  AppstoreOutlined, DeleteOutlined, DownloadOutlined, DownOutlined,
-  DragOutlined, EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined,
-  MoreOutlined, PlusOutlined, QuestionCircleOutlined, QuestionOutlined, StopOutlined,
+  AppstoreOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, DragOutlined,
+  EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined, MoreOutlined,
+  PartitionOutlined, PlusOutlined, QuestionCircleOutlined, QuestionOutlined, StopOutlined,
   UnorderedListOutlined, UploadOutlined,
 } from '@ant-design/icons';
 import {
@@ -18,6 +18,7 @@ import {
 import FilePreview from '../components/FilePreview';
 import FolderPicker from '../components/FolderPicker';
 import PathBar from '../components/PathBar';
+import DirTree from '../components/DirTree';
 import { MONO } from '../theme';
 
 const { Text } = Typography;
@@ -121,6 +122,14 @@ export default function Files() {
   // preview goes back to covering it. Watched rather than read once, because a
   // window gets resized and a layout that only reads on mount is wrong after.
   const [wide, setWide] = useState(() => window.innerWidth >= 1100);
+  // Three panes need more room than two. The tree is the one that folds first:
+  // it is the pane you can most easily do without, since the path bar still
+  // goes up and the listing still goes down.
+  const [roomy, setRoomy] = useState(() => window.innerWidth >= 1500);
+  const [treeOpen, setTreeOpen] = useState(true);
+  // Bumped when a directory appears or disappears, so the tree re-reads instead
+  // of showing a branch that no longer matches the disk.
+  const [treeToken, setTreeToken] = useState(0);
   const [paneSizes, setPaneSizes] = useState<(number | string)[]>(['58%', '42%']);
   const [selected, setSelected] = useState<string[]>([]);
   const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
@@ -170,6 +179,15 @@ export default function Files() {
     }
   }, [message]);
 
+  // After anything that adds, removes or renames a directory. The tree caches
+  // what it has read, so a listing refresh alone would leave it describing a
+  // shape the disk no longer has -- and navigation must not trigger this, or
+  // the tree would collapse and re-read on every step.
+  const reload = useCallback(() => {
+    void load(root, path, hidden, query);
+    setTreeToken((n) => n + 1);
+  }, [load, root, path, hidden, query]);
+
   useEffect(() => {
     fetchFsRoots().then((d) => setRoots(d.roots)).catch(() => undefined);
   }, []);
@@ -197,7 +215,10 @@ export default function Files() {
   // deliberate switch to the grid should survive stepping into a subfolder.
   const visual = looksVisual(entries);
   useEffect(() => {
-    const onResize = () => setWide(window.innerWidth >= 1100);
+    const onResize = () => {
+      setWide(window.innerWidth >= 1100);
+      setRoomy(window.innerWidth >= 1500);
+    };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -205,6 +226,7 @@ export default function Files() {
   // The preview has two homes and must be in exactly one: a pane beside the
   // listing when there is width, a drawer over it when there is not.
   const paneOpen = previewing !== null && wide;
+  const treePane = roomy && treeOpen;
   const drawerOpen = previewing !== null && !wide;
 
   const gridding = view === 'grid' && visual;
@@ -321,7 +343,7 @@ export default function Files() {
     try {
       await createFsFolder(root, path, name);
       setNewFolder(null);
-      void load(root, path, hidden, query);
+      reload();
     } catch (error) {
       message.error((error as Error).message);
     }
@@ -360,7 +382,7 @@ export default function Files() {
         { content: `${failed.length} 項失敗 — ${failed[0]}`, duration: 6 },
       );
     }
-    void load(root, path, hidden, query);
+    reload();
   };
 
   const onRename = async () => {
@@ -370,7 +392,7 @@ export default function Files() {
     try {
       await renameFsEntry(root, path, renaming.entry.name, to);
       setRenaming(null);
-      void load(root, path, hidden, query);
+      reload();
     } catch (error) {
       message.error((error as Error).message);
     }
@@ -579,6 +601,16 @@ export default function Files() {
                 ]}
               />
             )}
+            {roomy && (
+              <Tooltip title={treeOpen ? '隱藏目錄樹' : '顯示目錄樹'}>
+                <Button
+                  size="small"
+                  type={treeOpen ? 'default' : 'text'}
+                  icon={<PartitionOutlined />}
+                  onClick={() => setTreeOpen((v) => !v)}
+                />
+              </Tooltip>
+            )}
             <Button size="small" onClick={() => void load(root, path, hidden, query)}>重新整理</Button>
             <Tooltip title="快捷鍵（?）">
               <Button
@@ -677,6 +709,16 @@ export default function Files() {
               see. Split only when there is room; below that width the drawer is
               still the better of two bad options. */}
           <Splitter style={{ minHeight: 240 }} onResize={setPaneSizes}>
+            {treePane && (
+              <Splitter.Panel defaultSize={220} min={160} max={380} collapsible>
+                <DirTree
+                  root={root}
+                  path={path}
+                  refreshToken={treeToken}
+                  onNavigate={(next) => { setPath(next); setSelected([]); }}
+                />
+              </Splitter.Panel>
+            )}
             <Splitter.Panel min={280}>
               <div style={{ paddingInlineEnd: paneOpen ? 4 : 0 }}>
               {gridding ? (
