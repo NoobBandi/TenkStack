@@ -147,7 +147,17 @@ export default function SystemStats(
         <Dial
           title="CPU"
           percent={cpu?.percent ?? null}
-          reading={`${cpu?.cores ?? '—'} 執行緒`}
+          // Cores in use out of cores present, to match how memory and disk
+          // read. The thread count alone was the one tile whose second line
+          // described the hardware rather than the load on it, and that gap
+          // matters here more than elsewhere: llama.cpp's SYCL backend spins a
+          // thread waiting on the GPU, so `top` shows 100% while the machine is
+          // at 7%. "1.1/16 核" says which of those two numbers this is.
+          reading={
+            cpu && cpu.percent !== null && cpu.cores
+              ? `${(cpu.percent * cpu.cores / 100).toFixed(1)}/${cpu.cores} 核`
+              : `${cpu?.cores ?? '—'} 核`
+          }
           note={`負載 ${cpu?.load?.join(' / ') ?? '—'}`}
           noteTitle="1、5、15 分鐘的平均可執行行程數。超過執行緒數就代表有東西在排隊。"
         />
