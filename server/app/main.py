@@ -812,6 +812,18 @@ async def read_activity(limit: int = 400, model: str | None = None):
     return activity.recent(limit=max(1, min(limit, 2000)), model_id=model)
 
 
+@app.get("/api/models/last-used")
+async def read_last_used():
+    """The model id of the most recent request, for pages that must name one.
+
+    The connections page hands out config files that name a model, and naming
+    whichever entry sorts first was wrong in both directions: not the model the
+    reader is using, and liable to change when the config is reordered. It asks
+    for the running model first and falls back to this when the box is cold.
+    """
+    return {"model": activity.last_used()}
+
+
 @app.get("/api/runtime")
 async def read_runtime():
     """Every container on this machine, paired with the cards it holds."""

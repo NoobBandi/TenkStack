@@ -74,3 +74,30 @@ def recent(limit: int = 400, model_id: str | None = None) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def last_used() -> str | None:
+    """The model id of the most recent request, or None if there is no history.
+
+    For the connections page, which hands out a config file naming one model.
+    Naming whichever entry happens to sort first is wrong twice over: it is not
+    what the reader is using, and it changes when the config is reordered. The
+    running model is the right answer while something is loaded; this is the
+    fallback for a cold box, and it is a better guess than the first entry
+    because it is the one that was last worth loading.
+    """
+    if not paths.LLAMA_SWAP_ACTIVITY.exists():
+        return None
+    try:
+        uri = f"file:{paths.LLAMA_SWAP_ACTIVITY}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT model_id FROM activity "
+                "WHERE model_id IS NOT NULL AND model_id != '' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.debug("activity unavailable: %s", exc)
+        return None
+    return row["model_id"] if row else None

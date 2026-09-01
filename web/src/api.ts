@@ -218,6 +218,10 @@ export const webRead = (url: string, query = '') =>
 export const searchAvailable = () =>
   get<{ available: boolean }>('/search/available');
 export const fetchModels = () => get<ModelInfo[]>('/models');
+/** The model id of the most recent request, or null on a box with no history.
+ *  For naming a model in a config file when none is loaded. */
+export const fetchLastUsedModel = () =>
+  get<{ model: string | null }>('/models/last-used').then((r) => r.model);
 
 export async function unloadAll(): Promise<boolean> {
   const res = await fetch(`${BASE}/models/unload`, { method: 'POST' });

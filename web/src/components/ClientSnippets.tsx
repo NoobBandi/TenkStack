@@ -7,7 +7,7 @@ import ini from 'highlight.js/lib/languages/ini';
 import json from 'highlight.js/lib/languages/json';
 import python from 'highlight.js/lib/languages/python';
 import powershell from 'highlight.js/lib/languages/powershell';
-import { fetchModels, type Endpoint, type ModelInfo } from '../api';
+import { fetchLastUsedModel, fetchModels, type Endpoint, type ModelInfo } from '../api';
 import { LINE, MONO } from '../theme';
 
 const { Paragraph, Text } = Typography;
@@ -113,7 +113,15 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
   // the window.
   const [shell, setShell] = useState<'linux' | 'windows'>('linux');
 
-  useEffect(() => { fetchModels().then(setModels).catch(() => undefined); }, []);
+  // The id of the last request in llama-swap's history, for when nothing is
+  // loaded. Fetched alongside the list because it is only ever needed as that
+  // list's fallback.
+  const [lastUsed, setLastUsed] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchModels().then(setModels).catch(() => undefined);
+    fetchLastUsedModel().then(setLastUsed).catch(() => undefined);
+  }, []);
 
   const copy = useCallback(async (text: string) => {
     try {
@@ -133,7 +141,13 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
   const origin = apiBase
     ? `${apiBase.scheme}://${hostname}:${apiBase.port}`
     : 'http://<host>:8000';
-  const model = models[0];
+  // What these configs should name: whatever is loaded, because that is what a
+  // request sent right now would reach. Falling back to the last model used
+  // rather than to models[0] -- the first entry is an artefact of config order,
+  // and on a box that has been used it is rarely the one anybody wants.
+  const model = models.find((m) => m.running)
+    ?? models.find((m) => m.id === lastUsed)
+    ?? models[0];
   const modelId = model?.id ?? '<model-id>';
   const modelName = model?.name || modelId;
   const vision = model?.capabilities?.vision ?? false;
