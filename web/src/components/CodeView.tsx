@@ -19,13 +19,19 @@
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { EditorState, type Extension } from '@codemirror/state';
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import {
+  EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
+  drawSelection, dropCursor,
+} from '@codemirror/view';
+import {
+  defaultKeymap, history, historyKeymap, indentWithTab, insertNewlineAndIndent,
+} from '@codemirror/commands';
 import {
   HighlightStyle, syntaxHighlighting, bracketMatching,
   foldGutter, foldKeymap, indentOnInput, StreamLanguage,
 } from '@codemirror/language';
 import { searchKeymap, highlightSelectionMatches, search } from '@codemirror/search';
+import { closeBrackets, closeBracketsKeymap, autocompletion } from '@codemirror/autocomplete';
 import { tags as t } from '@lezer/highlight';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
@@ -110,7 +116,12 @@ const highlightStyle = HighlightStyle.define([
 const theme = EditorView.theme({
   '&': { fontSize: '12px', backgroundColor: 'transparent', height: '100%' },
   '.cm-scroller': { fontFamily: MONO, lineHeight: '1.55', overflow: 'auto' },
-  '.cm-content': { caretColor: 'transparent' },
+  // No caret rule here. It used to hide the caret for the read-only preview,
+  // and the editable branch could not reliably override it: both rules target
+  // .cm-content with equal specificity, so which one wins is decided by the
+  // order the stylesheets were injected rather than the order the extensions
+  // were added. The caret is now settled once, in the branch that knows.
+  '.cm-cursor, .cm-dropCursor': { borderLeftWidth: '2px' },
   '.cm-gutters': {
     backgroundColor: 'transparent',
     borderRight: `1px solid ${LINE.faint}`,
@@ -168,12 +179,39 @@ export default function CodeView({ text, suffix, wrap = false, onChange }: {
       list.push(EditorView.updateListener.of((u) => {
         if (u.docChanged) changed.current?.(u.state.doc.toString());
       }));
-      list.push(EditorView.theme({ '.cm-content': { caretColor: '#82aaff' } }));
+      // drawSelection replaces the browser's caret and selection with ones
+      // CodeMirror draws itself. Needed rather than cosmetic: the native caret
+      // in a dark editor inherits a colour from somewhere up the antd tree and
+      // is routinely invisible, and .cm-selectionBackground -- already in the
+      // theme above -- is drawSelection's element and does nothing without it.
+      // dropCursor is the drag-and-drop counterpart, and its absence shows as a
+      // drop landing somewhere the eye never predicted.
+      // A real editor's minimum: Enter keeps the indent of the line it left,
+      // Tab indents rather than moving focus out of the editor, and closing
+      // brackets and quotes are inserted with their opener. Left out of the
+      // read-only branch, where all three would be keys that do nothing.
+      list.push(
+        closeBrackets(),
+        autocompletion({ defaultKeymap: false }),
+        keymap.of([...closeBracketsKeymap, indentWithTab, {
+          key: 'Enter', run: insertNewlineAndIndent,
+        }]),
+      );
+      list.push(drawSelection(), dropCursor(), EditorView.theme({
+        '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#82aaff' },
+        // Dimmed rather than hidden when focus is elsewhere, so a click on the
+        // save button does not make the editor look like it lost the cursor.
+        '&:not(.cm-focused) .cm-cursor': { display: 'block', opacity: 0.35 },
+      }));
     } else {
       // Read-only rather than merely non-editable: editable:false alone still
       // leaves the document mutable through the API, and the preview is showing
       // a truncated prefix that must never look like something to save.
-      list.push(EditorState.readOnly.of(true), EditorView.editable.of(false));
+      list.push(
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false),
+        EditorView.theme({ '.cm-content': { caretColor: 'transparent' } }),
+      );
     }
     if (wrap) list.push(EditorView.lineWrapping);
     const lang = languageFor(suffix);
