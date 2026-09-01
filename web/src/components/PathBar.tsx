@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Input, Tooltip, Typography } from 'antd';
+import { Dropdown, Input, Tooltip, Typography } from 'antd';
 import type { InputRef } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import { MONO } from '../theme';
@@ -43,6 +43,13 @@ export default function PathBar({
 }: Props) {
   const segments = path ? path.split('/') : [];
   const absolute = path ? `${rootPath}/${path}` : rootPath;
+  // Four is where a path stops being readable at a glance in the width this bar
+  // gets. Counted rather than measured: measuring would need a layout pass per
+  // render to answer a question whose answer barely changes.
+  const MAX_SEGMENTS = 4;
+  const overflow = Math.max(0, segments.length - MAX_SEGMENTS);
+  const hidden = segments.slice(0, overflow);
+  const shown = segments.slice(overflow);
   const [draft, setDraft] = useState(absolute);
   const field = useRef<InputRef>(null);
 
@@ -87,7 +94,30 @@ export default function PathBar({
           {rootPath}
         </a>
       </Tooltip>
-      {segments.map((segment, i) => {
+      {/* Deep paths collapse from the left, which is where the least useful
+          segments are: you know which root you are in, and the tail is what
+          says where you are now. An ellipsis holds the hidden span and opens a
+          menu of it rather than dropping it -- the segments are still the way
+          to go up, and losing them would make a deep directory a dead end. */}
+      {hidden.length > 0 && (
+        <span style={{ display: 'flex', alignItems: 'center' }}>
+          <Text style={{ opacity: 0.3 }}>/</Text>
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: hidden.map((segment, i) => ({
+                key: segment + i,
+                label: segment,
+                onClick: () => onSegment(segments.slice(0, i + 1).join('/')),
+              })),
+            }}
+          >
+            <a style={{ opacity: 0.55, padding: '0 2px' }}>…</a>
+          </Dropdown>
+        </span>
+      )}
+      {shown.map((segment, si) => {
+        const i = si + hidden.length;
         const last = i === segments.length - 1;
         const relative = segments.slice(0, i + 1).join('/');
         return (

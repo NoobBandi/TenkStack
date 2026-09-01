@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Dropdown, Empty, Input, Modal,
-  Progress, Segmented, Space, Switch, Table, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Empty, Input, Modal, Progress, Segmented,
+  Space, Splitter, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import type { InputRef } from 'antd';
 import {
@@ -117,6 +117,11 @@ export default function Files() {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [view, setView] = useState<'list' | 'grid'>('list');
+  // Split below this and the listing is narrower than its own columns, so the
+  // preview goes back to covering it. Watched rather than read once, because a
+  // window gets resized and a layout that only reads on mount is wrong after.
+  const [wide, setWide] = useState(() => window.innerWidth >= 1100);
+  const [paneSizes, setPaneSizes] = useState<(number | string)[]>(['58%', '42%']);
   const [selected, setSelected] = useState<string[]>([]);
   const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
   // The names a move applies to. One entry from a row menu, several from the
@@ -191,6 +196,17 @@ export default function Files() {
   // Offered where there are pictures, but never taken away once chosen: a
   // deliberate switch to the grid should survive stepping into a subfolder.
   const visual = looksVisual(entries);
+  useEffect(() => {
+    const onResize = () => setWide(window.innerWidth >= 1100);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // The preview has two homes and must be in exactly one: a pane beside the
+  // listing when there is width, a drawer over it when there is not.
+  const paneOpen = previewing !== null && wide;
+  const drawerOpen = previewing !== null && !wide;
+
   const gridding = view === 'grid' && visual;
 
   const up = () => {
@@ -654,187 +670,215 @@ export default function Files() {
             </Space>
           )}
 
-          {gridding ? (
-            <Grid entries={entries} root={root} path={path} onOpen={open} />
-          ) : (
-          <Table<FsEntry>
-            size="small"
-            loading={loading}
-            dataSource={entries}
-            rowKey={(row) => `${row.kind}:${row.name}`}
-            rowSelection={{
-              selectedRowKeys: selected,
-              onChange: (keys) => setSelected(keys as string[]),
-              // Devices and sockets have no operation that would apply to them.
-              getCheckboxProps: (row) => ({ disabled: row.kind === 'other' }),
-              columnWidth: 36,
-            }}
-            pagination={false}
-            // Rows are drawn only where they are looked at. Three thousand
-            // ordinary antd rows is a second of layout and a scrollbar that
-            // stutters; virtual needs every column to carry a width and an x
-            // for the total, which is the whole cost of it.
-            virtual={entries.length > 200}
-            // 36 selection + 400 name + 150 size + 130 modified + 78 actions.
-            scroll={{ y: 460, x: 794 }}
-            locale={{
-              emptyText: (
-                <Empty
-                  description={
-                    query
-                      ? `沒有符合「${query}」的項目`
-                      : writable ? '空的 — 拖檔案進來，或用右上角的「新建」' : '空的'
-                  }
-                  image={Empty.PRESENTED_IMAGE_SIMPLE}
-                />
-              ),
-            }}
-            columns={[
-              {
-                title: '名稱',
-                // A width is required for the virtual renderer; the sum of the
-                // widths is the `x` above, so nothing overflows or leaves a gap.
-                width: 400,
-                render: (_, row) => (
-                  <Space size={7}>
-                    {row.kind === 'dir'
-                      ? <FolderOutlined style={{ fontSize: 11, opacity: 0.5 }} />
-                      : row.kind === 'other'
-                        ? <QuestionOutlined style={{ fontSize: 11, opacity: 0.35 }} />
-                        : <span style={{ display: 'inline-block', width: 11 }} />}
-                    {row.kind === 'other' ? (
-                      <Text
-                        style={{ fontSize: 12, fontFamily: MONO, opacity: 0.55 }}
-                      >
-                        {row.name}
-                      </Text>
-                    ) : (
-                      <a
-                        style={{
-                          fontSize: 12, fontFamily: MONO,
-                          opacity: row.hidden ? 0.6 : 1,
-                        }}
-                        onClick={() => open(row)}
-                      >
-                        {row.name}
-                      </a>
-                    )}
-                    {row.partial && <Tag color="gold" style={{ fontSize: 10 }}>未完成</Tag>}
-                    {row.kind === 'other' && (
-                      <Tooltip title="裝置、通訊端或斷掉的連結。列出來是為了跟 ls 一致，但打不開。">
-                        <Tag style={{ fontSize: 10 }}>特殊</Tag>
-                      </Tooltip>
-                    )}
-                  </Space>
-                ),
-              },
-              {
-                title: '大小',
-                width: 150,
-                align: 'right',
-                render: (_, row) => {
-                  if (row.kind !== 'dir') {
-                    return (
-                      <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.65 }}>
-                        {bytes(row.size ?? 0)}
-                      </Text>
-                    );
-                  }
-                  // Asked for, not volunteered. Computing this for every folder
-                  // while listing is what made the old version walk the entire
-                  // disk on each navigation step.
-                  const measured = sizes[at(row.name)];
-                  if (measured === 'working') {
-                    return <Text type="secondary" style={{ fontSize: 11 }}>計算中…</Text>;
-                  }
-                  if (measured) {
-                    return (
-                      <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.65 }}>
-                        {measured.files} 項 ・ {bytes(measured.bytes)}
-                      </Text>
-                    );
-                  }
-                  return (
-                    <Button
-                      size="small" type="text"
-                      style={{ fontSize: 11, opacity: 0.5 }}
-                      onClick={() => void measure(row.name)}
-                    >
-                      計算大小
-                    </Button>
-                  );
-                },
-              },
-              {
-                title: '修改時間',
-                width: 130,
-                align: 'right',
-                render: (_, row) => (
-                  <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.45 }}>
-                    {when(row.modified)}
-                  </Text>
-                ),
-              },
-              {
-                title: '',
-                width: 78,
-                align: 'right',
-                render: (_, row) => (
-                  <Space size={0}>
-                    {row.kind === 'file' && !row.partial && (
-                      <Tooltip title="下載">
-                        {/* An anchor rather than a fetch: the browser's own
-                            download manager handles a 20 GB file, and nothing
-                            has to hold it in memory to offer it. */}
+          {/* Listing beside the preview rather than under a drawer that covers
+              it. Looking at a file is nearly always a question about which file,
+              and a panel that hides the directory answers it with the directory
+              out of sight -- the arrows step through a list you can no longer
+              see. Split only when there is room; below that width the drawer is
+              still the better of two bad options. */}
+          <Splitter style={{ minHeight: 240 }} onResize={setPaneSizes}>
+            <Splitter.Panel min={280}>
+              <div style={{ paddingInlineEnd: paneOpen ? 4 : 0 }}>
+              {gridding ? (
+                <Grid entries={entries} root={root} path={path} onOpen={open} />
+              ) : (
+              <Table<FsEntry>
+                size="small"
+                loading={loading}
+                dataSource={entries}
+                rowKey={(row) => `${row.kind}:${row.name}`}
+                rowSelection={{
+                  selectedRowKeys: selected,
+                  onChange: (keys) => setSelected(keys as string[]),
+                  // Devices and sockets have no operation that would apply to them.
+                  getCheckboxProps: (row) => ({ disabled: row.kind === 'other' }),
+                  columnWidth: 36,
+                }}
+                pagination={false}
+                // Rows are drawn only where they are looked at. Three thousand
+                // ordinary antd rows is a second of layout and a scrollbar that
+                // stutters; virtual needs every column to carry a width and an x
+                // for the total, which is the whole cost of it.
+                virtual={entries.length > 200}
+                // 36 selection + 400 name + 150 size + 130 modified + 78 actions.
+                scroll={{ y: 460, x: 794 }}
+                locale={{
+                  emptyText: (
+                    <Empty
+                      description={
+                        query
+                          ? `沒有符合「${query}」的項目`
+                          : writable ? '空的 — 拖檔案進來，或用右上角的「新建」' : '空的'
+                      }
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    />
+                  ),
+                }}
+                columns={[
+                  {
+                    title: '名稱',
+                    // A width is required for the virtual renderer; the sum of the
+                    // widths is the `x` above, so nothing overflows or leaves a gap.
+                    width: 400,
+                    render: (_, row) => (
+                      <Space size={7}>
+                        {row.kind === 'dir'
+                          ? <FolderOutlined style={{ fontSize: 11, opacity: 0.5 }} />
+                          : row.kind === 'other'
+                            ? <QuestionOutlined style={{ fontSize: 11, opacity: 0.35 }} />
+                            : <span style={{ display: 'inline-block', width: 11 }} />}
+                        {row.kind === 'other' ? (
+                          <Text
+                            style={{ fontSize: 12, fontFamily: MONO, opacity: 0.55 }}
+                          >
+                            {row.name}
+                          </Text>
+                        ) : (
+                          <a
+                            style={{
+                              fontSize: 12, fontFamily: MONO,
+                              opacity: row.hidden ? 0.6 : 1,
+                            }}
+                            onClick={() => open(row)}
+                          >
+                            {row.name}
+                          </a>
+                        )}
+                        {row.partial && <Tag color="gold" style={{ fontSize: 10 }}>未完成</Tag>}
+                        {row.kind === 'other' && (
+                          <Tooltip title="裝置、通訊端或斷掉的連結。列出來是為了跟 ls 一致，但打不開。">
+                            <Tag style={{ fontSize: 10 }}>特殊</Tag>
+                          </Tooltip>
+                        )}
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: '大小',
+                    width: 150,
+                    align: 'right',
+                    render: (_, row) => {
+                      if (row.kind !== 'dir') {
+                        return (
+                          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.65 }}>
+                            {bytes(row.size ?? 0)}
+                          </Text>
+                        );
+                      }
+                      // Asked for, not volunteered. Computing this for every folder
+                      // while listing is what made the old version walk the entire
+                      // disk on each navigation step.
+                      const measured = sizes[at(row.name)];
+                      if (measured === 'working') {
+                        return <Text type="secondary" style={{ fontSize: 11 }}>計算中…</Text>;
+                      }
+                      if (measured) {
+                        return (
+                          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.65 }}>
+                            {measured.files} 項 ・ {bytes(measured.bytes)}
+                          </Text>
+                        );
+                      }
+                      return (
                         <Button
-                          size="small" type="text" icon={<DownloadOutlined />}
-                          href={fsRawUrl(root, path, row.name, true)}
-                        />
-                      </Tooltip>
-                    )}
-                    <Dropdown
-                      trigger={['click']}
-                      disabled={row.kind === 'other'}
-                      menu={{
-                        items: [
-                          {
-                            key: 'rename',
-                            label: '重新命名',
-                            icon: <EditOutlined />,
-                            disabled: !writable || row.partial,
-                            onClick: () => setRenaming({ entry: row, to: row.name }),
-                          },
-                          {
-                            key: 'move',
-                            label: '移動到…',
-                            icon: <DragOutlined />,
-                            disabled: !writable || row.partial,
-                            onClick: () => setMoving([row.name]),
-                          },
-                          { type: 'divider' },
-                          {
-                            key: 'delete',
-                            label: '刪除',
-                            icon: <DeleteOutlined />,
-                            danger: true,
-                            disabled: !writable,
-                            onClick: () => confirmDelete([row]),
-                          },
-                        ],
-                      }}
-                    >
-                      <Button size="small" type="text" icon={<MoreOutlined />} />
-                    </Dropdown>
-                  </Space>
-                ),
-              },
-            ]}
-          />
-          )}
+                          size="small" type="text"
+                          style={{ fontSize: 11, opacity: 0.5 }}
+                          onClick={() => void measure(row.name)}
+                        >
+                          計算大小
+                        </Button>
+                      );
+                    },
+                  },
+                  {
+                    title: '修改時間',
+                    width: 130,
+                    align: 'right',
+                    render: (_, row) => (
+                      <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.45 }}>
+                        {when(row.modified)}
+                      </Text>
+                    ),
+                  },
+                  {
+                    title: '',
+                    width: 78,
+                    align: 'right',
+                    render: (_, row) => (
+                      <Space size={0}>
+                        {row.kind === 'file' && !row.partial && (
+                          <Tooltip title="下載">
+                            {/* An anchor rather than a fetch: the browser's own
+                                download manager handles a 20 GB file, and nothing
+                                has to hold it in memory to offer it. */}
+                            <Button
+                              size="small" type="text" icon={<DownloadOutlined />}
+                              href={fsRawUrl(root, path, row.name, true)}
+                            />
+                          </Tooltip>
+                        )}
+                        <Dropdown
+                          trigger={['click']}
+                          disabled={row.kind === 'other'}
+                          menu={{
+                            items: [
+                              {
+                                key: 'rename',
+                                label: '重新命名',
+                                icon: <EditOutlined />,
+                                disabled: !writable || row.partial,
+                                onClick: () => setRenaming({ entry: row, to: row.name }),
+                              },
+                              {
+                                key: 'move',
+                                label: '移動到…',
+                                icon: <DragOutlined />,
+                                disabled: !writable || row.partial,
+                                onClick: () => setMoving([row.name]),
+                              },
+                              { type: 'divider' },
+                              {
+                                key: 'delete',
+                                label: '刪除',
+                                icon: <DeleteOutlined />,
+                                danger: true,
+                                disabled: !writable,
+                                onClick: () => confirmDelete([row]),
+                              },
+                            ],
+                          }}
+                        >
+                          <Button size="small" type="text" icon={<MoreOutlined />} />
+                        </Dropdown>
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+              )}
+              </div>
+            </Splitter.Panel>
+            {paneOpen && (
+              // Collapsible because the preview is often wanted for one file and
+              // then in the way for the next ten; a collapse keeps the split
+              // where it was set instead of making it a drag each time.
+              <Splitter.Panel min={320} size={paneSizes[1]} collapsible>
+                <FilePreview
+                  as="pane"
+                  root={root}
+                  path={path}
+                  entries={entries}
+                  index={previewing as number}
+                  onIndex={setPreviewing}
+                  onClose={() => setPreviewing(null)}
+                />
+              </Splitter.Panel>
+            )}
+          </Splitter>
         </div>
       </Card>
 
-      {previewing !== null && (
+      {drawerOpen && (
         <FilePreview
           root={root}
           path={path}

@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Descriptions, Drawer, Empty, Image, Segmented, Space, Spin, Switch, Table, Tag, Typography,
 } from 'antd';
-import { DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { CloseOutlined, DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { fetchFsPeek, fsRawUrl, type FsEntry, type FsPeek } from '../api';
-import { MONO } from '../theme';
+import { LINE, MONO } from '../theme';
 import Markdown from './Markdown';
 import CodeView from './CodeView';
 
@@ -55,9 +55,16 @@ interface Props {
   index: number;
   onIndex: (index: number) => void;
   onClose: () => void;
+  /** 'pane' sits beside the listing and leaves it visible; 'drawer' covers it.
+   *  A pane is the better reading -- you can see where the file is while you
+   *  look at it, and the arrows step through a list you can still see -- but it
+   *  needs width to be worth having, so a narrow window gets the drawer. */
+  as?: 'pane' | 'drawer';
 }
 
-export default function FilePreview({ root, path, entries, index, onIndex, onClose }: Props) {
+export default function FilePreview(
+  { root, path, entries, index, onIndex, onClose, as = 'drawer' }: Props,
+) {
   const entry = entries[index];
   const [peek, setPeek] = useState<FsPeek | null>(null);
   const [loading, setLoading] = useState(false);
@@ -102,6 +109,68 @@ export default function FilePreview({ root, path, entries, index, onIndex, onClo
   if (!entry) return null;
   const src = fsRawUrl(root, path, entry.name);
 
+  // Title and controls are the same either way; only the frame around them
+  // differs, so they are built once rather than written twice.
+  const title = (
+    <Space size={10} style={{ minWidth: 0 }}>
+      <Text style={{ fontSize: 13, fontFamily: MONO }} ellipsis>{entry.name}</Text>
+      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, whiteSpace: 'nowrap' }}>
+        {bytes(entry.size ?? 0)}
+      </Text>
+    </Space>
+  );
+
+  const controls = (
+    <Space size={4}>
+      <Button
+        size="small" type="text" icon={<LeftOutlined />}
+        disabled={at <= 0} onClick={() => step(-1)}
+      />
+      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+        {at >= 0 ? `${at + 1} / ${stops.length}` : ''}
+      </Text>
+      <Button
+        size="small" type="text" icon={<RightOutlined />}
+        disabled={at < 0 || at >= stops.length - 1} onClick={() => step(1)}
+      />
+      {/* A link rather than a fetch: the browser's own download manager
+          handles a 20 GB file, and nothing has to hold it in memory. */}
+      <Button
+        size="small" icon={<DownloadOutlined />} style={{ marginLeft: 8 }}
+        href={fsRawUrl(root, path, entry.name, true)}
+      >
+        下載
+      </Button>
+      {as === 'pane' && (
+        <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} />
+      )}
+    </Space>
+  );
+
+  const body = (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <Body entry={entry} src={src} peek={peek} loading={loading} />
+    </div>
+  );
+
+  if (as === 'pane') {
+    return (
+      <div style={{
+        height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column',
+        paddingInlineStart: 12,
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
+          paddingBottom: 8, borderBottom: `1px solid ${LINE.faint}`,
+        }}>
+          {title}
+          <div style={{ marginInlineStart: 'auto' }}>{controls}</div>
+        </div>
+        {body}
+      </div>
+    );
+  }
+
   return (
     <Drawer
       open
@@ -111,41 +180,10 @@ export default function FilePreview({ root, path, entries, index, onIndex, onClo
       // editor's `height: 100%` resolves against an auto-height parent and
       // collapses to nothing -- the file loads, and shows as an empty strip.
       styles={{ body: { display: 'flex', flexDirection: 'column', minHeight: 0 } }}
-      title={
-        <Space size={10}>
-          <Text style={{ fontSize: 13, fontFamily: MONO }} ellipsis>{entry.name}</Text>
-          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-            {bytes(entry.size ?? 0)}
-          </Text>
-        </Space>
-      }
-      extra={
-        <Space size={4}>
-          <Button
-            size="small" type="text" icon={<LeftOutlined />}
-            disabled={at <= 0} onClick={() => step(-1)}
-          />
-          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-            {at >= 0 ? `${at + 1} / ${stops.length}` : ''}
-          </Text>
-          <Button
-            size="small" type="text" icon={<RightOutlined />}
-            disabled={at < 0 || at >= stops.length - 1} onClick={() => step(1)}
-          />
-          {/* A link rather than a fetch: the browser's own download manager
-              handles a 20 GB file, and nothing has to hold it in memory. */}
-          <Button
-            size="small" icon={<DownloadOutlined />} style={{ marginLeft: 8 }}
-            href={fsRawUrl(root, path, entry.name, true)}
-          >
-            下載
-          </Button>
-        </Space>
-      }
+      title={title}
+      extra={controls}
     >
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <Body entry={entry} src={src} peek={peek} loading={loading} />
-      </div>
+      {body}
     </Drawer>
   );
 }
