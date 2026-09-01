@@ -1364,6 +1364,27 @@ const fsQuery = (root: string, path: string, name?: string) =>
 
 export const fetchFsRoots = () => get<{ roots: FsRoot[] }>('/fs/roots');
 
+/** A whole text file, for the editor. Distinct from fetchFsPeek, which returns
+ *  a truncated head: saving a prefix back would delete everything after it. */
+export interface FsText {
+  text: string;
+  size: number;
+  /** Passed back on save so a file changed underneath the editor is refused
+   *  rather than silently overwritten. */
+  mtime: number;
+  language: string;
+  writable: boolean;
+}
+
+export const fetchFsText = (root: string, path: string, name: string) =>
+  get<FsText>(`/fs/text?${fsQuery(root, path, name)}`);
+
+export const saveFsText = (
+  root: string, path: string, name: string, text: string, mtime: number | null,
+) => send<{ ok: boolean; size: number; mtime: number }>(
+  `/fs/text?${fsQuery(root, path, name)}`, 'POST', { text, mtime });
+
+
 /**
  * One directory.
  *

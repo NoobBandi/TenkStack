@@ -1,5 +1,5 @@
 /**
- * A read-only CodeMirror 6 view, for looking at a file rather than editing it.
+ * A CodeMirror 6 view: read-only for the preview pane, editable for the editor.
  *
  * The preview used to render text through the chat's markdown renderer, wrapped
  * in a fence so highlight.js would colour it. That works for a paragraph and
@@ -9,9 +9,13 @@
  *
  * CodeMirror only builds the lines that are on screen, which is what makes the
  * size cap in `peek` a formatting decision instead of a performance one, and it
- * brings its own find-in-file. Editing is deliberately absent: this panel reads
- * from /api/fs/peek, which serves a truncated prefix, and an editor over a
- * prefix would invite saving one back.
+ * brings its own find-in-file.
+ *
+ * Editing is opt-in, via `onChange`. Without it the document is locked at both
+ * levels, which matters because the preview reads /api/fs/peek -- a truncated
+ * prefix that must never look like something to save. The editor takes a
+ * different route, /api/fs/text, which refuses anything it cannot hand over
+ * whole.
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { EditorState, type Extension } from '@codemirror/state';
@@ -127,11 +131,23 @@ const theme = EditorView.theme({
   '.cm-searchMatch-selected': { backgroundColor: 'rgba(255,203,107,0.5)' },
 }, { dark: true });
 
-export default function CodeView(
-  { text, suffix, wrap = false }: { text: string; suffix: string; wrap?: boolean },
-) {
+export default function CodeView({ text, suffix, wrap = false, onChange }: {
+  text: string;
+  suffix: string;
+  wrap?: boolean;
+  /** Supplied only by the editor. Its absence is what makes this read-only, so
+   *  a preview cannot become editable by accident. */
+  onChange?: (next: string) => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  // Held rather than closed over: an inline arrow from the parent is a new
+  // function every render, and depending on it would tear down and rebuild the
+  // editor -- losing cursor, selection, undo history and scroll on every
+  // keystroke, since each keystroke re-renders the parent.
+  const changed = useRef(onChange);
+  changed.current = onChange;
+  const editable = Boolean(onChange);
 
   const extensions = useMemo(() => {
     const list: Extension[] = [
@@ -146,28 +162,48 @@ export default function CodeView(
       highlightSelectionMatches(),
       syntaxHighlighting(highlightStyle),
       theme,
-      // Read-only rather than merely non-editable: editable:false alone still
-      // leaves the document mutable through the API, and this panel is showing
-      // a truncated prefix that must never look like something to save.
-      EditorState.readOnly.of(true),
-      EditorView.editable.of(false),
       keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...foldKeymap]),
     ];
+    if (editable) {
+      list.push(EditorView.updateListener.of((u) => {
+        if (u.docChanged) changed.current?.(u.state.doc.toString());
+      }));
+      list.push(EditorView.theme({ '.cm-content': { caretColor: '#82aaff' } }));
+    } else {
+      // Read-only rather than merely non-editable: editable:false alone still
+      // leaves the document mutable through the API, and the preview is showing
+      // a truncated prefix that must never look like something to save.
+      list.push(EditorState.readOnly.of(true), EditorView.editable.of(false));
+    }
     if (wrap) list.push(EditorView.lineWrapping);
     const lang = languageFor(suffix);
     if (lang) list.push(lang);
     return list;
-  }, [suffix, wrap]);
+  }, [suffix, wrap, editable]);
 
+  // `text` is the initial document, not a controlled value: rebuilding state on
+  // every keystroke would reset the cursor to the top of the file. The editor
+  // owns its document once created, and the parent hears about changes through
+  // onChange.
+  const initial = useRef(text);
   useEffect(() => {
     if (!host.current) return undefined;
     const instance = new EditorView({
-      state: EditorState.create({ doc: text, extensions }),
+      state: EditorState.create({ doc: initial.current, extensions }),
       parent: host.current,
     });
     view.current = instance;
     return () => { instance.destroy(); view.current = null; };
-  }, [text, extensions]);
+  }, [extensions]);
+
+  // A different file in the same mounted editor -- stepping through a directory
+  // with the arrows -- does replace the document.
+  useEffect(() => {
+    const v = view.current;
+    if (!v || text === v.state.doc.toString()) return;
+    initial.current = text;
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text } });
+  }, [text]);
 
   return <div ref={host} style={{ height: '100%', minHeight: 0, overflow: 'hidden' }} />;
 }

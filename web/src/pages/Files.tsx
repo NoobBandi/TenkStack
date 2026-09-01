@@ -1,12 +1,12 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Dropdown, Empty, Input, Modal, Progress, Segmented,
+  App as AntApp, Alert, Button, Card, Dropdown, Empty, Input, Modal, Progress, Segmented,
   Space, Splitter, Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import type { InputRef } from 'antd';
 import {
   AppstoreOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, DragOutlined,
-  EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined, MoreOutlined,
+  EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined, FormOutlined, MoreOutlined,
   PartitionOutlined, PlusOutlined, QuestionCircleOutlined, QuestionOutlined, StopOutlined,
   UnorderedListOutlined, UploadOutlined,
 } from '@ant-design/icons';
@@ -19,6 +19,7 @@ import FilePreview from '../components/FilePreview';
 import FolderPicker from '../components/FolderPicker';
 import PathBar from '../components/PathBar';
 import DirTree from '../components/DirTree';
+import FileEditor from '../components/FileEditor';
 import { MONO } from '../theme';
 
 const { Text } = Typography;
@@ -130,6 +131,10 @@ export default function Files() {
   // Bumped when a directory appears or disappears, so the tree re-reads instead
   // of showing a branch that no longer matches the disk.
   const [treeToken, setTreeToken] = useState(0);
+  // The file open in the editor window, by name. Separate from `previewing`,
+  // which is an index that shifts when the listing reloads -- an edit must not
+  // follow the selection.
+  const [editing, setEditing] = useState<string | null>(null);
   const [paneSizes, setPaneSizes] = useState<(number | string)[]>(['58%', '42%']);
   const [selected, setSelected] = useState<string[]>([]);
   const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
@@ -864,6 +869,18 @@ export default function Files() {
                           disabled={row.kind === 'other'}
                           menu={{
                             items: [
+                              // Only for text, and only where the directory
+                              // takes writes: an edit item opening a window
+                              // whose save button can never work is worse than
+                              // no item at all.
+                              ...(row.kind === 'file' && row.media === 'text' && !row.partial
+                                ? [{
+                                  key: 'edit',
+                                  label: writable ? '編輯' : '檢視原始碼',
+                                  icon: <FormOutlined />,
+                                  onClick: () => setEditing(row.name),
+                                }]
+                                : []),
                               {
                                 key: 'rename',
                                 label: '重新命名',
@@ -919,6 +936,16 @@ export default function Files() {
           </Splitter>
         </div>
       </Card>
+
+      {editing && (
+        <FileEditor
+          root={root}
+          path={path}
+          name={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => void load(root, path, hidden, query)}
+        />
+      )}
 
       {drawerOpen && (
         <FilePreview

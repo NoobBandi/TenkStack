@@ -1486,6 +1486,10 @@ def _file_errors():
     """
     try:
         yield
+    except files.Stale as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except files.TooBig as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except files.Denied as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except files.BadPath as exc:
@@ -1655,6 +1659,34 @@ async def file_mkdir(
 ):
     with _file_errors():
         return files.mkdir(root, path, name)
+
+
+@app.get("/api/fs/text")
+async def file_read_text(
+    root: str, name: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    """A whole text file, for editing. Distinct from /peek, which serves a
+    truncated head: an editor given a prefix would write it back over the
+    rest."""
+    with _file_errors():
+        return files.read_text(root, path, name)
+
+
+class TextBody(BaseModel):
+    text: str
+    # The mtime read_text handed out. Sent back so a file changed underneath
+    # the editor is refused rather than silently overwritten.
+    mtime: float | None = None
+
+
+@app.post("/api/fs/text")
+async def file_write_text(
+    body: TextBody, root: str, name: str, path: str = "",
+    _: dict = Depends(auth.require_owner),
+):
+    with _file_errors():
+        return files.write_text(root, path, name, body.text, body.mtime)
 
 
 @app.post("/api/fs/rename")

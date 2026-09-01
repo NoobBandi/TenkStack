@@ -82,6 +82,19 @@ class BadPath(ValueError):
     """The caller asked for something outside the tree it was given."""
 
 
+class Stale(Exception):
+    """The file moved on while it was being edited.
+
+    Its own type rather than FileExistsError, which the route layer decorates
+    with "已存在" -- right for a name that is taken, wrong for a save that would
+    have overwritten somebody.
+    """
+
+
+class TooBig(ValueError):
+    """More than an editor should be handed, or asked to write back."""
+
+
 class Denied(BadPath):
     """The caller asked for something no configuration may expose."""
 
@@ -1026,3 +1039,86 @@ def free_bytes(path: Path) -> int:
         return shutil.disk_usage(path).free
     except OSError:
         return 0
+
+
+# --------------------------------------------------------------------------
+# Editing
+#
+# Separate from `peek`, which serves a truncated head for a preview panel. An
+# editor must have the whole file or saving would write the prefix back over
+# the rest, so this refuses what it cannot hand over intact rather than quietly
+# giving out part of it.
+# --------------------------------------------------------------------------
+
+# Above this an editor is the wrong tool -- it is a log to tail or a dataset to
+# process, and holding it in a browser tab helps nobody. Chosen well under what
+# CodeMirror can render so the limit is about intent rather than performance.
+EDIT_MAX = 2 * 1024 * 1024
+
+
+def read_text(root_key: str, path: str, name: str) -> dict:
+    """A whole text file, for editing rather than for looking at.
+
+    `mtime` comes back with it and must be handed to `write_text`, which is how
+    two people editing the same file find out before one of them loses.
+    """
+    target, size = open_file(root_key, path, name)
+    if size > EDIT_MAX:
+        raise TooBig(f"檔案 {size // 1024} KiB，超過可編輯的 {EDIT_MAX // 1024} KiB")
+
+    raw = target.read_bytes()
+    if b"\0" in raw:
+        raise TooBig("二進位檔案不能編輯")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # Not decoded with "replace": that would round-trip the file into
+        # U+FFFD on save and destroy whatever was actually in those bytes.
+        raise TooBig("不是 UTF-8 文字檔，無法安全編輯") from exc
+
+    return {
+        "text": text,
+        "size": size,
+        "mtime": target.stat().st_mtime,
+        "language": target.suffix.lower()[1:] if target.suffix else "",
+        "writable": _can_write(_root(root_key), target.parent),
+    }
+
+
+def write_text(root_key: str, path: str, name: str, text: str, mtime: float | None) -> dict:
+    """Replace a text file's contents.
+
+    Written to a sibling and renamed over the target, so an interrupted write
+    leaves the old file rather than half of a new one; rename within a directory
+    is atomic on every filesystem this runs on.
+
+    `mtime` is the value `read_text` gave out. If the file has moved on since,
+    the write is refused -- silently overwriting someone else's edit is the one
+    failure this cannot apologise for afterwards.
+    """
+    target = resolve(root_key, path, name)
+    _refuse_readonly(root_key)
+    if not target.is_file():
+        raise FileNotFoundError(name)
+    if not _writable(target.parent):
+        raise PermissionError(str(target.parent))
+
+    current = target.stat().st_mtime
+    if mtime is not None and abs(current - mtime) > 1e-6:
+        raise Stale("檔案在編輯期間被其他人改過，請重新開啟")
+
+    data = text.encode("utf-8")
+    if len(data) > EDIT_MAX:
+        raise TooBig(f"內容 {len(data) // 1024} KiB，超過可儲存的 {EDIT_MAX // 1024} KiB")
+
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(data)
+        # Permissions follow the file being replaced, not the umask that made
+        # the temporary one -- otherwise saving a 600 config publishes it.
+        os.chmod(tmp, target.stat().st_mode & 0o7777)
+        tmp.replace(target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    return {"ok": True, "size": len(data), "mtime": target.stat().st_mtime}
