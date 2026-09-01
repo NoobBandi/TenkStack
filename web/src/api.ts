@@ -1343,16 +1343,33 @@ export interface FsListing {
 
 /** What a file says about itself without being read: a model header, the first
  *  page of text, or an honest nothing for a 20 GB video. */
+export interface FsTensor {
+  name: string;
+  dtype: string;
+  /** Row-major, the way a model card writes it -- GGUF stores the reverse and
+   *  the server flips it before sending. */
+  shape: number[];
+  params: number;
+  /** safetensors states this in its header; GGUF does not, so it is absent
+   *  rather than derived from dtype and shape. */
+  bytes?: number;
+  offset?: number;
+}
+
 export type FsPeek =
   | {
       kind: 'model'; size: number; format: 'safetensors';
-      tensors: { name: string; dtype: string; shape: number[] }[];
+      tensors: FsTensor[];
       truncated: boolean; count: number; parameters: number;
       metadata: Record<string, unknown> | null;
     }
   | {
       kind: 'model'; size: number; format: 'gguf'; version: number;
       count: number; metadata: Record<string, unknown>;
+      /** The tensor directory that follows the metadata block. The metadata
+       *  says which architecture; only these say what was done to each layer,
+       *  which is where a mixed quantisation is visible at all. */
+      tensors: FsTensor[]; truncated: boolean;
     }
   | { kind: 'text'; size: number; text: string; truncated: boolean; language: string }
   | { kind: 'binary'; size: number }

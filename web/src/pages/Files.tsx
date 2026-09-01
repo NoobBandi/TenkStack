@@ -119,10 +119,6 @@ export default function Files() {
   const [transfers, setTransfers] = useState<Transfer[]>([]);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [view, setView] = useState<'list' | 'grid'>('list');
-  // Split below this and the listing is narrower than its own columns, so the
-  // preview goes back to covering it. Watched rather than read once, because a
-  // window gets resized and a layout that only reads on mount is wrong after.
-  const [wide, setWide] = useState(() => window.innerWidth >= 1100);
   // Three panes need more room than two. The tree is the one that folds first:
   // it is the pane you can most easily do without, since the path bar still
   // goes up and the listing still goes down.
@@ -135,7 +131,6 @@ export default function Files() {
   // which is an index that shifts when the listing reloads -- an edit must not
   // follow the selection.
   const [editing, setEditing] = useState<string | null>(null);
-  const [paneSizes, setPaneSizes] = useState<(number | string)[]>(['58%', '42%']);
   const [selected, setSelected] = useState<string[]>([]);
   const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
   // The names a move applies to. One entry from a row menu, several from the
@@ -221,7 +216,6 @@ export default function Files() {
   const visual = looksVisual(entries);
   useEffect(() => {
     const onResize = () => {
-      setWide(window.innerWidth >= 1100);
       setRoomy(window.innerWidth >= 1500);
     };
     window.addEventListener('resize', onResize);
@@ -230,9 +224,7 @@ export default function Files() {
 
   // The preview has two homes and must be in exactly one: a pane beside the
   // listing when there is width, a drawer over it when there is not.
-  const paneOpen = previewing !== null && wide;
   const treePane = roomy && treeOpen;
-  const drawerOpen = previewing !== null && !wide;
 
   const gridding = view === 'grid' && visual;
 
@@ -713,7 +705,7 @@ export default function Files() {
               out of sight -- the arrows step through a list you can no longer
               see. Split only when there is room; below that width the drawer is
               still the better of two bad options. */}
-          <Splitter style={{ minHeight: 240 }} onResize={setPaneSizes}>
+          <Splitter style={{ minHeight: 240 }}>
             {treePane && (
               <Splitter.Panel defaultSize={220} min={160} max={380} collapsible>
                 <DirTree
@@ -725,7 +717,7 @@ export default function Files() {
               </Splitter.Panel>
             )}
             <Splitter.Panel min={280}>
-              <div style={{ paddingInlineEnd: paneOpen ? 4 : 0 }}>
+              <div>
               {gridding ? (
                 <Grid entries={entries} root={root} path={path} onOpen={open} />
               ) : (
@@ -917,22 +909,6 @@ export default function Files() {
               )}
               </div>
             </Splitter.Panel>
-            {paneOpen && (
-              // Collapsible because the preview is often wanted for one file and
-              // then in the way for the next ten; a collapse keeps the split
-              // where it was set instead of making it a drag each time.
-              <Splitter.Panel min={320} size={paneSizes[1]} collapsible>
-                <FilePreview
-                  as="pane"
-                  root={root}
-                  path={path}
-                  entries={entries}
-                  index={previewing as number}
-                  onIndex={setPreviewing}
-                  onClose={() => setPreviewing(null)}
-                />
-              </Splitter.Panel>
-            )}
           </Splitter>
         </div>
       </Card>
@@ -947,7 +923,7 @@ export default function Files() {
         />
       )}
 
-      {drawerOpen && (
+      {previewing !== null && (
         <FilePreview
           root={root}
           path={path}
@@ -955,6 +931,7 @@ export default function Files() {
           index={previewing}
           onIndex={setPreviewing}
           onClose={() => setPreviewing(null)}
+          onEdit={(name) => { setPreviewing(null); setEditing(name); }}
         />
       )}
 

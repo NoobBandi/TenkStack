@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Descriptions, Drawer, Empty, Image, Segmented, Space, Spin, Switch, Table, Tag, Typography,
+  Button, Descriptions, Empty, Image, Modal, Segmented, Space, Spin, Switch, Tag, Typography,
 } from 'antd';
-import { CloseOutlined, DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
+import {
+  DownloadOutlined, FormOutlined, LeftOutlined, RightOutlined,
+} from '@ant-design/icons';
 import { fetchFsPeek, fsRawUrl, type FsEntry, type FsPeek } from '../api';
-import { LINE, MONO } from '../theme';
+import { MONO } from '../theme';
 import Markdown from './Markdown';
 import CodeView from './CodeView';
+import TensorTable from './TensorTable';
 
 const { Text } = Typography;
 
@@ -55,15 +58,13 @@ interface Props {
   index: number;
   onIndex: (index: number) => void;
   onClose: () => void;
-  /** 'pane' sits beside the listing and leaves it visible; 'drawer' covers it.
-   *  A pane is the better reading -- you can see where the file is while you
-   *  look at it, and the arrows step through a list you can still see -- but it
-   *  needs width to be worth having, so a narrow window gets the drawer. */
-  as?: 'pane' | 'drawer';
+  /** Opens the editor on this file. Absent for a root that cannot be written,
+   *  so the button is missing rather than present and refusing. */
+  onEdit?: (name: string) => void;
 }
 
 export default function FilePreview(
-  { root, path, entries, index, onIndex, onClose, as = 'drawer' }: Props,
+  { root, path, entries, index, onIndex, onClose, onEdit }: Props,
 ) {
   const entry = entries[index];
   const [peek, setPeek] = useState<FsPeek | null>(null);
@@ -109,82 +110,61 @@ export default function FilePreview(
   if (!entry) return null;
   const src = fsRawUrl(root, path, entry.name);
 
-  // Title and controls are the same either way; only the frame around them
-  // differs, so they are built once rather than written twice.
-  const title = (
-    <Space size={10} style={{ minWidth: 0 }}>
-      <Text style={{ fontSize: 13, fontFamily: MONO }} ellipsis>{entry.name}</Text>
-      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, whiteSpace: 'nowrap' }}>
-        {bytes(entry.size ?? 0)}
-      </Text>
-    </Space>
-  );
-
-  const controls = (
-    <Space size={4}>
-      <Button
-        size="small" type="text" icon={<LeftOutlined />}
-        disabled={at <= 0} onClick={() => step(-1)}
-      />
-      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-        {at >= 0 ? `${at + 1} / ${stops.length}` : ''}
-      </Text>
-      <Button
-        size="small" type="text" icon={<RightOutlined />}
-        disabled={at < 0 || at >= stops.length - 1} onClick={() => step(1)}
-      />
-      {/* A link rather than a fetch: the browser's own download manager
-          handles a 20 GB file, and nothing has to hold it in memory. */}
-      <Button
-        size="small" icon={<DownloadOutlined />} style={{ marginLeft: 8 }}
-        href={fsRawUrl(root, path, entry.name, true)}
-      >
-        下載
-      </Button>
-      {as === 'pane' && (
-        <Button size="small" type="text" icon={<CloseOutlined />} onClick={onClose} />
-      )}
-    </Space>
-  );
-
-  const body = (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <Body entry={entry} src={src} peek={peek} loading={loading} />
-    </div>
-  );
-
-  if (as === 'pane') {
-    return (
-      <div style={{
-        height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column',
-        paddingInlineStart: 12,
-      }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10,
-          paddingBottom: 8, borderBottom: `1px solid ${LINE.faint}`,
-        }}>
-          {title}
-          <div style={{ marginInlineStart: 'auto' }}>{controls}</div>
-        </div>
-        {body}
-      </div>
-    );
-  }
-
+  // A dialog rather than a drawer or a pane. Looking at a file is a thing you
+  // stop to do, and the two alternatives both got it wrong in opposite
+  // directions: a drawer covered the listing without earning the space, and a
+  // pane kept the listing visible but gave the file a column instead of a
+  // window. A dialog is what every file manager reaches for, and it is the only
+  // one of the three wide enough that editing in it is not cramped.
   return (
-    <Drawer
+    <Modal
       open
-      onClose={onClose}
-      width="min(920px, 92vw)"
-      // The body becomes the height CodeMirror measures against. Without it the
-      // editor's `height: 100%` resolves against an auto-height parent and
-      // collapses to nothing -- the file loads, and shows as an empty strip.
-      styles={{ body: { display: 'flex', flexDirection: 'column', minHeight: 0 } }}
-      title={title}
-      extra={controls}
+      onCancel={onClose}
+      width="min(1180px, 94vw)"
+      styles={{ body: { height: '74vh', display: 'flex', flexDirection: 'column', minHeight: 0 } }}
+      title={
+        <Space size={10} style={{ minWidth: 0 }}>
+          <Text style={{ fontSize: 13, fontFamily: MONO }} ellipsis>{entry.name}</Text>
+          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, whiteSpace: 'nowrap' }}>
+            {bytes(entry.size ?? 0)}
+          </Text>
+        </Space>
+      }
+      footer={
+        <Space>
+          <Button
+            size="small" type="text" icon={<LeftOutlined />}
+            disabled={at <= 0} onClick={() => step(-1)}
+          />
+          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+            {at >= 0 ? `${at + 1} / ${stops.length}` : ''}
+          </Text>
+          <Button
+            size="small" type="text" icon={<RightOutlined />}
+            disabled={at < 0 || at >= stops.length - 1} onClick={() => step(1)}
+          />
+          {/* A link rather than a fetch: the browser's own download manager
+              handles a 20 GB file, and nothing has to hold it in memory. */}
+          <Button
+            size="small" icon={<DownloadOutlined />} style={{ marginInlineStart: 12 }}
+            href={fsRawUrl(root, path, entry.name, true)}
+          >
+            下載
+          </Button>
+          {entry.media === 'text' && onEdit && (
+            <Button size="small" type="primary" ghost icon={<FormOutlined />}
+              onClick={() => onEdit(entry.name)}>
+              編輯
+            </Button>
+          )}
+          <Button size="small" onClick={onClose}>關閉</Button>
+        </Space>
+      }
     >
-      {body}
-    </Drawer>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+        <Body entry={entry} src={src} peek={peek} loading={loading} />
+      </div>
+    </Modal>
   );
 }
 
@@ -324,42 +304,10 @@ function ModelBody({ peek }: { peek: Extract<FsPeek, { kind: 'model' }> }) {
         />
       )}
 
-      {peek.format === 'safetensors' && peek.tensors.length > 0 && (
-        <>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            張量{peek.truncated ? `（只列出前 ${peek.tensors.length} 個）` : ''}
-          </Text>
-          <Table
-            size="small"
-            dataSource={peek.tensors}
-            rowKey="name"
-            pagination={{ pageSize: 25, size: 'small', showSizeChanger: false }}
-            columns={[
-              {
-                title: '名稱',
-                dataIndex: 'name',
-                render: (v: string) => (
-                  <Text style={{ fontSize: 11, fontFamily: MONO }}>{v}</Text>
-                ),
-              },
-              {
-                title: '型別', dataIndex: 'dtype', width: 80,
-                render: (v: string) => (
-                  <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.7 }}>{v}</Text>
-                ),
-              },
-              {
-                title: '形狀', dataIndex: 'shape', width: 180, align: 'right',
-                render: (v: number[]) => (
-                  <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.7 }}>
-                    {v.join(' × ')}
-                  </Text>
-                ),
-              },
-            ]}
-          />
-        </>
+      {peek.tensors && peek.tensors.length > 0 && (
+        <TensorTable tensors={peek.tensors} truncated={peek.truncated} />
       )}
+
     </Space>
   );
 }

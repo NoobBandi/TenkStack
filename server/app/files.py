@@ -791,7 +791,18 @@ def _peek_safetensors(handle) -> dict:
         for dim in shape:
             count *= dim
         params += count
-        tensors.append({"name": key, "dtype": value.get("dtype"), "shape": shape})
+        # data_offsets is the one thing here that says how much of the file a
+        # tensor actually occupies. Deriving it from dtype and shape would be a
+        # second, worse copy of what the header already states, and would be
+        # wrong for any dtype this does not know about.
+        start, stop = (value.get("data_offsets") or [0, 0])[:2]
+        tensors.append({
+            "name": key,
+            "dtype": value.get("dtype"),
+            "shape": shape,
+            "params": count,
+            "bytes": max(0, stop - start),
+        })
     tensors.sort(key=lambda t: t["name"])
 
     return {
@@ -807,6 +818,15 @@ def _peek_safetensors(handle) -> dict:
 # Enough to see the shape of any model anyone puts here, bounded so that a
 # pathological file cannot make the response the size of the header.
 _TENSOR_LIMIT = 4000
+
+_GGML_TYPES = {
+    0: "F32", 1: "F16", 2: "Q4_0", 3: "Q4_1", 6: "Q5_0", 7: "Q5_1", 8: "Q8_0",
+    9: "Q8_1", 10: "Q2_K", 11: "Q3_K", 12: "Q4_K", 13: "Q5_K", 14: "Q6_K",
+    15: "Q8_K", 16: "IQ2_XXS", 17: "IQ2_XS", 18: "IQ3_XXS", 19: "IQ1_S",
+    20: "IQ4_NL", 21: "IQ3_S", 22: "IQ2_S", 23: "IQ4_XS", 24: "I8", 25: "I16",
+    26: "I32", 27: "I64", 28: "F64", 29: "IQ1_M", 30: "BF16", 34: "TQ1_0",
+    35: "TQ2_0", 39: "MXFP4",
+}
 _META_STRING_LIMIT = 2048
 _THUMBNAIL_LIMIT = 512 * 1024
 
@@ -884,11 +904,44 @@ def _peek_gguf(handle) -> dict:
             value = f"[{len(value)} 個項目]"
         meta[key] = value
 
+    # The tensor directory follows the metadata block: for each tensor a name,
+    # its dimensions, its ggml type and its offset. Read because "how is this
+    # file put together" is answered by the layers, not by the header -- the
+    # metadata says the architecture, the tensors say what was actually done to
+    # each layer, which is where a mixed quantisation is visible at all.
+    tensors = []
+    try:
+        for _ in range(min(tensor_count, _TENSOR_LIMIT)):
+            (length,) = struct.unpack("<Q", handle.read(8))
+            name = handle.read(length).decode("utf-8", "replace")
+            (n_dims,) = struct.unpack("<I", handle.read(4))
+            dims = struct.unpack(f"<{n_dims}Q", handle.read(8 * n_dims))
+            (ggml_type,) = struct.unpack("<I", handle.read(4))
+            (offset,) = struct.unpack("<Q", handle.read(8))
+            count = 1
+            for d in dims:
+                count *= d
+            tensors.append({
+                "name": name,
+                # Shapes are stored fastest-varying first, the reverse of how
+                # every model card writes them.
+                "shape": list(reversed(dims)),
+                "dtype": _GGML_TYPES.get(ggml_type, f"type{ggml_type}"),
+                "params": count,
+                "offset": offset,
+            })
+    except struct.error:
+        # A truncated or unexpected directory is not a reason to lose the
+        # metadata that was already read.
+        pass
+
     return {
         "format": "gguf",
         "version": version,
         "count": tensor_count,
         "metadata": meta,
+        "tensors": tensors,
+        "truncated": tensor_count > len(tensors),
     }
 
 
