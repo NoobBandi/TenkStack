@@ -18,7 +18,7 @@
  * whole.
  */
 import { useEffect, useMemo, useRef } from 'react';
-import { EditorState, type Extension } from '@codemirror/state';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter,
   drawSelection, dropCursor,
@@ -32,7 +32,7 @@ import {
 import { searchKeymap, highlightSelectionMatches, search } from '@codemirror/search';
 import { closeBrackets, closeBracketsKeymap, autocompletion } from '@codemirror/autocomplete';
 import { LINE, MONO } from '../theme';
-import { highlightStyle, languageFor } from './syntax';
+import { descriptionFor, highlightStyle, languageFor } from './syntax';
 
 const theme = EditorView.theme({
   '&': { fontSize: '12px', backgroundColor: 'transparent', height: '100%' },
@@ -73,6 +73,9 @@ export default function CodeView({ text, suffix, wrap = false, onChange }: {
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  // One compartment for the whole life of the component: reconfiguring it is
+  // how a lazily fetched language gets in without the editor being rebuilt.
+  const lazy = useRef(new Compartment());
   // Held rather than closed over: an inline arrow from the parent is a new
   // function every render, and depending on it would tear down and rebuild the
   // editor -- losing cursor, selection, undo history and scroll on every
@@ -137,8 +140,31 @@ export default function CodeView({ text, suffix, wrap = false, onChange }: {
     if (wrap) list.push(EditorView.lineWrapping);
     const lang = languageFor(suffix);
     if (lang) list.push(lang);
+    // Empty at first for anything outside the eager set; the effect below fills
+    // it in once the parser has been fetched. A compartment rather than another
+    // dependency of this memo, because rebuilding the editor to add a language
+    // would rebuild its document too, from the text it was opened with -- and a
+    // parser that arrives after the first keystroke would take the keystroke
+    // with it.
+    else list.push(lazy.current.of([]));
     return list;
   }, [suffix, wrap, editable]);
+
+  // Around fifty more languages than the console itself is written in, fetched
+  // the first time one is opened. A .lua file colours a moment after it appears
+  // rather than not at all.
+  useEffect(() => {
+    if (languageFor(suffix)) return undefined;
+    const description = descriptionFor(suffix);
+    if (!description) return undefined;
+    let live = true;
+    void description.load().then((support) => {
+      if (live && view.current) {
+        view.current.dispatch({ effects: lazy.current.reconfigure(support) });
+      }
+    });
+    return () => { live = false; };
+  }, [suffix, extensions]);
 
   // `text` is the initial document, not a controlled value: rebuilding state on
   // every keystroke would reset the cursor to the top of the file. The editor

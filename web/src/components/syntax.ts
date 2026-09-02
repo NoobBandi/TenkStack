@@ -9,7 +9,8 @@
 
 import { type Extension } from '@codemirror/state';
 import {
-  HighlightStyle, StreamLanguage, LanguageSupport, type Language,
+  HighlightStyle, StreamLanguage, LanguageSupport, LanguageDescription,
+  type Language, type StreamParser,
 } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { javascript } from '@codemirror/lang-javascript';
@@ -93,6 +94,161 @@ export const highlightStyle = HighlightStyle.define([
 
 
 /**
+ * Everything else, fetched the first time it is needed.
+ *
+ * The set above is what the console itself is written in, so it is worth having
+ * loaded before anyone asks. This is the rest -- around fifty more languages,
+ * which is what a chat about code actually turns out to need -- and importing
+ * them eagerly would put 1.1 MB of parsers in the bundle for the sake of the one
+ * Fortran snippet a year. Each `import()` is a literal, so the bundler can split
+ * each into its own chunk; a mode is fetched when a fence first names it and
+ * then stays.
+ *
+ * CodeMirror takes an unloaded LanguageDescription and re-parses once it
+ * arrives, so a pasted block colours a moment after it lands rather than not at
+ * all.
+ */
+const stream = (
+  name: string, alias: string[], extensions: string[],
+  load: () => Promise<StreamParser<unknown>>,
+) => LanguageDescription.of({
+  name, alias, extensions,
+  load: async () => new LanguageSupport(StreamLanguage.define(await load())),
+});
+
+const EXTRA: LanguageDescription[] = [
+  // Parsers written for CodeMirror 6, where they exist: they understand the
+  // language rather than colouring it by regular expression.
+  LanguageDescription.of({
+    name: 'PHP', alias: ['php'], extensions: ['php', 'phtml'],
+    load: () => import('@codemirror/lang-php').then((m) => m.php()),
+  }),
+  LanguageDescription.of({
+    name: 'Go', alias: ['go', 'golang'], extensions: ['go'],
+    load: () => import('@codemirror/lang-go').then((m) => m.go()),
+  }),
+  LanguageDescription.of({
+    name: 'Java', alias: ['java'], extensions: ['java'],
+    load: () => import('@codemirror/lang-java').then((m) => m.java()),
+  }),
+  LanguageDescription.of({
+    name: 'XML', alias: ['xml', 'xsd', 'xsl'], extensions: ['xml', 'xsd', 'xsl', 'plist'],
+    load: () => import('@codemirror/lang-xml').then((m) => m.xml()),
+  }),
+  LanguageDescription.of({
+    name: 'Vue', alias: ['vue'], extensions: ['vue'],
+    load: () => import('@codemirror/lang-vue').then((m) => m.vue()),
+  }),
+
+  // The C-family modes all live in one file, so naming six of them costs one
+  // chunk rather than six.
+  stream('C#', ['csharp', 'cs', 'c#'], ['cs'],
+    () => import('@codemirror/legacy-modes/mode/clike').then((m) => m.csharp)),
+  stream('Kotlin', ['kotlin', 'kt'], ['kt', 'kts'],
+    () => import('@codemirror/legacy-modes/mode/clike').then((m) => m.kotlin)),
+  stream('Scala', ['scala'], ['scala', 'sc'],
+    () => import('@codemirror/legacy-modes/mode/clike').then((m) => m.scala)),
+  stream('Dart', ['dart'], ['dart'],
+    () => import('@codemirror/legacy-modes/mode/clike').then((m) => m.dart)),
+  stream('Objective-C', ['objectivec', 'objc'], ['m', 'mm'],
+    () => import('@codemirror/legacy-modes/mode/clike').then((m) => m.objectiveC)),
+
+  stream('Ruby', ['ruby', 'rb'], ['rb', 'gemspec'],
+    () => import('@codemirror/legacy-modes/mode/ruby').then((m) => m.ruby)),
+  stream('Perl', ['perl', 'pl'], ['pl', 'pm'],
+    () => import('@codemirror/legacy-modes/mode/perl').then((m) => m.perl)),
+  stream('Lua', ['lua'], ['lua'],
+    () => import('@codemirror/legacy-modes/mode/lua').then((m) => m.lua)),
+  stream('R', ['r', 'rscript'], ['r'],
+    () => import('@codemirror/legacy-modes/mode/r').then((m) => m.r)),
+  stream('Julia', ['julia', 'jl'], ['jl'],
+    () => import('@codemirror/legacy-modes/mode/julia').then((m) => m.julia)),
+  stream('Haskell', ['haskell', 'hs'], ['hs'],
+    () => import('@codemirror/legacy-modes/mode/haskell').then((m) => m.haskell)),
+  stream('Erlang', ['erlang', 'erl'], ['erl'],
+    () => import('@codemirror/legacy-modes/mode/erlang').then((m) => m.erlang)),
+  stream('Clojure', ['clojure', 'clj'], ['clj', 'cljs', 'edn'],
+    () => import('@codemirror/legacy-modes/mode/clojure').then((m) => m.clojure)),
+  stream('Common Lisp', ['lisp', 'commonlisp', 'elisp'], ['lisp', 'cl', 'el'],
+    () => import('@codemirror/legacy-modes/mode/commonlisp').then((m) => m.commonLisp)),
+  stream('Scheme', ['scheme', 'racket'], ['scm', 'ss', 'rkt'],
+    () => import('@codemirror/legacy-modes/mode/scheme').then((m) => m.scheme)),
+  stream('OCaml', ['ocaml', 'ml'], ['ml', 'mli'],
+    () => import('@codemirror/legacy-modes/mode/mllike').then((m) => m.oCaml)),
+  stream('F#', ['fsharp', 'fs', 'f#'], ['fs', 'fsi'],
+    () => import('@codemirror/legacy-modes/mode/mllike').then((m) => m.fSharp)),
+  stream('Swift', ['swift'], ['swift'],
+    () => import('@codemirror/legacy-modes/mode/swift').then((m) => m.swift)),
+  stream('PowerShell', ['powershell', 'ps1', 'pwsh'], ['ps1', 'psm1'],
+    () => import('@codemirror/legacy-modes/mode/powershell').then((m) => m.powerShell)),
+  stream('Visual Basic', ['vb', 'vbnet'], ['vb'],
+    () => import('@codemirror/legacy-modes/mode/vb').then((m) => m.vb)),
+  stream('VBScript', ['vbscript', 'vbs'], ['vbs'],
+    () => import('@codemirror/legacy-modes/mode/vbscript').then((m) => m.vbScript)),
+  stream('Pascal', ['pascal', 'delphi'], ['pas'],
+    () => import('@codemirror/legacy-modes/mode/pascal').then((m) => m.pascal)),
+  stream('Fortran', ['fortran', 'f90'], ['f', 'f90', 'f95'],
+    () => import('@codemirror/legacy-modes/mode/fortran').then((m) => m.fortran)),
+  stream('COBOL', ['cobol'], ['cob', 'cbl'],
+    () => import('@codemirror/legacy-modes/mode/cobol').then((m) => m.cobol)),
+  stream('Tcl', ['tcl'], ['tcl'],
+    () => import('@codemirror/legacy-modes/mode/tcl').then((m) => m.tcl)),
+  stream('Verilog', ['verilog', 'systemverilog'], ['v', 'sv'],
+    () => import('@codemirror/legacy-modes/mode/verilog').then((m) => m.verilog)),
+  stream('VHDL', ['vhdl'], ['vhd', 'vhdl'],
+    () => import('@codemirror/legacy-modes/mode/vhdl').then((m) => m.vhdl)),
+  stream('Elm', ['elm'], ['elm'],
+    () => import('@codemirror/legacy-modes/mode/elm').then((m) => m.elm)),
+  stream('Crystal', ['crystal'], ['cr'],
+    () => import('@codemirror/legacy-modes/mode/crystal').then((m) => m.crystal)),
+  stream('Groovy', ['groovy', 'gradle'], ['groovy', 'gradle'],
+    () => import('@codemirror/legacy-modes/mode/groovy').then((m) => m.groovy)),
+  stream('Haxe', ['haxe'], ['hx'],
+    () => import('@codemirror/legacy-modes/mode/haxe').then((m) => m.haxe)),
+  stream('CoffeeScript', ['coffeescript', 'coffee'], ['coffee'],
+    () => import('@codemirror/legacy-modes/mode/coffeescript').then((m) => m.coffeeScript)),
+  stream('D', ['d'], ['d'],
+    () => import('@codemirror/legacy-modes/mode/d').then((m) => m.d)),
+  stream('Smalltalk', ['smalltalk'], ['st'],
+    () => import('@codemirror/legacy-modes/mode/smalltalk').then((m) => m.smalltalk)),
+
+  // Not programming languages, but things that get pasted into a message and
+  // are unreadable without colour.
+  stream('Diff', ['diff', 'patch'], ['diff', 'patch'],
+    () => import('@codemirror/legacy-modes/mode/diff').then((m) => m.diff)),
+  stream('Protobuf', ['protobuf', 'proto'], ['proto'],
+    () => import('@codemirror/legacy-modes/mode/protobuf').then((m) => m.protobuf)),
+  stream('CMake', ['cmake'], ['cmake'],
+    () => import('@codemirror/legacy-modes/mode/cmake').then((m) => m.cmake)),
+  stream('Assembly', ['asm', 'gas', 'nasm'], ['s', 'asm'],
+    () => import('@codemirror/legacy-modes/mode/gas').then((m) => m.gas)),
+  stream('HTTP', ['http'], ['http'],
+    () => import('@codemirror/legacy-modes/mode/http').then((m) => m.http)),
+  stream('Sass', ['sass'], ['sass'],
+    () => import('@codemirror/legacy-modes/mode/sass').then((m) => m.sass)),
+  stream('Stylus', ['stylus', 'styl'], ['styl'],
+    () => import('@codemirror/legacy-modes/mode/stylus').then((m) => m.stylus)),
+  stream('LaTeX', ['latex', 'tex'], ['tex', 'sty', 'cls'],
+    () => import('@codemirror/legacy-modes/mode/stex').then((m) => m.stex)),
+  stream('Pug', ['pug', 'jade'], ['pug', 'jade'],
+    () => import('@codemirror/legacy-modes/mode/pug').then((m) => m.pug)),
+  stream('Jinja2', ['jinja', 'jinja2', 'j2'], ['j2', 'jinja'],
+    () => import('@codemirror/legacy-modes/mode/jinja2').then((m) => m.jinja2)),
+  stream('Puppet', ['puppet'], ['pp'],
+    () => import('@codemirror/legacy-modes/mode/puppet').then((m) => m.puppet)),
+  stream('Gherkin', ['gherkin', 'cucumber'], ['feature'],
+    () => import('@codemirror/legacy-modes/mode/gherkin').then((m) => m.gherkin)),
+  stream('WebAssembly', ['wasm', 'wat', 'wast'], ['wat', 'wast'],
+    () => import('@codemirror/legacy-modes/mode/wast').then((m) => m.wast)),
+  stream('MATLAB', ['matlab', 'octave'], ['octave'],
+    () => import('@codemirror/legacy-modes/mode/octave').then((m) => m.octave)),
+  stream('SPARQL', ['sparql'], ['rq'],
+    () => import('@codemirror/legacy-modes/mode/sparql').then((m) => m.sparql)),
+  stream('Brainfuck', ['brainfuck', 'bf'], ['bf'],
+    () => import('@codemirror/legacy-modes/mode/brainfuck').then((m) => m.brainfuck)),
+];
+
+/**
  * What a fence's info string names, as a parser.
  *
  * `languageFor` is keyed on file suffixes, because that is what the file viewer
@@ -104,16 +260,26 @@ export const highlightStyle = HighlightStyle.define([
  */
 const FENCE_NAMES: Record<string, string> = {
   javascript: 'js', typescript: 'ts', python: 'py', bash: 'sh', shell: 'sh',
-  console: 'sh', rust: 'rs', 'c++': 'cpp', markdown: 'md', golang: 'go',
-  docker: 'dockerfile', yml: 'yaml', htm: 'html', text: '', plaintext: '',
+  console: 'sh', rust: 'rs', 'c++': 'cpp', markdown: 'md', docker: 'dockerfile',
+  yml: 'yaml', htm: 'html', text: '', plaintext: '',
 };
 
-export function parserFor(info: string): Language | null {
+export function parserFor(info: string): Language | LanguageDescription | null {
   const word = info.trim().split(/[\s,]+/)[0].toLowerCase();
+  if (!word) return null;
   const support = languageFor(FENCE_NAMES[word] ?? word);
-  if (!support) return null;
-  // A LanguageSupport bundles a parser with its extras -- autocompletion,
-  // indentation. Nested inside Markdown only the parser is wanted; the extras
-  // belong to an editor that is entirely that language.
-  return support instanceof LanguageSupport ? support.language : support as Language;
+  if (support) {
+    // A LanguageSupport bundles a parser with its extras -- autocompletion,
+    // indentation. Nested inside Markdown only the parser is wanted; the extras
+    // belong to an editor that is entirely that language.
+    return support instanceof LanguageSupport ? support.language : support as Language;
+  }
+  // Unloaded is fine: CodeMirror fetches it and re-parses.
+  return LanguageDescription.matchLanguageName(EXTRA, word, true);
+}
+
+/** The same long tail, found by file suffix, for the file viewer. */
+export function descriptionFor(suffix: string): LanguageDescription | null {
+  if (!suffix) return null;
+  return LanguageDescription.matchFilename(EXTRA, `x.${suffix.toLowerCase()}`);
 }
