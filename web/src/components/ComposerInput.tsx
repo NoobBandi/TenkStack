@@ -473,12 +473,52 @@ export default function ComposerInput({
       return true;
     });
 
-    const files = EditorView.domEventHandlers({
-      paste: (event) => {
+    const pasting = EditorView.domEventHandlers({
+      /**
+       * Pasted code lands in a block of its own.
+       *
+       * Pasting into a block already worked -- the detector reads the body and
+       * colours it. Pasting code into a message did nothing, because there was
+       * no block for it to be the body of, and asking the writer to fence it
+       * first is asking them to do the markup by hand again.
+       *
+       * The gates are the same confidence the rest of this rests on. More than
+       * one line, so a copied variable name or URL is left alone. Not already
+       * fenced, and not pasted into a fence, so nothing nests. And the detector
+       * has to actually name a language -- prose, a log and a stack trace all
+       * come back with nothing and stay plain text.
+       *
+       * The fence goes in bare. What language it is stays inferred, the way it
+       * is everywhere else here; writing a guess into a line that is not drawn
+       * would put an invisible claim in the message that could be wrong.
+       *
+       * One transaction, so one undo puts back exactly what was on the
+       * clipboard.
+       */
+      paste: (event, view) => {
         const dropped = Array.from(event.clipboardData?.files ?? []);
-        if (!dropped.length) return false;
+        if (dropped.length) {
+          event.preventDefault();
+          handlers.current.onPasteFiles(dropped);
+          return true;
+        }
+
+        const text = event.clipboardData?.getData('text/plain') ?? '';
+        if (!text.includes('\n') || text.includes('```')) return false;
+        const { from, to } = view.state.selection.main;
+        if (insideFence(view.state.doc.toString(), from)) return false;
+        if (!detectLanguage(text)) return false;
+
+        const line = view.state.doc.lineAt(from);
+        // A fence has to start its own line, and leave one behind it.
+        const lead = from === line.from ? '' : '\n';
+        const insert = `${lead}\`\`\`\n${text.replace(/\s+$/, '')}\n\`\`\`\n`;
         event.preventDefault();
-        handlers.current.onPasteFiles(dropped);
+        view.dispatch({
+          changes: { from, to, insert },
+          selection: { anchor: from + insert.length },
+          scrollIntoView: true,
+        });
         return true;
       },
     });
@@ -494,7 +534,7 @@ export default function ComposerInput({
       Prec.highest(sending),
       Prec.highest(stepping),
       fenceShortcut,
-      files,
+      pasting,
       keymap.of([...defaultKeymap.filter((b) => b.key !== 'Enter'), ...historyKeymap]),
       placeholderExt(placeholder ?? ''),
       EditorView.updateListener.of((update) => {
