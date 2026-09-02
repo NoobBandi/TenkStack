@@ -214,6 +214,63 @@ export default function ComposerInput({
       },
     ]);
 
+    /**
+     * Step out of a block with the arrow keys.
+     *
+     * The fence lines are seven pixels of shading now, so an arrow key landing
+     * on one puts the caret somewhere the writer cannot see it. They are skipped
+     * in both directions, and when there is nothing on the far side -- a block
+     * that opens the message, or ends it -- the line to move to is made. That is
+     * the only way out of a block that starts at the top of an empty draft.
+     */
+    const stepping = keymap.of([
+      {
+        key: 'ArrowUp',
+        run: (v) => {
+          if (v.composing || !v.state.selection.main.empty) return false;
+          const line = v.state.doc.lineAt(v.state.selection.main.head);
+          const fence = fences(v.state).find(
+            (f) => line.number === f.open || line.number === f.open + 1);
+          if (!fence) return false;
+          if (fence.open === 1) {
+            v.dispatch({
+              changes: { from: 0, insert: '\n' },
+              selection: { anchor: 0 }, scrollIntoView: true,
+            });
+            return true;
+          }
+          v.dispatch({
+            selection: { anchor: v.state.doc.line(fence.open - 1).to },
+            scrollIntoView: true,
+          });
+          return true;
+        },
+      },
+      {
+        key: 'ArrowDown',
+        run: (v) => {
+          if (v.composing || !v.state.selection.main.empty) return false;
+          const line = v.state.doc.lineAt(v.state.selection.main.head);
+          const fence = fences(v.state).find(
+            (f) => f.close !== null && (line.number === f.close || line.number === f.close - 1));
+          if (!fence) return false;
+          if (fence.close === v.state.doc.lines) {
+            const end = v.state.doc.length;
+            v.dispatch({
+              changes: { from: end, insert: '\n' },
+              selection: { anchor: end + 1 }, scrollIntoView: true,
+            });
+            return true;
+          }
+          v.dispatch({
+            selection: { anchor: v.state.doc.line(fence.close! + 1).from },
+            scrollIntoView: true,
+          });
+          return true;
+        },
+      },
+    ]);
+
     // The third backtick opens a block and closes it in one go, with the caret
     // on the empty line between the fences.
     const fenceShortcut = EditorView.inputHandler.of((v, from, to, text) => {
@@ -244,6 +301,7 @@ export default function ComposerInput({
       markdown(),
       blocks,
       Prec.highest(sending),
+      Prec.highest(stepping),
       fenceShortcut,
       files,
       keymap.of([...defaultKeymap.filter((b) => b.key !== 'Enter'), ...historyKeymap]),

@@ -25,7 +25,21 @@
   padding: 10px;
   min-height: 72px;
   font-size: 14px;
-  caret-color: currentColor;
+  /* drawSelection draws the caret itself, so the browser's own must go or both
+     appear. */
+  caret-color: transparent;
+}
+
+/* The drawn caret.
+ *
+ * CodeMirror's default is a black bar, switching to light only under a theme
+ * registered as dark -- and this editor registers no theme, because the panel
+ * around it already supplies one. So on this surface the caret was black on
+ * near-black: present, focused, and invisible. */
+.composer-input .cm-cursor,
+.composer-input .cm-dropCursor {
+  border-left: 2px solid rgba(255, 255, 255, 0.9);
+  margin-left: -1px;
 }
 
 .composer-input .cm-line {
