@@ -1,9 +1,10 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Typography } from 'antd';
 import {
   CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type { RequestTrace } from '../stream';
-import { LINE, MONO } from '../theme';
+import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
 
@@ -28,21 +29,108 @@ function fmt(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
 }
 
+/** One line per recent request: what it produced, how fast, how long.
+ *
+ *  The chart answers "how is this one going" -- a shape, with prefill's steep
+ *  opening and generation's shallow run visible as slope. It cannot answer "how
+ *  have the last few gone", which is the other question anyone actually has,
+ *  and which a coding agent raises constantly because one turn is a dozen
+ *  requests. Rows rather than a second chart: these are a handful of finished
+ *  totals, and totals are a column of numbers, not a plot.
+ *
+ *  Clicking one draws it, so the list is also how you get back to the request
+ *  that just scrolled past. */
+function TraceList({ traces, current, onPick }: {
+  traces: RequestTrace[];
+  current?: string;
+  onPick: (key: string | null) => void;
+}) {
+  if (traces.length < 2) return null;
+  return (
+    <div style={{ marginTop: 10, borderTop: `1px solid ${LINE.faint}`, paddingTop: 6 }}>
+      {traces.map((t) => {
+        const points = t.points;
+        const seconds = points.length
+          ? (points[points.length - 1].at - points[0].at) / 1000
+          : 0;
+        const tokens = points.length ? points[points.length - 1].tokens : 0;
+        // Its own average, not the last instantaneous reading: this row is a
+        // summary and the sampled rate at the end of a request says nothing
+        // about the whole of it.
+        const rate = seconds > 0 ? tokens / seconds : 0;
+        const active = t.key === current;
+        return (
+          <div
+            key={t.key}
+            onClick={() => onPick(active ? null : t.key)}
+            style={{
+              display: 'flex', alignItems: 'baseline', gap: 10, cursor: 'pointer',
+              padding: '3px 6px', borderRadius: 3, fontFamily: MONO, fontSize: 11,
+              background: active ? 'rgba(255,255,255,0.06)' : 'transparent',
+            }}
+          >
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%', flex: '0 0 auto',
+              background: t.done ? LINE.strong : ACCENT.ok,
+              boxShadow: t.done ? 'none' : `0 0 6px ${ACCENT.ok}b3`,
+            }} />
+            <span style={{ opacity: 0.75, minWidth: 62, textAlign: 'right' }}>
+              {fmt(tokens)} tok
+            </span>
+            <span style={{ opacity: 0.75, minWidth: 62, textAlign: 'right' }}>
+              {rate.toFixed(1)} t/s
+            </span>
+            <span style={{ opacity: 0.5, minWidth: 46, textAlign: 'right' }}>
+              {seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)}s
+            </span>
+            <span style={{ opacity: 0.3, marginInlineStart: 'auto' }}>
+              slot {t.slot}
+              {t.truncated ? ' ・ 截斷' : ''}
+              {!t.done ? ' ・ 進行中' : ''}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
+  // Which request the chart is drawing, when it is not simply the newest. Held
+  // by key rather than by index: the list is rebuilt on every tick and an index
+  // would slide onto a different request as older ones fall off the end.
+  const [pinned, setPinned] = useState<string | null>(null);
+
+  const recent = useMemo(
+    () => traces.slice().sort((a, b) => b.updatedAt - a.updatedAt),
+    [traces],
+  );
+
   // The live one if anything is running, else the most recent -- a finished
-  // request is still the answer to "what did that just do".
-  const live = traces.filter((t) => !t.done).sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  const trace = live ?? traces.slice().sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  // request is still the answer to "what did that just do". A pinned one wins
+  // over both, and is dropped once it ages out of the window.
+  const live = recent.find((t) => !t.done);
+  const chosen = pinned ? recent.find((t) => t.key === pinned) : undefined;
+  const trace = chosen ?? live ?? recent[0];
+
+  useEffect(() => {
+    if (pinned && !recent.some((t) => t.key === pinned)) setPinned(null);
+  }, [pinned, recent]);
 
   if (!trace || trace.points.length < 2) {
     return (
-      <div style={{
-        height: CHART_H + 40, display: 'flex', alignItems: 'center',
-        justifyContent: 'center',
-      }}>
-        <Text style={{ fontSize: 11, opacity: 0.35, fontFamily: MONO }}>
-          {trace ? '請求太短，沒有足夠的取樣點' : '目前沒有請求'}
-        </Text>
+      /* A column, not a row. This was a centred flex when it held only the
+         message; dropping the list into it put the rows beside the text
+         instead of under it. */
+      <div>
+        <div style={{
+          height: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Text style={{ fontSize: 11, opacity: 0.35, fontFamily: MONO }}>
+            {trace ? '請求太短，沒有足夠的取樣點' : '目前沒有請求'}
+          </Text>
+        </div>
+        <TraceList traces={recent} current={trace?.key} onPick={setPinned} />
       </div>
     );
   }
@@ -80,6 +168,20 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
           {fmt(last.tokens)} tokens ・ {elapsed.toFixed(0)}s
           {ttft !== undefined ? ` ・ TTFT ${ttft.toFixed(1)}s` : ''}
         </Text>
+        {chosen && live && chosen.key !== live.key && (
+          // Without this, a pinned request looks exactly like the live one, and
+          // a chart frozen on something that finished a minute ago reads as a
+          // request that has stalled.
+          <Text
+            onClick={() => setPinned(null)}
+            style={{
+              fontSize: 10, fontFamily: MONO, cursor: 'pointer',
+              color: ACCENT.ok, opacity: 0.8,
+            }}
+          >
+            已釘選 ・ 回到進行中
+          </Text>
+        )}
         <Text style={{ fontSize: 11, opacity: 0.35, fontFamily: MONO, marginInlineStart: 'auto' }}>
           slot {trace.slot} ・ task {trace.task}
           {trace.done ? (trace.truncated ? ' ・ 已截斷' : ' ・ 完成') : ' ・ 進行中'}
@@ -144,6 +246,8 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
           />
         </LineChart>
       </ResponsiveContainer>
+
+      <TraceList traces={recent} current={trace.key} onPick={setPinned} />
     </div>
   );
 }
