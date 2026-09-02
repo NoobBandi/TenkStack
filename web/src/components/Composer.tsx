@@ -48,7 +48,6 @@ const MAX_TEXT_BYTES = 512 << 10;
  * so a single-line composer that grows would be wrong for it.
  */
 
-const FONT = "ui-monospace, SFMono-Regular, Menlo, 'Noto Sans Mono CJK TC', monospace";
 
 /** Typography must be identical in both layers or the shading drifts. */
 const SHARED: React.CSSProperties = {
@@ -338,21 +337,34 @@ export default function Composer({
               color: 'transparent', pointerEvents: 'none',
             }}
           >
-            {segments.map((seg, index) =>
-              seg.code ? (
-                <span key={index} style={{
+            {/* Blocks, not inline spans.
+                An inline background hugs the text it sits on, so a fenced block
+                came out as one ragged chip per line and the ``` line -- being
+                short -- read as the only thing shaded. A block fills the width,
+                which is what a code region looks like.
+
+                The segments are line-aligned by construction, so the newlines
+                between them are dropped: the block boxes are the line breaks,
+                and emitting both would double every one of them.
+
+                The font is deliberately not changed here. This layer only works
+                while it wraps character-for-character the way the textarea does,
+                and the textarea cannot set a different font for one range of its
+                own text -- so shading is what says "code", not the typeface. */}
+            {segments.map((seg, index) => (
+              <div
+                key={index}
+                style={seg.code ? {
                   background: 'rgba(128,128,128,0.20)',
-                  borderRadius: 3,
-                  fontFamily: FONT,
-                }}>
-                  {seg.text}
-                </span>
-              ) : (
-                <span key={index}>{seg.text}</span>
-              ),
-            )}
-            {/* Trailing newline needs a character or the last empty line collapses. */}
-            {'​'}
+                  borderRadius: 4,
+                  boxShadow: '0 0 0 4px rgba(128,128,128,0.20)',
+                } : undefined}
+              >
+                {/* A run ending in a newline renders no box for that last empty
+                    line unless something occupies it. */}
+                {seg.text.replace(/^\n/, '')}{'​'}
+              </div>
+            ))}
           </div>
 
           <textarea
