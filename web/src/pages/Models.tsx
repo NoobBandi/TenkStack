@@ -425,9 +425,13 @@ export default function Models() {
               render: (ttl: number | null | undefined) => (ttl ? `${Math.round(ttl / 60)} 分` : '—'),
             },
             {
-              title: '操作', width: 230,
+              // Every one of these says what it does. Three of the four were an
+              // icon alone, and a power symbol beside a play symbol is two
+              // guesses in a column where one of the guesses frees 30 GiB of
+              // video memory out from under whoever is using the model.
+              title: '操作', width: 310,
               render: (_, row) => (
-                <Space size="small">
+                <Space size={6}>
                   <Tooltip title="送一個極小的請求把模型載入顯存">
                     <Button size="small" icon={<PlayCircleOutlined />}
                             loading={busy === row.id} disabled={row.running}
@@ -435,16 +439,32 @@ export default function Models() {
                       載入
                     </Button>
                   </Tooltip>
+                  {/* Filled, and the only filled button here. Unloading is the
+                      one action in this row that takes something away from
+                      whoever is using the model right now, and it should not
+                      look like the two beside it that merely open a dialog.
+                      Amber rather than red: it is reversible, and red belongs
+                      to the button in this row that is not. */}
                   <Tooltip title="卸載，釋放顯存">
-                    <Button size="small" icon={<PoweroffOutlined />}
+                    <Button size="small" color="orange" variant="filled"
+                            icon={<PoweroffOutlined />}
                             loading={busy === row.id} disabled={!row.running}
-                            onClick={() => onUnload(row.id)} />
+                            onClick={() => onUnload(row.id)}>
+                      卸載
+                    </Button>
                   </Tooltip>
                   <Tooltip title="修改設定">
                     <Button size="small" icon={<EditOutlined />}
-                            onClick={() => openEdit(row.id)} />
+                            onClick={() => openEdit(row.id)}>
+                      修改
+                    </Button>
                   </Tooltip>
-                  <Button size="small" danger onClick={() => openDelete(row)}>移除</Button>
+                  <Tooltip title="從 llama-swap 設定中移除這個模型">
+                    <Button size="small" danger icon={<DeleteOutlined />}
+                            onClick={() => openDelete(row)}>
+                      移除
+                    </Button>
+                  </Tooltip>
                 </Space>
               ),
             },
