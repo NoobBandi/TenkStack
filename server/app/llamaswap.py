@@ -12,6 +12,7 @@ Two responsibilities, deliberately kept apart:
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 import logging
 import re
@@ -265,6 +266,12 @@ def extract_throughput(event: dict) -> dict | None:
     }
 
 
+# How long after connecting llama-swap's scrollback keeps arriving. Measured at
+# well under this; the margin is because the cost of guessing high is one
+# missed sample and the cost of guessing low is a permanent phantom row.
+REPLAY_WINDOW_S = 1.0
+
+
 async def events() -> AsyncIterator[dict]:
     """Yield llama-swap events forever, reconnecting when the stream drops.
 
@@ -277,19 +284,39 @@ async def events() -> AsyncIterator[dict]:
             async with httpx.AsyncClient(base_url=BASE_URL, timeout=None) as client:
                 async with aconnect_sse(client, "GET", "/api/events") as source:
                     backoff = 1.0
+                    # llama-swap opens with a block of scrollback -- whatever is
+                    # in its log buffer, however old. The log pane wants it and
+                    # says so with timestamps; the request charts must not have
+                    # it, because a replayed tick from a request that ended an
+                    # hour ago is indistinguishable from a live one and draws a
+                    # trace that is running, has one sample, and will never
+                    # finish. That is exactly the row that sat at 100 tok and
+                    # 0.0 t/s across page loads: not a stale trace, a fresh one
+                    # built from an old line.
+                    #
+                    # Judged by a window rather than by a frame count: the
+                    # scrollback arrives as several frames, not one, and which
+                    # number the last of them lands on is not something to
+                    # depend on. Anything inside the first second of a
+                    # connection is treated as history; a real tick that lands
+                    # in that second is lost, which costs one sample on a chart
+                    # against a row that never goes away.
+                    opened = time.monotonic()
                     async for sse in source.aiter_sse():
                         event = _parse_frame(sse.data)
                         if event is None:
                             continue
-                        throughput = extract_throughput(event)
-                        if throughput:
-                            yield {"type": "throughput", "data": throughput}
-                        # Emitted beside the raw frame rather than instead of
-                        # it: the log pane still wants every line, and these
-                        # ticks are a read of the same line, not a replacement.
-                        progress = extract_progress(event)
-                        if progress:
-                            yield {"type": "progress", "data": progress}
+                        if time.monotonic() - opened > REPLAY_WINDOW_S:
+                            throughput = extract_throughput(event)
+                            if throughput:
+                                yield {"type": "throughput", "data": throughput}
+                            # Emitted beside the raw frame rather than instead
+                            # of it: the log pane still wants every line, and
+                            # these ticks are a read of the same line, not a
+                            # replacement.
+                            progress = extract_progress(event)
+                            if progress:
+                                yield {"type": "progress", "data": progress}
                         yield event
         except (httpx.HTTPError, asyncio.TimeoutError) as exc:
             logger.warning("llama-swap event stream lost (%s); retrying in %.0fs", exc, backoff)
