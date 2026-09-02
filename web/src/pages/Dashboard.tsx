@@ -1,15 +1,12 @@
-import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Col, Row, Select, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd';
-import { PictureOutlined } from '@ant-design/icons';
+import { useState } from 'react';
+import { Alert, Button, Card, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import DepthCurve from '../components/DepthCurve';
 import GpuChart from '../components/GpuChart';
 import RequestCurve from '../components/RequestCurve';
 import StatTile, { StatBody } from '../components/StatTile';
 import SystemStats from '../components/SystemStats';
 import { useStream } from '../stream';
-import {
-  fetchComfyInstances, unloadAll, type ComfyInstance, type GpuSample, type ModelInfo,
-} from '../api';
+import { unloadAll, type GpuSample, type ModelInfo } from '../api';
 import { ACCENT, LINE, MONO, VRAM_AMBER, VRAM_RED, meterFill } from '../theme';
 import { clockCeiling, deviceTag, powerCeiling, tempCeiling } from '../hardware';
 
@@ -261,17 +258,7 @@ function GpuPanel({ gpus, showTemp }: { gpus: GpuSample[]; showTemp: boolean }) 
 export default function Dashboard() {
   const { gpus, system, models, throughput, traces, connected, refreshModels } =
     useStream();
-  const [comfy, setComfy] = useState<ComfyInstance[] | null>(null);
   const [unloading, setUnloading] = useState(false);
-
-  // ComfyUI publishes no event stream to the console, so its queue depth is
-  // the one thing here that genuinely has to be polled.
-  useEffect(() => {
-    const load = () => fetchComfyInstances().then(setComfy).catch(() => undefined);
-    load();
-    const timer = window.setInterval(load, 5000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   const onUnload = async () => {
     setUnloading(true);
@@ -387,7 +374,7 @@ export default function Dashboard() {
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
-        <div style={{ flex: '2 1 420px', minWidth: 0 }}>
+        <div style={{ flex: '1 1 100%', minWidth: 0 }}>
           <Card
             title={<span style={{ fontSize: 12, opacity: 0.75 }}>模型</span>}
             size="small"
@@ -478,41 +465,6 @@ export default function Dashboard() {
                 },
               ]}
             />
-          </Card>
-        </div>
-        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
-          <Card
-            title={<span style={{ fontSize: 12, opacity: 0.75 }}><PictureOutlined /> ComfyUI</span>}
-            size="small"
-            style={{ height: '100%' }}
-          >
-            {/* Summed across instances. The breakdown by card belongs on the
-                ComfyUI page; what the dashboard is asked is only whether the
-                GPUs are already busy with something other than an LLM. */}
-            {comfy?.length ? (
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Statistic
-                    title="佇列中"
-                    value={comfy.reduce((n, i) => n + i.queue_pending, 0)}
-                  />
-                </Col>
-                <Col span={12}>
-                  <Statistic
-                    title="執行中"
-                    value={comfy.reduce((n, i) => n + i.queue_running, 0)}
-                  />
-                </Col>
-                <Col span={24} style={{ marginTop: 10 }}>
-                  <Text type="secondary" style={{ fontSize: 11 }}>
-                    {comfy.length > 1 && `${comfy.length} 個實例 ・ `}
-                    版本 {comfy[0].version}
-                  </Text>
-                </Col>
-              </Row>
-            ) : (
-              <Alert type="info" showIcon message="ComfyUI 未執行" />
-            )}
           </Card>
         </div>
       </div>
