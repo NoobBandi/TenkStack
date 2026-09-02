@@ -19,7 +19,7 @@
  * request stopped and never how. That needs the journal or activity.sqlite,
  * which is a separate piece of work rather than a field to read.
  */
-import { useMemo } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Popover, Space, Typography } from 'antd';
 import { UserOutlined } from '@ant-design/icons';
 import type { InflightRequest } from '../api';
@@ -53,9 +53,30 @@ interface Party {
   model: string;
   live: boolean;
   lastSeen: number;
+  /** When the running request began, in browser time: llama-swap's elapsed_ms
+   *  plus how long ago that reading arrived. Its counter only moves when it
+   *  sends an update, so showing it raw freezes at whatever it last said --
+   *  which for a request that has been going two minutes was often 0s. */
+  startedAt: number;
+}
+
+/** A duration as something to read at a glance, not a number to parse. */
+function since(ms: number): string {
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(0)}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m ${Math.round(s - m * 60)}s`;
 }
 
 export default function ClientBadge({ requests }: { requests: InflightRequest[] }) {
+  // Ticks the durations. llama-swap sends an update per request, not per
+  // second, so without this the times sit still while the requests run.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // Requests still in the list are running: stream.tsx drops each one when
   // llama-swap says `remove`, which it does the moment a request ends. So
   // presence is liveness, and there is nothing here about finished ones.
@@ -73,12 +94,14 @@ export default function ClientBadge({ requests }: { requests: InflightRequest[] 
       const client = clientOf(r);
       const key = `${r.remote_ip}|${client}`;
       const party: Party = byIp.get(key) ?? {
-        key, ip: r.remote_ip, client: '', model: '', live: false, lastSeen: 0,
+        key, ip: r.remote_ip, client: '', model: '', live: false,
+        lastSeen: 0, startedAt: 0,
       };
       if (r.updated_at >= party.lastSeen) {
         party.lastSeen = r.updated_at;
         party.client = client || party.client;
         party.model = r.model || party.model;
+        party.startedAt = r.updated_at - (r.elapsed_ms ?? 0);
       }
       party.live = true;
       byIp.set(key, party);
@@ -90,34 +113,89 @@ export default function ClientBadge({ requests }: { requests: InflightRequest[] 
   if (parties.length === 0) return null;
 
   const liveCount = parties.filter((p) => p.live).length;
+  // Deduplicated: two clients on one model is one name, not two.
+  const models = [...new Set(parties.map((p) => p.model).filter(Boolean))];
 
   const detail = (
-    <div style={{ minWidth: 300 }}>
-      {parties.map((p) => (
-        <div
-          key={p.key}
-          style={{
-            display: 'flex', alignItems: 'baseline', gap: 10,
-            fontFamily: MONO, fontSize: 11, padding: '3px 0',
-          }}
-        >
-          <span style={{
-            width: 6, height: 6, borderRadius: '50%', flex: '0 0 auto',
-            background: p.live ? ACCENT.ok : LINE.strong,
-            boxShadow: p.live ? `0 0 6px ${ACCENT.ok}b3` : 'none',
-          }} />
-          <span style={{ minWidth: 76 }}>{p.client || '—'}</span>
-          <span style={{ opacity: 0.5, minWidth: 108 }}>{p.ip}</span>
-          <span style={{ opacity: 0.4, marginInlineStart: 'auto' }}>
-            {p.model.replace(/^qwen38-27b-/, '') || '—'}
-          </span>
+    <div style={{ minWidth: 320 }}>
+      {/* A grid, not flex with minWidths. Flex sizes each cell to its own
+          content and then fights the minimum, so a long client name pushed the
+          address out of line with the row above it -- columns that do not line
+          up are the whole reason a table beats a sentence. */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'auto minmax(72px, max-content) 1fr auto',
+        columnGap: 14, rowGap: 0, alignItems: 'center',
+      }}>
+        <span />
+        {['客戶端', '位址', '時間'].map((h, i) => (
+          <Text
+            key={h}
+            style={{
+              fontSize: 9, letterSpacing: 1, opacity: 0.35,
+              textAlign: i === 2 ? 'right' : 'left',
+              paddingBottom: 5,
+            }}
+          >
+            {h}
+          </Text>
+        ))}
+
+        {parties.map((p) => (
+          <Fragment key={p.key}>
+            {/* Centred on the row, not on the text baseline: a dot has no
+                baseline of its own and sat low against every name. */}
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: p.live ? ACCENT.ok : LINE.strong,
+              boxShadow: p.live ? `0 0 7px ${ACCENT.ok}b3` : 'none',
+            }} />
+            <Text style={{ fontSize: 11, fontFamily: MONO, lineHeight: '22px' }}>
+              {p.client || '—'}
+            </Text>
+            <Text style={{
+              fontSize: 11, fontFamily: MONO, opacity: 0.45, lineHeight: '22px',
+            }}>
+              {p.ip}
+            </Text>
+            <Text style={{
+              fontSize: 11, fontFamily: MONO, opacity: 0.55,
+              lineHeight: '22px', textAlign: 'right',
+            }}>
+              {since(now - p.startedAt)}
+            </Text>
+          </Fragment>
+        ))}
+      </div>
+
+      {/* The model on its own line under the table rather than a fifth column.
+          It is nearly always the same for every row -- one model is loaded at a
+          time -- and a column repeating one value four times is four times the
+          width for none of the information. */}
+      {models.length > 0 && (
+        <div style={{
+          marginTop: 8, paddingTop: 7, borderTop: `1px solid ${LINE.faint}`,
+          fontSize: 10, fontFamily: MONO, opacity: 0.4,
+        }}>
+          {models.join(' ・ ')}
         </div>
-      ))}
+      )}
     </div>
   );
 
   return (
-    <Popover content={detail} placement="bottomRight" trigger={['hover', 'click']}>
+    <Popover
+      content={detail}
+      placement="bottomRight"
+      trigger={['hover', 'click']}
+      // antd's default inner padding is sized for a sentence of prose. This is
+      // a dense table, and the stock 12px around it read as a small table
+      // floating in a large box.
+      styles={{ content: { padding: '10px 12px' } }}
+      // Hover on a badge is easy to leave by accident on the way to reading it.
+      mouseEnterDelay={0.15}
+      mouseLeaveDelay={0.25}
+    >
       <Space size={6} style={{ cursor: 'default' }}>
         <UserOutlined style={{ fontSize: 11, opacity: 0.5 }} />
         <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.7 }}>
