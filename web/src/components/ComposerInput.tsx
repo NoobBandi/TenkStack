@@ -25,7 +25,7 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react';
 import { EditorState, Prec, RangeSet, type Extension } from '@codemirror/state';
 import {
-  Decoration, EditorView, keymap, placeholder as placeholderExt,
+  Decoration, EditorView, WidgetType, keymap, placeholder as placeholderExt,
   drawSelection, type DecorationSet,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -72,30 +72,50 @@ function insideFence(text: string, caret: number): boolean {
 }
 
 /**
- * Shade the block, and turn its markers into its edges.
+ * The empty opening fence needs to say what it is for.
  *
- * The marker lines keep their place in the layout; only their text is replaced.
- * Six pixels of shaded nothing is what a code block's padding looks like
- * anyway, so the fence stops being three characters to read and becomes the top
- * and bottom of the box.
+ * Hiding the marker hid the one place a language could be typed, so a block
+ * came out uncoloured with nothing on screen explaining why. The hint is the
+ * label that was missing.
+ */
+class LanguageHint extends WidgetType {
+  toDOM() {
+    const hint = document.createElement('span');
+    hint.className = 'cm-fence-hint';
+    hint.textContent = '語言';
+    return hint;
+  }
+
+  eq() { return true; }
+}
+
+/**
+ * Shade the block; turn its closing marker into an edge and its opening one
+ * into a header.
  *
- * The alternative -- hiding the lines outright with block decorations that
- * swallow a line break -- collapses on the case the shortcut produces most: an
- * empty new block, where the closing fence's range starts at the same offset as
- * the empty body line and takes it with it, leaving a block with nowhere to put
- * the caret. Keeping the lines also keeps arrow keys, selection and delete
- * working the way they already did, which is the part a writer would notice.
+ * Only the backticks go. What follows them on that line is the language, and it
+ * has to stay visible and typeable -- it is what decides how the body is
+ * coloured, and a block whose language cannot be seen or set is a block that is
+ * never coloured. The closing marker carries nothing, so it is blanked outright
+ * and left as seven pixels of shading, which is what the bottom of a code block
+ * looks like anyway.
+ *
+ * The lines themselves are kept. Hiding them outright with block decorations
+ * that swallow a line break collapses on the case the shortcut produces most --
+ * a new empty block, where the closing fence's range starts at the same offset
+ * as the empty body line and takes it along, leaving nowhere to put the caret.
+ * Keeping them also keeps arrow keys, selection and delete behaving as before.
  */
 function decorate(state: EditorState): DecorationSet {
   const marks: { from: number; to: number; value: Decoration }[] = [];
   const blank = Decoration.replace({});
+  const hint = Decoration.widget({ widget: new LanguageHint(), side: 1 });
 
   for (const fence of fences(state)) {
     const last = fence.close ?? state.doc.lines;
 
     for (let i = fence.open; i <= last; i += 1) {
       const line = state.doc.line(i);
-      const marker = i === fence.open || i === fence.close;
       const edge = [
         i === fence.open ? 'cm-fence-open' : '',
         i === fence.close ? 'cm-fence-close' : '',
@@ -105,9 +125,25 @@ function decorate(state: EditorState): DecorationSet {
         to: line.from,
         value: Decoration.line({ class: `cm-fence ${edge}`.trim() }),
       });
-      // A fence line is never empty -- it is at least three backticks -- so the
-      // range is never the zero-length one a replacement rejects.
-      if (marker) marks.push({ from: line.from, to: line.to, value: blank });
+
+      if (i === fence.open) {
+        // The indent and the backticks; never zero-length, a fence is at least
+        // three characters.
+        const lead = line.text.length - line.text.trimStart().length;
+        const ticks = /^`+/.exec(line.text.slice(lead))?.[0].length ?? 3;
+        const info = line.from + lead + ticks;
+        marks.push({ from: line.from, to: info, value: blank });
+        if (info < line.to) {
+          marks.push({
+            from: info, to: line.to,
+            value: Decoration.mark({ class: 'cm-fence-lang' }),
+          });
+        } else {
+          marks.push({ from: line.to, to: line.to, value: hint });
+        }
+      } else if (i === fence.close) {
+        marks.push({ from: line.from, to: line.to, value: blank });
+      }
     }
   }
   return marks.length ? Decoration.set(marks.map(
@@ -171,6 +207,24 @@ export default function ComposerInput({
           const { head } = v.state.selection.main;
           const line = v.state.doc.lineAt(head);
           const all = fences(v.state);
+          // Enter on the header goes into the block, so ```js followed by
+          // Enter does what it looks like it does -- which is how everyone
+          // writes a fence, and how they wrote it here before the shortcut
+          // started jumping the caret past the language.
+          const opening = all.find((f) => f.open === line.number);
+          if (opening) {
+            const next = line.number < v.state.doc.lines
+              ? v.state.doc.line(line.number + 1) : null;
+            if (next && line.number + 1 !== opening.close) {
+              v.dispatch({ selection: { anchor: next.from }, scrollIntoView: true });
+            } else {
+              v.dispatch({
+                changes: { from: line.to, insert: '\n' },
+                selection: { anchor: line.to + 1 }, scrollIntoView: true,
+              });
+            }
+            return true;
+          }
           // The closing edge counts as out. Its ``` is not drawn any more, so
           // "click past the fence and press Enter" is no longer a thing anyone
           // can do -- and without this, a block sitting at the end of the
@@ -231,8 +285,7 @@ export default function ComposerInput({
         run: (v) => {
           if (v.composing || !v.state.selection.main.empty) return false;
           const line = v.state.doc.lineAt(v.state.selection.main.head);
-          const fence = fences(v.state).find(
-            (f) => line.number === f.open || line.number === f.open + 1);
+          const fence = fences(v.state).find((f) => line.number === f.open);
           if (!fence) return false;
           if (fence.open === 1) {
             v.dispatch({
@@ -281,7 +334,9 @@ export default function ComposerInput({
       if (insideFence(v.state.doc.toString(), from)) return false;
       v.dispatch({
         changes: { from: from - 2, to, insert: '```\n\n```' },
-        selection: { anchor: from - 2 + 4 },
+        // On the header, after the backticks: the language is the first thing
+        // to say about a block, and Enter drops into the body.
+        selection: { anchor: from - 2 + 3 },
       });
       return true;
     });
