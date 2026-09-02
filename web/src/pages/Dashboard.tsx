@@ -424,7 +424,7 @@ export default function Dashboard() {
                   // The fullest slot is the one shown: it is the one about to
                   // truncate, and a truncated tool call is what kills a coding
                   // session outright.
-                  title: 'CONTEXT', dataIndex: 'ctx_size', width: 132,
+                  title: 'CONTEXT', dataIndex: 'ctx_size', width: 200,
                   render: (n: number | null | undefined, row) => {
                     const slots = row.slots;
                     if (!slots?.length) {
@@ -434,41 +434,75 @@ export default function Dashboard() {
                         </Text>
                       );
                     }
-                    const worst = slots.reduce((a, b) => (b.used > a.used ? b : a));
-                    const percent = Math.min(100, (worst.used / worst.n_ctx) * 100);
-                    // Amber matches the chat panel's own threshold; red is a
-                    // step past it because the last few percent is where a
-                    // reply gets cut in half rather than merely gets tight.
-                    const colour = percent > 95 ? ACCENT.error
-                      : percent > 85 ? ACCENT.warn : 'rgba(255,255,255,0.75)';
-                    return (
-                      <Tooltip title={slots.map((slot) =>
-                        `slot ${slot.id}: ${slot.used.toLocaleString()} / ${slot.n_ctx.toLocaleString()}`
-                        + `${slot.busy ? ' ・ 使用中' : ''}`).join('\n')}>
-                        <div>
-                          <div style={{
-                            display: 'flex', justifyContent: 'space-between',
-                            gap: 6, marginBottom: 3,
-                          }}>
-                            <Text style={{ fontSize: 11, fontFamily: MONO, color: colour }}>
-                              {percent.toFixed(0)}%
-                            </Text>
-                            <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.45 }}>
-                              {Math.round(worst.n_ctx / 1024)}K
-                              {slots.length > 1 ? ` ×${slots.length}` : ''}
-                            </Text>
-                          </div>
-                          <div className="meter">
-                            <div style={{
-                              height: '100%', width: `${percent}%`, borderRadius: 1,
-                              background: colour, transition: 'width 300ms',
-                            }} />
-                          </div>
+                    // One bar per slot, because that is how the machine is
+                  // divided. Drawing only the fullest hid the thing anyone
+                  // actually wants from this column: whether the pressure is one
+                  // long conversation or every slot filling at once. Those need
+                  // different answers and looked identical.
+                  const used = slots.reduce((n, sl) => n + sl.used, 0);
+                  const worst = slots.reduce((a, b) =>
+                    (b.used / b.n_ctx > a.used / a.n_ctx ? b : a));
+                  const worstPercent = Math.min(100, (worst.used / worst.n_ctx) * 100);
+                  // Coloured by the fullest slot, not by the total: a single
+                  // slot about to truncate is the failure, and averaging it
+                  // against an idle neighbour would report it as half a problem.
+                  // Amber matches the chat panel's own threshold; red is a step
+                  // past it, where a reply gets cut in half rather than merely
+                  // gets tight.
+                  const colour = worstPercent > 95 ? ACCENT.error
+                    : worstPercent > 85 ? ACCENT.warn : 'rgba(255,255,255,0.75)';
+                  return (
+                    <Tooltip title={slots.map((slot) =>
+                      `slot ${slot.id}: ${slot.used.toLocaleString()} / ${slot.n_ctx.toLocaleString()}`
+                      + ` (${((slot.used / slot.n_ctx) * 100).toFixed(0)}%)`
+                      + `${slot.busy ? ' ・ 使用中' : ''}`).join('\n')}>
+                      <div>
+                        <div style={{
+                          display: 'flex', justifyContent: 'space-between',
+                          gap: 6, marginBottom: 3,
+                        }}>
+                            {/* Tokens rather than a percentage: a context limit is
+                              written in tokens, and a percentage of a window
+                              whose size is elsewhere is two numbers to hold at
+                              once.
+
+                              The denominator is one slot's ceiling, not the sum
+                              of them: what a conversation can reach is its own
+                              slot, and the sum would promise a room no single
+                              request can enter. */}
+                          <Text style={{ fontSize: 11, fontFamily: MONO, color: colour }}>
+                            {used.toLocaleString()}
+                          </Text>
+                          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.45 }}>
+                            / {worst.n_ctx.toLocaleString()}
+                            {slots.length > 1 ? ` ×${slots.length}` : ''}
+                          </Text>
                         </div>
-                      </Tooltip>
-                    );
-                  },
+                        <div style={{ display: 'flex', gap: 3 }}>
+                          {slots.map((slot) => {
+                            const pc = Math.min(100, (slot.used / slot.n_ctx) * 100);
+                            const own = pc > 95 ? ACCENT.error
+                              : pc > 85 ? ACCENT.warn : 'rgba(255,255,255,0.75)';
+                            return (
+                              <div key={slot.id} className="meter" style={{ flex: 1 }}>
+                                <div style={{
+                                  height: '100%', width: `${pc}%`, borderRadius: 1,
+                                  background: own, transition: 'width 300ms',
+                                  // An idle slot holding a cached conversation
+                                  // is not the same as one working through it,
+                                  // and the difference decides whether a full
+                                  // bar is a problem.
+                                  opacity: slot.busy ? 1 : 0.55,
+                                }} />
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </Tooltip>
+                  );
                 },
+              },
                 {
                   title: 'TTL', dataIndex: 'ttl', width: 70,
                   render: (ttl: number | null | undefined) =>
