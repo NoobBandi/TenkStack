@@ -122,6 +122,18 @@
 
 .turn-in { animation: fade-up 600ms cubic-bezier(0.23, 1, 0.32, 1) both; }
 
+/* Per-turn actions appear on hover.
+ *
+ * A copy button under every message is a row of chrome repeated the length of
+ * the thread, and the thread is the thing being read. The stats beside them
+ * stay: those are what the turn cost, which is why anyone opens this console.
+ *
+ * A pointerless device never hovers, so there they are simply always there. */
+.turn-act { opacity: 0; transition: opacity 120ms ease; }
+.turn-row:hover .turn-act,
+.turn-row:focus-within .turn-act { opacity: 1; }
+@media (hover: none) { .turn-act { opacity: 1; } }
+
 @media (prefers-reduced-motion: reduce) {
   .tt-body, .tt-chevron { transition-duration: 1ms; }
   .tt-shimmer { animation: none; color: rgba(242, 242, 242, 0.6); }

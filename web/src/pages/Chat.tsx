@@ -393,76 +393,102 @@ function ChatInner() {
                 const written = answer?.content?.length ?? 0;
                 const tracing = isLast && streaming && written <= (ran ? ANSWER_CHARS : 0);
 
+                // The byline, resolved once: who answered, which build it was,
+                // and what the reply cost in wall time.
+                const info = models.find((m) => m.id === answer?.model);
+                const modelId = answer?.model ?? active?.id;
+                const who = info?.name ?? modelId ?? active?.name ?? '助理';
+                // The id only when it says something the name does not.
+                const build = modelId && modelId !== who ? modelId : null;
+                const spent = (answer?.timings?.predicted_ms ?? 0)
+                  + (answer?.timings?.prompt_ms ?? 0);
+
                 return (
-                  <div key={index}>
+                  <div key={index} style={{
+                    // Space between exchanges, not a rule. A hairline drawn
+                    // across every turn filed the thread into records; a
+                    // conversation is read as one column, and the gap plus the
+                    // side a turn sits on already says who is speaking.
+                    paddingTop: index === 0 ? 4 : 26,
+                  }}>
                     {exchange.user && (
-                      <div
-                        className="turn-in"
-                        style={{
-                          padding: '18px 0',
-                          borderTop: index === 0 ? 'none' : `1px solid ${LINE.faint}`,
-                          display: 'flex', justifyContent: 'flex-end',
-                        }}
-                      >
+                      <div className="turn-in turn-row" style={{
+                        display: 'flex', justifyContent: 'flex-end',
+                        alignItems: 'flex-start', gap: 4,
+                      }}>
+                        <Tooltip title="複製">
+                          <Button className="turn-act" type="text" size="small"
+                                  icon={<CopyOutlined />}
+                                  onClick={() => copy(exchange.user!.content)} />
+                        </Tooltip>
                         <div style={{
-                          minWidth: 0, maxWidth: '76%',
-                          // A hairline on the reader's side rather than a fill.
-                          borderInlineEnd: `2px solid ${LINE.soft}`, paddingInlineEnd: 14,
+                          minWidth: 0, maxWidth: '78%',
+                          // The one thing in the thread that is drawn rather
+                          // than laid out. A reply is long, quoted, full of
+                          // code and tables; a question is a sentence. Giving
+                          // the fill to the short half is what makes the pair
+                          // read as a question and its answer, and it costs the
+                          // long half nothing.
+                          background: 'rgba(255,255,255,0.055)',
+                          borderRadius: 14, padding: '9px 14px',
                         }}>
-                          <Text style={{
-                            fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
-                            opacity: 0.5, display: 'block', marginBottom: 8, textAlign: 'right',
-                          }}>你</Text>
                           {exchange.user.images?.length ? (
                             <Space wrap size={6} style={{
-                              marginBottom: 10, justifyContent: 'flex-end', width: '100%',
+                              marginBottom: 8, justifyContent: 'flex-end', width: '100%',
                             }}>
                               {exchange.user.images.map((src, i) => (
-                                <Image key={i} src={src} width={128} style={{ borderRadius: 4 }} />
+                                <Image key={i} src={src} width={128} style={{ borderRadius: 6 }} />
                               ))}
                             </Space>
                           ) : null}
-                          <Text style={{ whiteSpace: 'pre-wrap', fontSize: 14 }}>
+                          <Text style={{
+                            whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.55,
+                          }}>
                             {exchange.user.content}
                           </Text>
-                          <Space size={2} wrap style={{
-                            marginTop: 10, width: '100%', justifyContent: 'flex-end',
-                          }}>
-                            <Tooltip title="複製">
-                              <Button type="text" size="small" icon={<CopyOutlined />}
-                                      onClick={() => copy(exchange.user!.content)} />
-                            </Tooltip>
-                          </Space>
                         </div>
                       </div>
                     )}
 
                     {(exchange.steps.length > 0 || answer) && (
-                      <div className="turn-in" style={{
-                        // No bubbles: long code answers read as a document, and
-                        // a tinted box around a 60-line snippet fights the
-                        // content. Sides carry the speaker instead.
-                        padding: exchange.user ? '0 0 18px' : '18px 0',
-                        borderTop: exchange.user || index === 0
-                          ? 'none' : `1px solid ${LINE.faint}`,
+                      <div className="turn-in turn-row" style={{
+                        // No bubble on this side: long code answers read as a
+                        // document, and a tinted box around a 60-line snippet
+                        // fights the content.
+                        marginTop: exchange.user ? 12 : 0,
                         // Measured, not full width. This ran to whatever the
                         // window gave it on the reasoning that code and tables
                         // need the room; on a wide screen that put prose on
-                        // 160-character lines, which is roughly twice what is
-                        // comfortable to read. 820px is about 90 characters at
-                        // this size. Code and tables keep their own horizontal
-                        // scroll inside it rather than setting the width of
-                        // everything around them.
+                        // 160-character lines, about twice what is comfortable.
+                        // 820px is roughly 90 characters here. Code and tables
+                        // keep their own horizontal scroll inside it rather
+                        // than setting the width of everything around them.
                         maxWidth: 820,
                       }}>
-                        <Text style={{
-                          fontSize: 10, letterSpacing: 1.4, fontFamily: MONO,
-                          opacity: 0.4, display: 'block', marginBottom: 8,
+                        {/* One line, three weights: who answered, which build,
+                            what it cost. The old label was a mono all-caps rule
+                            of its own, which read as a heading over a document
+                            rather than as the byline of a turn. */}
+                        <div style={{
+                          display: 'flex', alignItems: 'baseline', gap: 7,
+                          marginBottom: 9, minWidth: 0,
                         }}>
-                          {(models.find((m) => m.id === answer?.model)?.name
-                            ?? answer?.model
-                            ?? active?.name ?? active?.id ?? 'ASSISTANT').toUpperCase()}
-                        </Text>
+                          <Text style={{ fontSize: 12, fontWeight: 500 }}>{who}</Text>
+                          {build && (
+                            <Tooltip title={build}>
+                              <Text style={{
+                                fontSize: 11, fontFamily: MONO, opacity: 0.38,
+                                maxWidth: 240, overflow: 'hidden',
+                                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              }}>{build}</Text>
+                            </Tooltip>
+                          )}
+                          {spent > 0 && (
+                            <Text style={{ fontSize: 11, opacity: 0.5 }}>
+                              費時 {(spent / 1000).toFixed(spent < 10000 ? 1 : 0)}s
+                            </Text>
+                          )}
+                        </div>
 
                         <Trace steps={exchange.steps} live={tracing} />
 
@@ -500,17 +526,19 @@ function ChatInner() {
                           </Tooltip>
                         )}
 
-                        <Space size={2} wrap style={{ marginTop: 10, width: '100%' }}>
-                          <Tooltip title="複製">
-                            <Button type="text" size="small" icon={<CopyOutlined />}
-                                    onClick={() => copy(answer?.content ?? '')} />
-                          </Tooltip>
-                          {isLast && !streaming && (
-                            <Tooltip title="重新生成">
-                              <Button type="text" size="small" icon={<RedoOutlined />}
-                                      onClick={regenerate} />
+                        <Space size={2} wrap style={{ marginTop: 8, width: '100%' }}>
+                          <span className="turn-act">
+                            <Tooltip title="複製">
+                              <Button type="text" size="small" icon={<CopyOutlined />}
+                                      onClick={() => copy(answer?.content ?? '')} />
                             </Tooltip>
-                          )}
+                            {isLast && !streaming && (
+                              <Tooltip title="重新生成">
+                                <Button type="text" size="small" icon={<RedoOutlined />}
+                                        onClick={regenerate} />
+                              </Tooltip>
+                            )}
+                          </span>
                           {answer && <TurnStats turn={answer} />}
                         </Space>
                       </div>
