@@ -31,6 +31,8 @@ import {
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { StateField } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
+import { syntaxHighlighting } from '@codemirror/language';
+import { highlightStyle, parserFor } from './syntax';
 import './composer.css';
 
 export interface ComposerHandle {
@@ -298,7 +300,12 @@ export default function ComposerInput({
       history(),
       drawSelection(),
       EditorView.lineWrapping,
-      markdown(),
+      // The fence's own language, parsed for real. `codeLanguages` takes a
+      // function, so the info string is resolved against the console's table
+      // rather than pulling in @codemirror/language-data and its lazy loader
+      // for a set of languages that is already installed.
+      markdown({ codeLanguages: parserFor }),
+      syntaxHighlighting(highlightStyle),
       blocks,
       Prec.highest(sending),
       Prec.highest(stepping),
