@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { App as AntApp, Button, Tooltip } from 'antd';
 import {
-  CheckOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined,
+  CheckOutlined, CodeOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined,
 } from '@ant-design/icons';
 import { usePreview } from './preview';
 import './markdown.css';
@@ -39,15 +39,53 @@ const DOWNLOADABLE_LINES = 6;
  * models.py and routes.py. Only the first line is considered, and only when it
  * is a comment: a path appearing later is being discussed, not declared.
  */
-function fileName(source: string, language: string | undefined): string {
-  const ext = language ? (EXTENSIONS[language] ?? language) : 'txt';
+function declaredName(source: string): string | null {
   const first = source.split('\n', 1)[0].trim();
   const declared = /^(?:\/\/|#|--|;|\/\*|\*)\s*([\w.@/-]+\.[A-Za-z]\w{0,4})\b/.exec(first);
-  if (declared) {
-    const base = declared[1].split('/').pop();
-    if (base && base.length <= 64) return base;
-  }
-  return ext === 'Dockerfile' ? 'Dockerfile' : `snippet.${ext}`;
+  if (!declared) return null;
+  const base = declared[1].split('/').pop();
+  return base && base.length <= 64 ? base : null;
+}
+
+function fileName(source: string, language: string | undefined): string {
+  const ext = language ? (EXTENSIONS[language] ?? language) : 'txt';
+  return declaredName(source)
+    ?? (ext === 'Dockerfile' ? 'Dockerfile' : `snippet.${ext}`);
+}
+
+/**
+ * A unified diff, split into rows the renderer can tint.
+ *
+ * Models emit diffs constantly -- a patch, a review, an edit being proposed --
+ * and shading one as if it were source code says nothing about which side of it
+ * is which. The line numbers come from the hunk headers where there are any; a
+ * bare diff with no `@@` is numbered from one, which is what it is.
+ */
+interface DiffRow {
+  kind: 'add' | 'del' | 'ctx' | 'meta';
+  old: number | null;
+  cur: number | null;
+  text: string;
+}
+
+function parseDiff(source: string): DiffRow[] {
+  let old = 1;
+  let cur = 1;
+  return source.split('\n').map((text): DiffRow => {
+    const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(text);
+    if (hunk) {
+      old = Number(hunk[1]);
+      cur = Number(hunk[2]);
+      return { kind: 'meta', old: null, cur: null, text };
+    }
+    // `+++`/`---` are file headers, not a one-line insertion and deletion.
+    if (/^(?:diff |index |---|\+\+\+|new file|deleted file|similarity |rename )/.test(text)) {
+      return { kind: 'meta', old: null, cur: null, text };
+    }
+    if (text.startsWith('+')) return { kind: 'add', old: null, cur: cur++, text };
+    if (text.startsWith('-')) return { kind: 'del', old: old++, cur: null, text };
+    return { kind: 'ctx', old: old++, cur: cur++, text };
+  });
 }
 
 /**
@@ -85,6 +123,9 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   const [copied, setCopied] = useState(false);
   const preview = usePreview();
   const language = /language-(\w+)/.exec(className ?? '')?.[1];
+  // A patch is not source: shading it as code says nothing about which side of
+  // it is which.
+  const isDiff = language === 'diff' || language === 'patch';
   const source = toText(children).replace(/\n$/, '');
   // No provider means no panel to send this to, so the button is not offered.
   const runnable = preview !== null && RUNNABLE.has(language ?? '');
@@ -118,11 +159,30 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
     requestAnimationFrame(() => URL.revokeObjectURL(url));
   };
 
+  const lines = source.split('\n');
+  // A one-liner needs no gutter: numbering a single line is a label saying "1".
+  const numbered = lines.length > 1;
+  const rows = isDiff ? parseDiff(source) : null;
+  const added = rows?.filter((r) => r.kind === 'add').length ?? 0;
+  const removed = rows?.filter((r) => r.kind === 'del').length ?? 0;
+
   return (
     <div className="md-code">
       <div className="md-code-bar">
-        <span className="md-code-lang">{language ?? 'text'}</span>
+        <span className="md-code-name">
+          <CodeOutlined />
+          {/* The name the code gives itself, and only that: a block that
+              declares no path is not a file, and calling it snippet.txt in the
+              header would invent one. The language is what it is instead. */}
+          <span>{declaredName(source) ?? language ?? 'text'}</span>
+        </span>
         <span className="md-code-actions">
+          {isDiff && (
+            <span className="md-code-stat">
+              <span className="md-code-add">+{added}</span>
+              <span className="md-code-del">-{removed}</span>
+            </span>
+          )}
           {runnable && (
             <Tooltip title="在右側的隔離框架中執行">
               <Button
@@ -152,9 +212,39 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
           at the page edge rather than here. Rendering a reply must never execute
           what is in it -- the code arrives token by token from a model, so
           auto-running would mean running half-written documents too. */}
-      <pre>
-        <code className={className}>{children}</code>
-      </pre>
+      <div className="md-code-body">
+        {numbered && (
+          // Outside the scrolling box, so the numbers stay put while a long
+          // line is scrolled. Alignment is by line-height alone: both sides are
+          // pinned to the same pixel value rather than a ratio, because 1.55 of
+          // 13px and 1.55 of 11px are different numbers and the drift compounds
+          // down the block.
+          <div className="md-code-gutter" aria-hidden>
+            {(rows ?? lines).map((row, i) => (
+              <span key={i} className={
+                typeof row === 'string' ? undefined : `md-code-n-${row.kind}`
+              }>
+                {typeof row === 'string'
+                  ? i + 1
+                  : (row.kind === 'del' ? row.old : row.cur) ?? ''}
+              </span>
+            ))}
+          </div>
+        )}
+        {rows ? (
+          <pre className={numbered ? 'md-code-numbered' : undefined}>
+            {rows.map((row, i) => (
+              <span key={i} className={`md-code-row md-code-r-${row.kind}`}>
+                {row.text || ' '}
+              </span>
+            ))}
+          </pre>
+        ) : (
+          <pre className={numbered ? 'md-code-numbered' : undefined}>
+            <code className={className}>{children}</code>
+          </pre>
+        )}
+      </div>
     </div>
   );
 }

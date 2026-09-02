@@ -77,22 +77,82 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 2px 6px 2px 12px;
+  gap: 8px;
+  padding: 3px 6px 3px 12px;
   background: rgba(128, 128, 128, 0.14);
 }
 
-.md-code-lang {
-  font-size: 11px;
-  opacity: 0.6;
+/* What the block calls itself, next to the mark that says it is one. The
+   language name used to sit here alone in lowercase, which named the syntax
+   rather than the thing. */
+.md-code-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.75;
 }
+.md-code-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-code-name .anticon { opacity: 0.5; font-size: 12px; }
+
+.md-code-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* A patch says how much it changes before anyone reads it. */
+.md-code-stat {
+  display: inline-flex;
+  gap: 8px;
+  margin-right: 4px;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.md-code-add { color: #5ccf8f; }
+.md-code-del { color: #e05c5c; }
+
+.md-code-body { position: relative; }
 
 .md-code pre {
   margin: 0;
   padding: 12px;
   overflow-x: auto;
   font-size: 13px;
-  line-height: 1.55;
+  /* Pinned in pixels, not as a ratio: the gutter is set at a smaller size, and
+     1.55 of 13px against 1.55 of 11px drifts a line apart every twenty rows. */
+  line-height: 20px;
+}
+
+.md-code pre.md-code-numbered { padding-left: 52px; }
+
+/* Outside the scrolling box: numbers that scroll sideways with a long line are
+   numbering nothing. */
+.md-code-gutter {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  width: 40px;
+  display: flex;
+  flex-direction: column;
+  text-align: right;
+  padding-right: 11px;
+  font-size: 11px;
+  line-height: 20px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  color: currentColor;
+  opacity: 0.28;
+  user-select: none;
+  pointer-events: none;
+  border-right: 1px solid rgba(128, 128, 128, 0.28);
 }
 
 .md-code code {
@@ -101,11 +161,36 @@
   padding: 0;
 }
 
-.md-code-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+/* Diff rows.
+ *
+ * The tint says which side a line is on and the bar at the edge survives a
+ * theme where the tint is nearly invisible. Deletions get a hatch rather than a
+ * second solid bar, so the two are told apart without relying on red against
+ * green -- the one pair of colours a red-green reader cannot separate. */
+.md-code-row {
+  display: block;
+  /* As wide as its content, never narrower than the box: a tint that stops at
+     the fold leaves a scrolled-to line looking like it was never changed. */
+  width: max-content;
+  min-width: 100%;
+  margin: 0 -12px;
+  padding: 0 12px 0 9px;
+  border-left: 3px solid transparent;
 }
+.md-code-numbered .md-code-row { margin-left: -52px; padding-left: 49px; }
+.md-code-r-add {
+  background: rgba(92, 207, 143, 0.13);
+  border-left-color: #5ccf8f;
+}
+.md-code-r-del {
+  background: rgba(224, 92, 92, 0.13);
+  border-left-color: transparent;
+  border-image: repeating-linear-gradient(
+    45deg, #e05c5c 0 1.5px, transparent 1.5px 3px) 3;
+}
+.md-code-r-meta { opacity: 0.45; }
+.md-code-n-add { color: #5ccf8f; opacity: 0.9; }
+.md-code-n-del { color: #e05c5c; opacity: 0.9; }
 
 /* The preview lives in the right-hand panel, not under the code block: the
    reply stays readable while its output runs beside it, which is what the
