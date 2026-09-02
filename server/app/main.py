@@ -31,8 +31,8 @@ from pydantic import BaseModel, Field
 from . import (
     activity,
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
-    blobs, gguf, gpu, gpu_history, llamaswap, logs as journal, paths, search,
-    settings, speed, system, users, versions,
+    blobs, gguf, gpu, gpu_history, images, llamaswap, logs as journal, paths,
+    search, settings, speed, system, users, versions,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -2369,6 +2369,10 @@ async def openai_proxy(path: str, request: Request):
     """
     body = await request.body()
     _log_request_shape(path, body, request)
+    # A format llama.cpp's decoder cannot read is re-encoded here rather than
+    # rejected upstream; see app.images. Content-Length is already dropped from
+    # the forwarded headers, so a body that changes length is safe.
+    body = images.transcode(body)
 
     # Only requests that name a model can cause one to be loaded; /v1/models and
     # the like are just reads and must not stall behind an eviction.
