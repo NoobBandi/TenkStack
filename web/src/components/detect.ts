@@ -34,10 +34,14 @@ const SIGNATURES: [string, RegExp][] = [
   ['cpp', /^\s*#\s*include\s*[<"]|\bstd::\w+|\bprintf\s*\(|\bint\s+main\s*\(/m],
   ['rs', /^\s*(pub\s+)?fn\s+\w+|^\s*impl\b|\blet\s+mut\b|\buse\s+std::|\bprintln!\s*\(/m],
   ['go', /^package\s+\w+\s*$|\bfmt\.\w+\(|^\s*func\s+(\(\w+[^)]*\)\s*)?\w+\(|:=/m],
-  ['py', /^\s*(async\s+)?(def|class)\s+\w+.*:\s*$|^\s*(from\s+[\w.]+\s+)?import\s+\w|^\s*(if|for|while|with|try|except|elif|else)\b.*:\s*$|\bself\.\w|^if __name__/m],
+  // Python's import and JavaScript's are told apart by the quotes: a JS module
+  // specifier is always a string, a Python one never is. Without that,
+  // `import React from 'react'` -- the first line of half the JavaScript ever
+  // written -- came back as Python.
+  ['py', /^\s*(async\s+)?(def|class)\s+\w+.*:\s*$|^\s*from\s+[\w.]*\s+import\s+\w|^\s*import\s+[\w.]+(\s*,\s*[\w.]+)*(\s+as\s+\w+)?\s*(#.*)?$|^\s*(if|for|while|with|try|except|elif|else)\b.*:\s*$|\bself\.\w|^if __name__/m],
   ['java', /\bSystem\.out\.print|^\s*import\s+java\.|^\s*(public|private|protected)\s+(static\s+)?(final\s+)?(class|void|int|String)\b/m],
   ['ts', /^\s*(export\s+)?(interface|type)\s+\w+\s*[={]|:\s*(string|number|boolean|void)\b|\bas\s+const\b/m],
-  ['js', /^\s*(export|import)\b|^\s*(const|let|var)\s+\w+\s*=|=>|\bfunction\s*\w*\s*\(|console\.log\(|\brequire\s*\(|\bmodule\.exports\b/m],
+  ['js', /^\s*import\b[^\n]*['"]|^\s*export\b|^\s*(const|let|var)\s+\w+\s*=|=>|\bfunction\s*\w*\s*\(|console\.log\(|\brequire\s*\(|\bmodule\.exports\b/m],
   ['rb', /^\s*def\s+\w+[\s\S]*^\s*end\s*$|^\s*puts\s|^\s*require\s+['"]/m],
   ['sql', /\bselect\b[\s\S]{0,200}\bfrom\b|\binsert\s+into\b|\bcreate\s+table\b|\bupdate\s+\w+\s+set\b|\balter\s+table\b/i],
   ['dockerfile', /^FROM\s+\S+/m],
