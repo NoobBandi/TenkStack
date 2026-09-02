@@ -100,6 +100,10 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
             };
 
             if (tick.phase === 'done') {
+              // A request short enough to finish between progress ticks has no
+              // points at all, and a trace with nothing to draw is a row that
+              // says nothing. Dropped rather than kept as an empty one.
+              if (!existing) return prev;
               return [...rest, {
                 ...base, updatedAt: at, done: true,
                 truncated: !!tick.truncated, finalTokens: tick.tokens,

@@ -40,11 +40,26 @@ function fmt(n: number): string {
  *
  *  Clicking one draws it, so the list is also how you get back to the request
  *  that just scrolled past. */
+/** Past this, a request that has not reported since is not running -- it was
+ *  already under way when the page connected and finished unseen, or its slot
+ *  stopped answering. Either way its ticks are not coming. */
+const STALE_MS = 90 * 1000;
+
 function TraceList({ traces, current, onPick }: {
   traces: RequestTrace[];
   current?: string;
   onPick: (key: string | null) => void;
 }) {
+  // Staleness is a function of the clock, and nothing else here re-renders once
+  // the ticks stop -- which is exactly the case it has to detect. Without this
+  // the row that has gone quiet keeps its live dot until something unrelated
+  // redraws the page.
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   if (traces.length < 2) return null;
   return (
     <div style={{ marginTop: 10, borderTop: `1px solid ${LINE.faint}`, paddingTop: 6 }}>
@@ -59,6 +74,11 @@ function TraceList({ traces, current, onPick }: {
         // about the whole of it.
         const rate = seconds > 0 ? tokens / seconds : 0;
         const active = t.key === current;
+        // `done` only arrives if the release line was seen. A request already
+        // running when the console connected reports one tick and then nothing
+        // -- its release happened before anyone was listening -- and stayed on
+        // the list with a live dot and 0.0 t/s indefinitely.
+        const stale = !t.done && now - t.updatedAt > STALE_MS;
         return (
           <div
             key={t.key}
@@ -71,8 +91,9 @@ function TraceList({ traces, current, onPick }: {
           >
             <span style={{
               width: 6, height: 6, borderRadius: '50%', flex: '0 0 auto',
-              background: t.done ? LINE.strong : ACCENT.ok,
-              boxShadow: t.done ? 'none' : `0 0 6px ${ACCENT.ok}b3`,
+              background: t.done || stale ? LINE.strong : ACCENT.ok,
+              boxShadow: t.done || stale ? 'none' : `0 0 6px ${ACCENT.ok}b3`,
+              opacity: stale ? 0.5 : 1,
             }} />
             <span style={{ opacity: 0.75, minWidth: 62, textAlign: 'right' }}>
               {fmt(tokens)} tok
@@ -86,7 +107,8 @@ function TraceList({ traces, current, onPick }: {
             <span style={{ opacity: 0.3, marginInlineStart: 'auto' }}>
               slot {t.slot}
               {t.truncated ? ' ・ 截斷' : ''}
-              {!t.done ? ' ・ 進行中' : ''}
+              {!t.done && !stale ? ' ・ 進行中' : ''}
+              {stale ? ' ・ 未回報' : ''}
             </span>
           </div>
         );
