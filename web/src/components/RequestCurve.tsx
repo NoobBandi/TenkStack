@@ -45,6 +45,10 @@ function fmt(n: number): string {
  *  stopped answering. Either way its ticks are not coming. */
 const STALE_MS = 90 * 1000;
 
+/** Four rows of 22px. Fixed rather than capped: a max-height still changes as
+ *  rows appear, and the point is a card whose height never moves. */
+const ROWS_H = 88;
+
 function TraceList({ traces, current, onPick }: {
   traces: RequestTrace[];
   current?: string;
@@ -60,9 +64,24 @@ function TraceList({ traces, current, onPick }: {
     return () => window.clearInterval(timer);
   }, []);
 
-  if (traces.length < 2) return null;
   return (
-    <div style={{ marginTop: 10, borderTop: `1px solid ${LINE.faint}`, paddingTop: 6 }}>
+    // A fixed height, scrolling past four rows. The list grows from nothing to
+    // six as requests arrive, and this card sits in a stretch row -- so every
+    // arrival was making the card taller and dragging the depth chart beside it
+    // along with it, which is a layout that moves while you are reading it.
+    // Four rows is what the chart's own height affords without the card
+    // outgrowing its neighbour.
+    <div style={{
+      marginTop: 10, borderTop: `1px solid ${LINE.faint}`, paddingTop: 6,
+      height: ROWS_H, overflowY: 'auto', overflowX: 'hidden',
+    }}>
+      {traces.length === 0 && (
+        <Text style={{
+          fontSize: 10, fontFamily: MONO, opacity: 0.25, paddingInlineStart: 6,
+        }}>
+          尚無請求
+        </Text>
+      )}
       {traces.map((t) => {
         const points = t.points;
         const seconds = points.length
@@ -145,6 +164,10 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
          message; dropping the list into it put the rows beside the text
          instead of under it. */
       <div>
+        {/* The same header height as the charted branch, empty. Without it the
+            card is one line shorter whenever nothing is running, which is the
+            same jump this fixed-height list exists to stop. */}
+        <div style={{ height: 30, marginBottom: 8 }} />
         <div style={{
           height: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
