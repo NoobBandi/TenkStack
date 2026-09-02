@@ -31,7 +31,12 @@ import {
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { StateField } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
-import { syntaxHighlighting } from '@codemirror/language';
+import {
+  syntaxHighlighting, LanguageDescription, type Language,
+} from '@codemirror/language';
+import { highlightTree } from '@lezer/highlight';
+import { ViewPlugin, type ViewUpdate } from '@codemirror/view';
+import { detectLanguage } from './detect';
 import { highlightStyle, parserFor } from './syntax';
 import './composer.css';
 
@@ -72,21 +77,33 @@ function insideFence(text: string, caret: number): boolean {
 }
 
 /**
- * The empty opening fence needs to say what it is for.
+ * What the header says when the fence names nothing.
  *
- * Hiding the marker hid the one place a language could be typed, so a block
- * came out uncoloured with nothing on screen explaining why. The hint is the
- * label that was missing.
+ * Either the language that was worked out from the body, or a word saying that
+ * is where one goes. Showing the guess matters as much as acting on it: the
+ * block is about to be coloured as Python, and the writer should be able to see
+ * that and disagree by typing over it.
  */
 class LanguageHint extends WidgetType {
-  toDOM() {
-    const hint = document.createElement('span');
-    hint.className = 'cm-fence-hint';
-    hint.textContent = '語言';
-    return hint;
+  label: string;
+  guessed: boolean;
+
+  constructor(label: string, guessed: boolean) {
+    super();
+    this.label = label;
+    this.guessed = guessed;
   }
 
-  eq() { return true; }
+  eq(other: LanguageHint) {
+    return other.label === this.label && other.guessed === this.guessed;
+  }
+
+  toDOM() {
+    const hint = document.createElement('span');
+    hint.className = this.guessed ? 'cm-fence-hint cm-fence-guess' : 'cm-fence-hint';
+    hint.textContent = this.label;
+    return hint;
+  }
 }
 
 /**
@@ -109,7 +126,6 @@ class LanguageHint extends WidgetType {
 function decorate(state: EditorState): DecorationSet {
   const marks: { from: number; to: number; value: Decoration }[] = [];
   const blank = Decoration.replace({});
-  const hint = Decoration.widget({ widget: new LanguageHint(), side: 1 });
 
   for (const fence of fences(state)) {
     const last = fence.close ?? state.doc.lines;
@@ -139,7 +155,18 @@ function decorate(state: EditorState): DecorationSet {
             value: Decoration.mark({ class: 'cm-fence-lang' }),
           });
         } else {
-          marks.push({ from: line.to, to: line.to, value: hint });
+          // Cheap: the detector reads a prefix and caches its answer, so this
+          // costs nothing that the colouring pass has not already paid.
+          const bodyTo = fence.close ? state.doc.line(last).to : state.doc.length;
+          const guess = last > fence.open
+            ? detectLanguage(state.sliceDoc(state.doc.line(fence.open + 1).from, bodyTo))
+            : null;
+          marks.push({
+            from: line.to, to: line.to,
+            value: Decoration.widget({
+              widget: new LanguageHint(guess ?? '語言', guess !== null), side: 1,
+            }),
+          });
         }
       } else if (i === fence.close) {
         marks.push({ from: line.from, to: line.to, value: blank });
@@ -155,6 +182,96 @@ const blocks = StateField.define<DecorationSet>({
   update: (deco, tr) => (tr.docChanged ? decorate(tr.state) : deco),
   provide: (field) => EditorView.decorations.from(field),
 });
+
+/**
+ * Colour the code inside a block.
+ *
+ * CodeMirror's Markdown parser can nest a language into a fence, but it is only
+ * ever told the name the fence declares -- and a fence that declares nothing is
+ * exactly the case worth handling. So the parsing happens here instead: the
+ * language is whatever the fence says, or whatever `detectLanguage` makes of the
+ * body, and the tree it produces is run through the same HighlightStyle the rest
+ * of the console uses. The classes come out identical to a declared block's,
+ * because they are the same classes.
+ *
+ * A plugin rather than a field: a language that is not in the eager set has to
+ * be fetched, and this is the layer that can ask for a redraw once it arrives.
+ */
+const parsed = new Map<string, { from: number; to: number; cls: string }[]>();
+
+/** Runs of one block, relative to its start, so an edit elsewhere reuses them. */
+function runs(language: Language, body: string) {
+  const key = `${language.name}\u0000${body}`;
+  const cached = parsed.get(key);
+  if (cached) return cached;
+  const out: { from: number; to: number; cls: string }[] = [];
+  highlightTree(language.parser.parse(body), highlightStyle, (from, to, cls) => {
+    out.push({ from, to, cls });
+  });
+  if (parsed.size > 60) parsed.clear();
+  parsed.set(key, out);
+  return out;
+}
+
+/** A block longer than this is a pasted file; parsing it on every keystroke is
+ *  not what anyone is waiting for. */
+const COLOUR_LIMIT = 20000;
+
+const colours = ViewPlugin.fromClass(class {
+  decorations: DecorationSet = RangeSet.empty;
+
+  constructor(view: EditorView) { this.decorations = this.build(view); }
+
+  update(update: ViewUpdate) {
+    if (update.docChanged) this.decorations = this.build(update.view);
+  }
+
+  build(view: EditorView): DecorationSet {
+    const marks: { from: number; to: number; cls: string }[] = [];
+    const { state } = view;
+
+    for (const fence of fences(state)) {
+      const open = state.doc.line(fence.open);
+      const last = fence.close ? fence.close - 1 : state.doc.lines;
+      if (last <= fence.open) continue;
+      const from = state.doc.line(fence.open + 1).from;
+      const to = state.doc.line(last).to;
+      if (to - from > COLOUR_LIMIT) continue;
+      const body = state.sliceDoc(from, to);
+
+      const declared = open.text.trim().replace(/^`+/, '').trim().split(/[\s,]+/)[0];
+      const name = declared || detectLanguage(body);
+      if (!name) continue;
+
+      const language = resolve(name, view);
+      if (!language) continue;
+      for (const run of runs(language, body)) {
+        marks.push({ from: from + run.from, to: from + run.to, cls: run.cls });
+      }
+    }
+    return marks.length
+      ? Decoration.set(marks.map((m) =>
+        Decoration.mark({ class: m.cls }).range(m.from, m.to)), true)
+      : RangeSet.empty;
+  }
+}, { decorations: (plugin) => plugin.decorations });
+
+/**
+ * The eager table first; anything else is fetched once and then redrawn.
+ *
+ * `parserFor` already answers both -- a Language for what is bundled, an
+ * unloaded description for the rest -- so the only thing added here is the
+ * redraw. The document has not changed when a parser arrives, but what can be
+ * drawn on it has, and nothing else would ask.
+ */
+function resolve(name: string, view: EditorView): Language | null {
+  const found = parserFor(name);
+  if (!found) return null;
+  if (!(found instanceof LanguageDescription)) return found;
+  if (found.support) return found.support.language;
+  void found.load().then(() => view.dispatch({}));
+  return null;
+}
 
 interface Props {
   value: string;
@@ -355,13 +472,10 @@ export default function ComposerInput({
       history(),
       drawSelection(),
       EditorView.lineWrapping,
-      // The fence's own language, parsed for real. `codeLanguages` takes a
-      // function, so the info string is resolved against the console's table
-      // rather than pulling in @codemirror/language-data and its lazy loader
-      // for a set of languages that is already installed.
-      markdown({ codeLanguages: parserFor }),
+      markdown(),
       syntaxHighlighting(highlightStyle),
       blocks,
+      colours,
       Prec.highest(sending),
       Prec.highest(stepping),
       fenceShortcut,

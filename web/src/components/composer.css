@@ -100,6 +100,14 @@
   pointer-events: none;
 }
 
+/* A guessed language, set apart from one that was typed. Italic rather than a
+   different colour: it is the same fact, held with less certainty, and the
+   writer can overrule it by typing over it. */
+.composer-input .cm-fence-guess {
+  color: rgba(255, 255, 255, 0.34);
+  font-style: italic;
+}
+
 .composer-input .cm-fence-close {
   border-radius: 0 0 6px 6px;
 }
