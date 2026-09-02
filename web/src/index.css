@@ -158,6 +158,25 @@ body {
   border-radius: 1px;
 }
 
+/* A solid bar, for a reading that is about how full something is rather than
+ * how hard it is working. The dashed `.meter` suits a rate -- power, clock, a
+ * throughput that is a flow -- where the segments read as movement. A context
+ * window is a container, and a container filling wants to look filled.
+ *
+ * Taller than .meter for the same reason: at 2px a fill and its track are one
+ * line of two colours, and the eye has to be told which is which. */
+.gauge {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.gauge > * {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+
 
 /* ── Syntax colours ────────────────────────────────────────────────────
  * Hand-picked instead of importing a highlight.js theme: every shipped theme

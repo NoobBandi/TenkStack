@@ -484,10 +484,15 @@ export default function Dashboard() {
                             const own = pc > 95 ? ACCENT.error
                               : pc > 85 ? ACCENT.warn : 'rgba(255,255,255,0.75)';
                             return (
-                              <div key={slot.id} className="meter" style={{ flex: 1 }}>
+                              <div key={slot.id} className="gauge" style={{ flex: 1 }}>
                                 <div style={{
-                                  height: '100%', width: `${pc}%`, borderRadius: 1,
+                                  height: '100%', width: `${pc}%`,
                                   background: own, transition: 'width 300ms',
+                                  // A sliver still reads as a bar rather than as
+                                  // a speck: a slot holding a few hundred tokens
+                                  // of a 262K window is under half a percent,
+                                  // and at 6px tall that rounds to nothing.
+                                  minWidth: pc > 0 ? 3 : 0,
                                   // An idle slot holding a cached conversation
                                   // is not the same as one working through it,
                                   // and the difference decides whether a full
