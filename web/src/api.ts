@@ -138,6 +138,15 @@ export interface InflightRequest {
   remote_ip: string;
   resp_bytes: number;
   elapsed_ms: number;
+  /** Sent all along and only ever discarded by this interface. An address says
+   *  which machine; only this says whether that machine is running opencode,
+   *  Codex or a browser -- which is the difference between "someone is working"
+   *  and "a tab is open". */
+  req_headers?: Record<string, string>;
+  /** Not sent. llama-swap's inflight events describe requests that are running
+   *  and end them with a bare `remove` carrying no body, so the stream never
+   *  says how one finished. Refusal counts have to come from the journal or
+   *  from activity.sqlite instead. */
   /** When this entry last changed, in browser time. llama-swap never deletes a
    *  finished request, so staleness is the only signal that it ended. */
   updated_at: number;

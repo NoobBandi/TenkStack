@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Alert, Button, Card, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import ClientBadge from '../components/ClientBadge';
 import DepthCurve from '../components/DepthCurve';
 import GpuChart from '../components/GpuChart';
 import RequestCurve from '../components/RequestCurve';
@@ -256,7 +257,7 @@ function GpuPanel({ gpus, showTemp }: { gpus: GpuSample[]; showTemp: boolean }) 
 }
 
 export default function Dashboard() {
-  const { gpus, system, models, throughput, traces, connected, refreshModels } =
+  const { gpus, system, models, throughput, traces, requests, connected, refreshModels } =
     useStream();
   const [unloading, setUnloading] = useState(false);
 
@@ -287,6 +288,31 @@ export default function Dashboard() {
           description="畫面上的數值可能已經過期。連線恢復後會自動更新。"
         />
       )}
+
+      {/* One line above everything, for the two facts the panels below cannot
+          state: whether the stream is live, and who else is on the machine.
+          The second is what was missing when a model got unloaded three times
+          under a running opencode session -- the addresses were in the stream
+          the whole time and nothing displayed them. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        paddingInline: 2, minHeight: 20,
+      }}>
+        <Space size={7}>
+          <span style={{
+            width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
+            background: connected ? ACCENT.ok : ACCENT.warn,
+            boxShadow: connected ? `0 0 8px ${ACCENT.ok}b3` : 'none',
+            transition: 'background 300ms',
+          }} />
+          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.55 }}>
+            {connected ? '即時' : '連線中斷'}
+          </Text>
+        </Space>
+        <div style={{ marginInlineStart: 'auto' }}>
+          <ClientBadge requests={requests} />
+        </div>
+      </div>
 
       {/*
         Two columns: the cards stacked on the left, the machine on the right.
