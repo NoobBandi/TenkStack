@@ -11,7 +11,7 @@ import ChatSettings from '../components/ChatSettings';
 import PreviewPanel from '../components/PreviewPanel';
 import { PreviewProvider, usePreview } from '../components/preview';
 import ChatHistory from '../components/ChatHistory';
-import Markdown, { lastVisualBlock } from '../components/Markdown';
+import Markdown, { lastVisualBlock, splitCode } from '../components/Markdown';
 import Trace from '../components/Trace';
 import { useStream } from '../stream';
 import { foldExchanges, useChat, type Turn } from '../chat';
@@ -421,7 +421,7 @@ function ChatInner() {
                                   icon={<CopyOutlined />}
                                   onClick={() => copy(exchange.user!.content)} />
                         </Tooltip>
-                        <div style={{
+                        <div className="turn-said" style={{
                           minWidth: 0, maxWidth: '78%',
                           // The one thing in the thread that is drawn rather
                           // than laid out. A reply is long, quoted, full of
@@ -441,11 +441,24 @@ function ChatInner() {
                               ))}
                             </Space>
                           ) : null}
-                          <Text style={{
-                            whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.55,
-                          }}>
-                            {exchange.user.content}
-                          </Text>
+                          {/* What the composer drew, drawn again. A fenced
+                              block was a block while it was being typed; it
+                              should not turn back into three backticks the
+                              moment it is sent. Prose stays prose -- the
+                              composer never rendered a heading or a bold run,
+                              so neither does this. */}
+                          {splitCode(exchange.user.content).map((part, i) => (
+                            part.code ? (
+                              <Markdown key={i}>{part.text}</Markdown>
+                            ) : (
+                              <Text key={i} style={{
+                                whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.55,
+                                display: 'block',
+                              }}>
+                                {part.text}
+                              </Text>
+                            )
+                          ))}
                         </div>
                       </div>
                     )}

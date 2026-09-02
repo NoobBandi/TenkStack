@@ -299,3 +299,13 @@ a.tt-source:hover .tt-source-title { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   .tt-query, a.tt-source, .tt-more { animation: none; }
 }
+
+
+/* A code block inside a written message.
+ *
+ * The margins a block needs between paragraphs are too much inside a bubble
+ * that is already padded, and a block that is the whole message needs none at
+ * all on the side it touches. */
+.turn-said .md-code { margin: 8px 0; }
+.turn-said > .md:first-child .md-code { margin-top: 0; }
+.turn-said > .md:last-child .md-code { margin-bottom: 0; }

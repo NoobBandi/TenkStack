@@ -90,6 +90,42 @@ function parseDiff(source: string): DiffRow[] {
 }
 
 /**
+ * Split a written message into its prose and its fenced blocks.
+ *
+ * A message typed in this console is not Markdown to be rendered -- the
+ * composer never showed the writer a heading or a bold run, so producing one
+ * after the fact would be showing them something they did not write. The one
+ * thing it did show as a block was a fenced block, and that is the one thing
+ * carried through here.
+ */
+export function splitCode(text: string): { text: string; code: boolean }[] {
+  if (!text.includes('```')) return [{ text, code: false }];
+  const lines = text.split('\n');
+  const parts: { text: string; code: boolean }[] = [];
+  let buffer: string[] = [];
+  let inside = false;
+
+  const flush = (code: boolean) => {
+    const run = code ? buffer.join('\n') : buffer.join('\n').replace(/^\n+|\n+$/g, '');
+    if (run) parts.push({ text: run, code });
+    buffer = [];
+  };
+
+  for (const line of lines) {
+    if (line.trimStart().startsWith('```')) {
+      if (inside) { buffer.push(line); flush(true); } else { flush(false); buffer.push(line); }
+      inside = !inside;
+    } else {
+      buffer.push(line);
+    }
+  }
+  // A fence the writer never closed still reads as code; it is closed here so
+  // the renderer sees a block rather than a run of loose text.
+  if (inside) { buffer.push('```'); flush(true); } else { flush(false); }
+  return parts;
+}
+
+/**
  * Name the fences that name nothing, so the same detector decides here as in
  * the composer.
  *
