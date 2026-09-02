@@ -4,6 +4,7 @@ import {
   CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type { RequestTrace } from '../stream';
+import { PANEL_HEADER_H, REQUEST_CHART_H, TRACE_LIST_ROWS_H } from './panelHeight';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -23,7 +24,7 @@ const { Text } = Typography;
  * time-to-first-token. The rate itself is a single current value, so it is a
  * number beside the chart rather than a second series inside it.
  */
-const CHART_H = 132;
+const CHART_H = REQUEST_CHART_H;
 
 function fmt(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);
@@ -45,9 +46,7 @@ function fmt(n: number): string {
  *  stopped answering. Either way its ticks are not coming. */
 const STALE_MS = 90 * 1000;
 
-/** Four rows of 22px. Fixed rather than capped: a max-height still changes as
- *  rows appear, and the point is a card whose height never moves. */
-const ROWS_H = 88;
+
 
 function TraceList({ traces, current, onPick }: {
   traces: RequestTrace[];
@@ -73,7 +72,7 @@ function TraceList({ traces, current, onPick }: {
     // outgrowing its neighbour.
     <div style={{
       marginTop: 10, borderTop: `1px solid ${LINE.faint}`, paddingTop: 6,
-      height: ROWS_H, overflowY: 'auto', overflowX: 'hidden',
+      height: TRACE_LIST_ROWS_H, overflowY: 'auto', overflowX: 'hidden',
     }}>
       {traces.length === 0 && (
         <Text style={{
@@ -167,7 +166,7 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
         {/* The same header height as the charted branch, empty. Without it the
             card is one line shorter whenever nothing is running, which is the
             same jump this fixed-height list exists to stop. */}
-        <div style={{ height: 30, marginBottom: 8 }} />
+        <div style={{ height: PANEL_HEADER_H }} />
         <div style={{
           height: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>

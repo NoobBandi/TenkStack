@@ -5,6 +5,7 @@ import {
   XAxis, YAxis, ZAxis,
 } from 'recharts';
 import { fetchActivity, type ActivityRow, type ModelInfo } from '../api';
+import { PANEL_BODY_H, PANEL_HEADER_H } from './panelHeight';
 import { LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -30,7 +31,10 @@ const { Text } = Typography;
  * through depth that nothing actually travelled. The dots are the evidence and
  * stay visible; the line is the claim, and it is an aggregate.
  */
-const CHART_H = 148;
+/* Whatever is left of the shared panel height once this card's header is
+ * accounted for. The request card spends the same total on a shorter chart and
+ * a list; this one gives it all to the plot. */
+const CHART_H = PANEL_BODY_H - PANEL_HEADER_H;
 const BIN = 8192;
 /** A bin drawn from one or two requests is noise, and a line anchored to it
  *  wanders. Below this the bin still shows its dots, just no line vertex. */
@@ -130,7 +134,7 @@ export default function DepthCurve({
   return (
     <div>
       <div style={{
-        display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 6, flexWrap: 'wrap',
+        display: 'flex', alignItems: 'baseline', gap: 14, marginBottom: 8, flexWrap: 'wrap',
       }}>
         <div>
           <Text style={{ fontSize: 22, lineHeight: 1 }}>
