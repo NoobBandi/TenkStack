@@ -174,14 +174,40 @@ export function logLevel(text: string): LogLine['level'] {
  */
 const BASE = '/api';
 
+/**
+ * What went wrong, in words, for a response that failed.
+ *
+ * The backend's `detail` says what actually happened -- which directory is off
+ * limits, which permission is missing -- and dropping it for the status code
+ * alone turns every refusal into the same unhelpful sentence.
+ *
+ * But it is not always there. A 502 comes from Caddy, not from the backend, and
+ * its body is HTML: the JSON parse fails and there is nothing to read. The old
+ * fallback was `res.statusText`, which over HTTP/2 is always the empty string --
+ * the protocol has no reason phrase -- and an empty string is falsy but not
+ * nullish, so `??` kept it. Every failed request through the proxy threw
+ * `Error` with no message, which is exactly what a person then sees in the
+ * console and cannot act on.
+ */
+async function failure(res: Response, path: string): Promise<string> {
+  const body = await res.json().catch(() => null);
+  const detail = typeof body?.detail === 'string' ? body.detail.trim() : '';
+  if (detail) return detail;
+  // A gateway status means the console's own backend did not answer -- it is
+  // restarting, or it is down. Saying that is more use than the number.
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    return '主控台後端沒有回應，可能正在重啟，請稍候再試';
+  }
+  return `${path} 回應 ${res.status}`;
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
   if (!res.ok) {
     // The backend's `detail` says what actually went wrong -- which directory
     // is off limits, which permission is missing. Dropping it for the status
     // code alone turns every refusal into the same unhelpful sentence.
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.detail ?? `${path} returned ${res.status}`);
+    throw new Error(await failure(res, path));
   }
   return res.json() as Promise<T>;
 }
@@ -482,8 +508,7 @@ async function send<T>(path: string, method: string, body?: unknown): Promise<T>
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(detail.detail ?? `${path} returned ${res.status}`);
+    throw new Error(await failure(res, path));
   }
   return res.json() as Promise<T>;
 }

@@ -89,7 +89,16 @@ export default function ChatHistory({ currentId, onOpen, onNew, refreshKey }: Pr
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: async () => {
-        await deleteChat(item.id);
+        try {
+          await deleteChat(item.id);
+        } catch (error) {
+          // Rethrown after saying so: antd keeps the dialog open when onOk
+          // rejects, which is right -- the conversation is still there. What was
+          // missing is the sentence explaining why, without which the only thing
+          // left to do is press 刪除 again, and again.
+          message.error(`刪除失敗：${(error as Error).message}`);
+          throw error;
+        }
         if (item.id === currentId) onNew();
         load();
       },
