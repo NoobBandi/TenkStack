@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Alert, App as AntApp, Button, Card, Dropdown, Empty, Image, Space, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Empty, Image, Popconfirm, Space,
+  Tag, Tooltip, Typography,
 } from 'antd';
 import {
   CloudDownloadOutlined, DownOutlined, ExportOutlined, FolderOpenOutlined,
-  ReloadOutlined, SearchOutlined, StopOutlined, SyncOutlined,
+  PoweroffOutlined, ReloadOutlined, SearchOutlined, StopOutlined,
 } from '@ant-design/icons';
 import {
   checkComfyUpdates, comfyImageUrl, fetchComfyHistory, fetchComfyInstances,
-  interruptComfy, restartComfy, updateComfy,
+  interruptComfy, restartComfy, unloadAll, updateComfy,
   type ComfyHistoryItem, type ComfyInstance,
 } from '../api';
+import { useStream } from '../stream';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -130,69 +132,87 @@ function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
       onRestarted();
     }, '已送出重啟');
 
+  // Plain words for the state, because this is the line that decides whether
+  // somebody who has never met ComfyUI tries to use it right now. "queue_running
+  // 0 / pending 0" is the same fact and answers nobody.
+  const state = updating ? { text: '更新中', tone: ACCENT.warn }
+    : busy ? { text: '正在算圖', tone: ACCENT.ok }
+      : { text: '可以使用', tone: ACCENT.ok };
+
   return (
     <Card size="small">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-        {/* Green while a job is on the card, dim while idle: the one thing
-            worth reading from across the room is whether the GPU is taken. */}
-        <span
-          style={{
-            width: 7, height: 7, borderRadius: '50%', flex: 'none',
-            background: busy ? ACCENT.ok : LINE.strong,
-          }}
-        />
-
-        {device ? (
-          <Space size={6}>
-            <Text style={{ fontFamily: MONO, fontSize: 13 }}>{device[0]}</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>{device[1]}</Text>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: '1 1 260px' }}>
+          <Space size={8} align="center">
+            <span style={{
+              width: 8, height: 8, borderRadius: '50%', flex: 'none',
+              background: busy || !updating ? state.tone : LINE.strong,
+            }} />
+            <Text style={{ fontSize: 15 }}>{state.text}</Text>
+            {updating && manager && (
+              <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
+                {manager.done}/{manager.total}
+              </Text>
+            )}
+            {busy && queued > 0 && (
+              <Text type="secondary" style={{ fontSize: 12 }}>還有 {queued} 張排隊</Text>
+            )}
+            {instance.stale && (
+              // ComfyUI is aiohttp over synchronous torch, so it answers nothing
+              // while a sampling step runs. Saying the numbers are old beats
+              // either alternative: presenting them as current, or dropping the
+              // row and claiming the instance is not running.
+              <Tooltip title="ComfyUI 正忙著算，暫時沒有回應。顯示的是最後一次拿到的數字。">
+                <Tag color="blue" style={{ fontSize: 11 }}>數字為舊值</Tag>
+              </Tooltip>
+            )}
+            {!updating && staleAfterUpdate && (
+              // The files on disk changed; the running process did not. Saying
+              // so is the point -- an update that silently needs a restart looks
+              // like an update that did nothing.
+              <Tag color="gold" style={{ fontSize: 11 }}>更新完成，待重啟</Tag>
+            )}
           </Space>
-        ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>裝置不明</Text>
-        )}
 
-        <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-          :{instance.port}
-        </Text>
+          {/* One sentence for someone who has not used it. The page had none,
+              and a bare version number does not tell anybody what this is. */}
+          <div style={{ marginTop: 6 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              ComfyUI 是畫圖的工具，操作都在它自己的介面裡。畫好的圖會出現在下面。
+            </Text>
+          </div>
 
-        <Text style={{ fontSize: 12, fontFamily: MONO, opacity: busy || queued ? 1 : 0.45 }}>
-          {instance.queue_running} 執行 / {queued} 排隊
-        </Text>
-
-        {instance.stale && (
-          // ComfyUI is aiohttp over synchronous torch, so it answers nothing
-          // while a sampling step runs. Saying the numbers are old beats either
-          // of the alternatives: presenting them as current, or dropping the
-          // row and claiming the instance is not running.
-          <Tooltip title="ComfyUI 正忙著算，暫時沒有回應。顯示的是最後一次拿到的數字。">
-            <Tag color="blue" style={{ fontSize: 11 }}>忙碌中・數字為舊值</Tag>
-          </Tooltip>
-        )}
-
-        <Tooltip title={`PyTorch ${instance.torch ?? '?'} ・ Python ${instance.python}`}>
-          <Tag style={{ fontFamily: MONO, fontSize: 11 }}>v{instance.version}</Tag>
-        </Tooltip>
-
-        {updating && (
-          <Space size={6}>
-            <SyncOutlined spin style={{ fontSize: 12, opacity: 0.7 }} />
-            <Text style={{ fontSize: 12, fontFamily: MONO }}>
-              更新中 {manager!.done}/{manager!.total}
+          {/* The technical facts, demoted. They matter when something is wrong
+              and never before that, so they read as a footnote rather than as
+              the headline they used to be. */}
+          <Space size={10} style={{ marginTop: 8 }} wrap>
+            {device && (
+              <Tooltip title="ComfyUI 啟動時就綁定這張卡，換卡要改啟動參數">
+                <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+                  {device[0]} {device[1]}
+                </Text>
+              </Tooltip>
+            )}
+            <Tooltip title={`PyTorch ${instance.torch ?? '?'} ・ Python ${instance.python}`}>
+              <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+                v{instance.version}
+              </Text>
+            </Tooltip>
+            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+              :{instance.port}
             </Text>
           </Space>
-        )}
-        {!updating && staleAfterUpdate && (
-          // The files on disk changed; the running process did not. Saying so
-          // is the point -- an update that silently needs a restart looks like
-          // an update that did nothing.
-          <Tag color="gold" style={{ fontSize: 11 }}>更新完成，待重啟</Tag>
-        )}
+        </div>
 
-        <Space size={8} style={{ marginLeft: 'auto' }}>
-          <Button size="small" danger icon={<StopOutlined />}
-                  disabled={!busy} loading={stopping} onClick={onInterrupt}>
-            中斷
-          </Button>
+        <Space size={8} style={{ marginLeft: 'auto', flex: 'none' }}>
+          {/* Only while there is something to interrupt. A permanently greyed
+              button beside the one that matters is noise. */}
+          {busy && (
+            <Button size="small" danger icon={<StopOutlined />}
+                    loading={stopping} onClick={onInterrupt}>
+              中斷
+            </Button>
+          )}
 
           {manager && (
             <Dropdown
@@ -228,21 +248,151 @@ function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
             </Dropdown>
           )}
 
+          {/* The one thing anyone came here to do, and it was a small ghost
+              button at the end of a row of equals. */}
           {url ? (
-            <Button size="small" type="primary" ghost icon={<ExportOutlined />}
+            <Button type="primary" icon={<ExportOutlined />}
                     href={url} target="_blank" rel="noreferrer">
-              開啟
+              開啟 ComfyUI
             </Button>
           ) : (
-            // Reachable on loopback but with no Caddy site block in front of
-            // it, so there is no authenticated way in from a browser. A link
-            // that cannot connect would be worse than saying why.
+            // Reachable on loopback but with no Caddy site block in front of it,
+            // so there is no authenticated way in from a browser. A link that
+            // cannot connect would be worse than saying why.
             <Tooltip title="需要在 caddy/channels 補上對應的站台設定，才有經過登入的入口">
-              <Button size="small" disabled>尚未發佈</Button>
+              <Button disabled>尚未發佈</Button>
             </Tooltip>
           )}
         </Space>
       </div>
+    </Card>
+  );
+}
+
+/**
+ * Whose memory ComfyUI is competing for.
+ *
+ * The one thing this console can say that ComfyUI cannot. Both live on the same
+ * two cards, an LLM holds twenty-four gigabytes of each for as long as it stays
+ * loaded, and nothing unloads it on a timer -- every model here is set to ttl 0.
+ * So the first generation of the evening fails with a CUDA-shaped error message
+ * inside somebody else's interface, and there is no way to tell from there that
+ * the cause is a chat model somebody stopped using an hour ago.
+ *
+ * Said here instead, before it happens, with the button that fixes it.
+ */
+function Vram({ instance }: { instance: ComfyInstance | null }) {
+  const { message } = AntApp.useApp();
+  const { gpus, models } = useStream();
+  const [freeing, setFreeing] = useState(false);
+
+  // "xpu:0 Intel(R) Arc(TM) Pro B70" -> 0. ComfyUI is bound to one card at
+  // launch, so only that card's headroom decides anything.
+  const mine = Number(/^xpu:(\d+)/.exec(instance?.device?.name ?? '')?.[1] ?? NaN);
+  const card = gpus.find((g) => g.index === mine) ?? gpus[0];
+  const loaded = models.filter((m) => m.running);
+  // A slot with tokens in it is a conversation somebody can come back to; a busy
+  // one is a request being answered right now.
+  const working = loaded.some((m) => m.slots?.some((s) => s.busy));
+  const holding = loaded.some((m) => m.slots?.some((s) => s.used > 0));
+
+  const free = card?.memory_total_mib && card?.memory_used_mib !== null
+    ? (card.memory_total_mib - (card.memory_used_mib ?? 0)) / 1024 : null;
+
+  const onFree = async () => {
+    setFreeing(true);
+    try {
+      await unloadAll();
+      message.success('已卸載，顯存騰出來了');
+    } catch (error) {
+      message.error(`卸載失敗：${(error as Error).message}`);
+    } finally {
+      setFreeing(false);
+    }
+  };
+
+  if (!gpus.length) return null;
+
+  return (
+    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>顯示卡記憶體</span>}>
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        {gpus.map((gpu) => {
+          const total = (gpu.memory_total_mib ?? 0) / 1024;
+          const used = (gpu.memory_used_mib ?? 0) / 1024;
+          const percent = total ? Math.min(100, (used / total) * 100) : 0;
+          const isMine = gpu.index === card?.index;
+          return (
+            <div key={gpu.index} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              <Text style={{
+                fontSize: 12, fontFamily: MONO, width: 74, flex: 'none',
+                opacity: isMine ? 1 : 0.5,
+              }}>
+                卡 {gpu.index}{isMine ? ' ・這張' : ''}
+              </Text>
+              <div style={{
+                flex: 1, height: 6, borderRadius: 3, overflow: 'hidden',
+                background: 'rgba(255,255,255,0.07)',
+              }}>
+                <div style={{
+                  height: '100%', width: `${percent}%`, borderRadius: 3,
+                  transition: 'width 300ms',
+                  background: percent > 85 ? ACCENT.warn : 'rgba(255,255,255,0.6)',
+                  opacity: isMine ? 1 : 0.4,
+                }} />
+              </div>
+              <Text style={{
+                fontSize: 12, fontFamily: MONO, width: 132, flex: 'none',
+                textAlign: 'right', fontVariantNumeric: 'tabular-nums',
+                opacity: isMine ? 1 : 0.5,
+              }}>
+                剩 {(total - used).toFixed(1)} / {total.toFixed(1)} GB
+              </Text>
+            </div>
+          );
+        })}
+
+        {loaded.length > 0 && (
+          <Alert
+            type={free !== null && free < 8 ? 'warning' : 'info'}
+            showIcon
+            message={
+              <Text style={{ fontSize: 13 }}>
+                {loaded.map((m) => m.name ?? m.id).join('、')} 正載入中，佔用顯存
+              </Text>
+            }
+            description={
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {free !== null && free < 8
+                    ? `這張卡只剩 ${free.toFixed(1)} GB，畫圖可能會失敗。`
+                    : '目前還有空間，但大張的圖仍可能不夠用。'}
+                  {working
+                    ? '不過現在有請求正在跑，卸載會中斷對方。'
+                    : holding
+                      ? '目前沒有請求在跑，但對話快取還在，卸載後下次要重新讀入。'
+                      : ''}
+                </Text>
+                <Popconfirm
+                  title="卸載目前載入的模型？"
+                  description={working
+                    ? '現在有請求正在執行，卸載會直接中斷它。'
+                    : '下一次聊天會重新載入，約需要一分鐘。'}
+                  okText="卸載" cancelText="取消"
+                  okButtonProps={{ danger: working }}
+                  onConfirm={() => void onFree()}
+                >
+                  <Button size="small" color="orange" variant="filled"
+                          icon={<PoweroffOutlined />} loading={freeing}>
+                    卸載模型，騰出顯存
+                  </Button>
+                </Popconfirm>
+              </Space>
+            }
+          />
+        )}
+      </Space>
     </Card>
   );
 }
@@ -364,6 +514,11 @@ export default function ComfyUI() {
           })}
         />
       ))}
+
+      {/* Where the memory is going, under the instance it decides the fate of.
+          Above the gallery, because it is the thing that stops the gallery
+          getting any new entries. */}
+      <Vram instance={instances?.[0] ?? null} />
 
       <Card
         title={<span style={{ fontSize: 12, opacity: 0.75 }}>最近的產出</span>}
