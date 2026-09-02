@@ -156,17 +156,27 @@ function decorate(state: EditorState): DecorationSet {
           });
         } else {
           // Cheap: the detector reads a prefix and caches its answer, so this
-          // costs nothing that the colouring pass has not already paid.
-          const bodyTo = fence.close ? state.doc.line(last).to : state.doc.length;
-          const guess = last > fence.open
-            ? detectLanguage(state.sliceDoc(state.doc.line(fence.open + 1).from, bodyTo))
-            : null;
-          marks.push({
-            from: line.to, to: line.to,
-            value: Decoration.widget({
-              widget: new LanguageHint(guess ?? '語言', guess !== null), side: 1,
-            }),
-          });
+          // costs nothing the colouring pass has not already paid.
+          const hasBody = fence.close === null
+            ? last > fence.open : last > fence.open + 1;
+          const body = hasBody
+            ? state.sliceDoc(
+              state.doc.line(fence.open + 1).from,
+              fence.close ? state.doc.line(last - 1).to : state.doc.length)
+            : '';
+          const guess = body.trim() ? detectLanguage(body) : null;
+          // An empty block is not asked to identify itself. There is nothing in
+          // it to identify, and a prompt on a block the writer has only just
+          // opened reads as a field that has to be filled in -- which is the one
+          // thing the detector exists to avoid.
+          if (body.trim() || guess) {
+            marks.push({
+              from: line.to, to: line.to,
+              value: Decoration.widget({
+                widget: new LanguageHint(guess ?? '語言', guess !== null), side: 1,
+              }),
+            });
+          }
         }
       } else if (i === fence.close) {
         marks.push({ from: line.from, to: line.to, value: blank });
@@ -368,6 +378,65 @@ export default function ComposerInput({
             return true;
           }
           return false;   // a newline, which is what code wants
+        },
+      },
+      {
+        /**
+         * Backspace at the edges of a block.
+         *
+         * Emptying a block used to leave the block: the code went, the fence
+         * lines stayed, and clearing them meant finding the header and pressing
+         * Backspace again on a strip seven pixels tall. A block with nothing in
+         * it is one the writer is finished with, so it goes in one press.
+         *
+         * At the start of code that is still there, Backspace unwraps instead --
+         * the fences go and the code stays as text. Without this, the press
+         * joins the first line onto the opening fence and quietly turns the
+         * whole first line into the block's language.
+         */
+        key: 'Backspace',
+        run: (v) => {
+          if (v.composing || !v.state.selection.main.empty) return false;
+          const { head } = v.state.selection.main;
+          const line = v.state.doc.lineAt(head);
+          const fence = fences(v.state).find(
+            (f) => f.close !== null && line.number >= f.open && line.number <= f.close);
+          if (!fence || fence.close === null) return false;
+
+          const open = v.state.doc.line(fence.open);
+          const close = v.state.doc.line(fence.close);
+          const info = open.text.trim().replace(/^`+/, '').trim();
+          const body = fence.body > 0
+            ? v.state.sliceDoc(v.state.doc.line(fence.open + 1).from,
+              v.state.doc.line(fence.close - 1).to)
+            : '';
+
+          if (!body.trim() && !info) {
+            // The whole thing, plus one of the line breaks around it, so the
+            // text either side does not end up welded together or pushed apart.
+            const after = fence.close < v.state.doc.lines;
+            const from = after || open.from === 0 ? open.from : open.from - 1;
+            const to = after ? close.to + 1 : close.to;
+            v.dispatch({
+              changes: { from, to },
+              selection: { anchor: from }, scrollIntoView: true,
+            });
+            return true;
+          }
+
+          const first = fence.body > 0 ? v.state.doc.line(fence.open + 1) : null;
+          if (first && head === first.from) {
+            const lastBody = v.state.doc.line(fence.close - 1);
+            v.dispatch({
+              changes: [
+                { from: open.from, to: first.from },
+                { from: lastBody.to, to: close.to },
+              ],
+              selection: { anchor: open.from }, scrollIntoView: true,
+            });
+            return true;
+          }
+          return false;
         },
       },
       {
