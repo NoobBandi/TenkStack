@@ -158,25 +158,34 @@ body {
   border-radius: 1px;
 }
 
-/* A solid bar, for a reading that is about how full something is rather than
- * how hard it is working. The dashed `.meter` suits a rate -- power, clock, a
- * throughput that is a flow -- where the segments read as movement. A context
- * window is a container, and a container filling wants to look filled.
+/* ── Dotted gauge ──────────────────────────────────────────────────────
+ * The context column's bars, drawn as a row of dots rather than as a line.
  *
- * Taller than .meter for the same reason: at 2px a fill and its track are one
- * line of two colours, and the eye has to be told which is which. */
-.gauge {
-  height: 6px;
-  border-radius: 3px;
+ * The dashed `.meter` above suits a rate -- power, clock, a throughput that is
+ * a flow -- where the segments read as movement. A context window is a
+ * container being filled, and dots read as countable: how much of the room is
+ * taken, in units you could point at.
+ *
+ * The dots are cut out of the track and the fill alike, by one mask on the
+ * outer element, so a partly-covered dot shows partly covered rather than the
+ * fill stopping at a dot boundary. Masking the fill on its own would quantise
+ * the bar, which is a stronger claim than the number supports.
+ *
+ * 8px pitch with a 3px radius: the count of dots follows the column's width
+ * instead of being fixed, which is right here -- they are a texture for reading
+ * a proportion, not a scale to be counted off. */
+.gauge-dots {
+  height: 8px;
   background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
+  -webkit-mask-image: repeating-radial-gradient(circle at 4px 50%, #000 0 3px, transparent 3px 4px);
+  mask-image: repeating-radial-gradient(circle at 4px 50%, #000 0 3px, transparent 3px 4px);
+  -webkit-mask-size: 8px 100%;
+  mask-size: 8px 100%;
 }
-.gauge > * {
+.gauge-dots > * {
   display: block;
   height: 100%;
-  border-radius: 3px;
 }
-
 
 /* ── Syntax colours ────────────────────────────────────────────────────
  * Hand-picked instead of importing a highlight.js theme: every shipped theme
