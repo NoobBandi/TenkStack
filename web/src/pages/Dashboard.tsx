@@ -289,31 +289,6 @@ export default function Dashboard() {
         />
       )}
 
-      {/* One line above everything, for the two facts the panels below cannot
-          state: whether the stream is live, and who else is on the machine.
-          The second is what was missing when a model got unloaded three times
-          under a running opencode session -- the addresses were in the stream
-          the whole time and nothing displayed them. */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-        paddingInline: 2, minHeight: 20,
-      }}>
-        <Space size={7}>
-          <span style={{
-            width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
-            background: connected ? ACCENT.ok : ACCENT.warn,
-            boxShadow: connected ? `0 0 8px ${ACCENT.ok}b3` : 'none',
-            transition: 'background 300ms',
-          }} />
-          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.55 }}>
-            {connected ? '即時' : '連線中斷'}
-          </Text>
-        </Space>
-        <div style={{ marginInlineStart: 'auto' }}>
-          <ClientBadge requests={requests} />
-        </div>
-      </div>
-
       {/*
         Two columns: the cards stacked on the left, the machine on the right.
 
@@ -361,7 +336,17 @@ export default function Dashboard() {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'stretch' }}>
         <div style={{ flex: '1 1 420px', minWidth: 0 }}>
           <Card
-            title={<span style={{ fontSize: 12, opacity: 0.75 }}>請求進度</span>}
+            title={
+              <Space size={10}>
+                <span style={{ fontSize: 12, opacity: 0.75 }}>請求進度</span>
+                {/* Beside the requests themselves rather than on a line of its
+                    own at the top of the page. Who is calling and what those
+                    calls are doing are one subject, and the separate status bar
+                    that held this was a strip of chrome earning its height with
+                    a word. */}
+                <ClientBadge requests={requests} />
+              </Space>
+            }
             size="small"
             style={{ height: '100%' }}
             // The rate of the last finished request, beside the curve of the one
