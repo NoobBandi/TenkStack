@@ -69,25 +69,39 @@ interface Segment {
   code: boolean;
 }
 
-/** Split on fence lines, tracking whether each run is inside a block. */
+/**
+ * Split on fence lines, with each fenced region coming out as one run.
+ *
+ * One run per region rather than one per line. The backdrop draws a run as a
+ * block with a bleed around it, and three abutting blocks -- opening fence,
+ * body, closing fence -- overlapped their bleeds into bright seams across the
+ * middle of what is meant to read as a single box.
+ *
+ * The newlines that split() removed are not put back between runs: the block
+ * boxes are the line breaks now, and emitting both would double every one.
+ * Inside a run they are kept, so a run is character-for-character what that
+ * stretch of the textarea holds.
+ */
 function segment(text: string): Segment[] {
-  const lines = text.split('\n');
   const segments: Segment[] = [];
   let inside = false;
   let buffer: string[] = [];
 
   const flush = (code: boolean) => {
-    if (buffer.length) {
-      segments.push({ text: buffer.join('\n'), code });
-      buffer = [];
-    }
+    if (!buffer.length) return;
+    const run = buffer.join('\n');
+    const last = segments[segments.length - 1];
+    if (last && last.code === code) last.text += `\n${run}`;
+    else segments.push({ text: run, code });
+    buffer = [];
   };
 
-  for (const line of lines) {
+  for (const line of text.split('\n')) {
     if (line.trimStart().startsWith('```')) {
       // The fence line itself belongs to the block, opening or closing.
       flush(inside);
-      segments.push({ text: line, code: true });
+      buffer = [line];
+      flush(true);
       inside = !inside;
     } else {
       buffer.push(line);
@@ -95,12 +109,7 @@ function segment(text: string): Segment[] {
   }
   flush(inside);
 
-  // Rebuild the newlines that split() removed, so the backdrop's text is
-  // character-for-character what the textarea holds.
-  return segments.reduce<Segment[]>((acc, seg, index) => {
-    acc.push(index === 0 ? seg : { ...seg, text: `\n${seg.text}` });
-    return acc;
-  }, []);
+  return segments;
 }
 
 /** Whether the caret sits inside an unclosed fence. */
@@ -362,7 +371,7 @@ export default function Composer({
               >
                 {/* A run ending in a newline renders no box for that last empty
                     line unless something occupies it. */}
-                {seg.text.replace(/^\n/, '')}{'​'}
+                {seg.text}{'​'}
               </div>
             ))}
           </div>
