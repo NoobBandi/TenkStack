@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { App as AntApp, Button, Image, Select, Space, Tooltip, Typography } from 'antd';
 import {
   ClearOutlined, CloseOutlined, CodeOutlined, FileTextOutlined,
@@ -6,6 +6,7 @@ import {
   StopOutlined
 } from '@ant-design/icons';
 import type { ModelCapabilities, ModelInfo } from '../api';
+import ComposerInput, { type ComposerHandle } from './ComposerInput';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -27,97 +28,18 @@ const MAX_IMAGE_BYTES = 8 << 20;
 const MAX_TEXT_BYTES = 512 << 10;
 
 /**
- * Message composer with live code-fence shading.
- *
- * A real <textarea> is kept rather than a contenteditable rich editor: IME
- * composition (注音, 拼音, kana) is reliable in a textarea and routinely broken
- * in contenteditable, and this box is typed in Chinese daily. So instead of
- * replacing the control, a backdrop behind it paints a background over the
- * lines that sit inside a ``` fence.
- *
- * The backdrop renders the same text, transparent, so it wraps identically --
- * shading has to follow soft-wrapped lines, which a per-line-height overlay
- * could not do.
+ * Message composer.
  *
  * The controls live inside the field's border rather than on a row beneath it.
  * That is the whole visual idea here: one bordered object that tracks
  * focus-within, so the model picker and the attach button read as part of the
- * act of writing rather than as a toolbar that happens to sit nearby. The
- * textarea keeps its own full-width row instead of sharing one with the
- * controls -- this box is typed into in paragraphs and pasted into with code,
- * so a single-line composer that grows would be wrong for it.
- */
-
-
-/** Typography must be identical in both layers or the shading drifts. */
-const SHARED: React.CSSProperties = {
-  margin: 0,
-  // The shell adds 6 of its own; 10 here keeps the text off the border
-  // without the doubled inset a full 12 would give.
-  padding: 10,
-  fontSize: 14,
-  lineHeight: 1.6,
-  fontFamily: 'inherit',
-  whiteSpace: 'pre-wrap',
-  wordBreak: 'break-word',
-  border: '1px solid transparent',
-  boxSizing: 'border-box',
-};
-
-interface Segment {
-  text: string;
-  code: boolean;
-}
-
-/**
- * Split on fence lines, with each fenced region coming out as one run.
+ * act of writing rather than as a toolbar that happens to sit nearby. The text
+ * keeps its own full-width row instead of sharing one with the controls -- this
+ * box is typed into in paragraphs and pasted into with code, so a single-line
+ * composer that grows would be wrong for it.
  *
- * One run per region rather than one per line. The backdrop draws a run as a
- * block with a bleed around it, and three abutting blocks -- opening fence,
- * body, closing fence -- overlapped their bleeds into bright seams across the
- * middle of what is meant to read as a single box.
- *
- * The newlines that split() removed are not put back between runs: the block
- * boxes are the line breaks now, and emitting both would double every one.
- * Inside a run they are kept, so a run is character-for-character what that
- * stretch of the textarea holds.
+ * The field itself is ComposerInput, which draws a fenced block as a block.
  */
-function segment(text: string): Segment[] {
-  const segments: Segment[] = [];
-  let inside = false;
-  let buffer: string[] = [];
-
-  const flush = (code: boolean) => {
-    if (!buffer.length) return;
-    const run = buffer.join('\n');
-    const last = segments[segments.length - 1];
-    if (last && last.code === code) last.text += `\n${run}`;
-    else segments.push({ text: run, code });
-    buffer = [];
-  };
-
-  for (const line of text.split('\n')) {
-    if (line.trimStart().startsWith('```')) {
-      // The fence line itself belongs to the block, opening or closing.
-      flush(inside);
-      buffer = [line];
-      flush(true);
-      inside = !inside;
-    } else {
-      buffer.push(line);
-    }
-  }
-  flush(inside);
-
-  return segments;
-}
-
-/** Whether the caret sits inside an unclosed fence. */
-function insideFence(text: string, caret: number): boolean {
-  const before = text.slice(0, caret);
-  const fences = before.split('\n').filter((l) => l.trimStart().startsWith('```')).length;
-  return fences % 2 === 1;
-}
 
 interface Props {
   value: string;
@@ -154,46 +76,11 @@ export default function Composer({
 }: Props) {
   const { message: toast } = AntApp.useApp();
   const filePicker = useRef<HTMLInputElement>(null);
-  const textarea = useRef<HTMLTextAreaElement>(null);
-  const backdrop = useRef<HTMLDivElement>(null);
-  const [composing, setComposing] = useState(false);
+  const input = useRef<ComposerHandle>(null);
   const [inCode, setInCode] = useState(false);
 
-  // The backdrop does not scroll on its own; it has to follow the textarea.
-  const syncScroll = useCallback(() => {
-    if (backdrop.current && textarea.current) {
-      backdrop.current.scrollTop = textarea.current.scrollTop;
-    }
-  }, []);
-
-  const syncCaret = useCallback(() => {
-    const el = textarea.current;
-    if (el) setInCode(insideFence(el.value, el.selectionStart));
-  }, []);
-
-  // Grow with the content instead of showing a scrollbar at three lines.
-  useLayoutEffect(() => {
-    const el = textarea.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
-    if (backdrop.current) backdrop.current.style.height = el.style.height;
-  }, [value]);
-
-  const insertAtCaret = (before: string, after = '') => {
-    const el = textarea.current;
-    if (!el) return;
-    const { selectionStart: start, selectionEnd: end } = el;
-    const selected = value.slice(start, end);
-    const next = value.slice(0, start) + before + selected + after + value.slice(end);
-    onChange(next);
-    requestAnimationFrame(() => {
-      el.focus();
-      const caret = start + before.length + selected.length;
-      el.setSelectionRange(caret, caret);
-      syncCaret();
-    });
-  };
+  const insertAtCaret = (before: string, after = '') =>
+    input.current?.insert(before, after);
 
   const readAsText = (file: File) =>
     new Promise<string>((resolve, reject) => {
@@ -259,59 +146,6 @@ export default function Composer({
     if (nextImages.length) onImagesChange([...images, ...nextImages]);
   };
 
-  const onPaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData.files);
-    if (files.length) {
-      event.preventDefault();
-      void attach(files);
-    }
-  };
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    const el = event.currentTarget;
-
-    if (event.key === 'Enter') {
-      // An IME uses Enter to accept a candidate. Sending on that keystroke
-      // fires off half-typed Chinese, which is the kind of bug that only shows
-      // up for the people who actually use the app.
-      if (composing || event.nativeEvent.isComposing) return;
-
-      if (event.shiftKey) return; // explicit newline
-
-      // Inside a fence, Enter means newline -- code is multi-line by nature,
-      // and requiring Shift for every line would make the block unusable.
-      if (insideFence(el.value, el.selectionStart)) return;
-
-      event.preventDefault();
-      onSend();
-      return;
-    }
-
-    if (event.key === 'Tab' && insideFence(el.value, el.selectionStart)) {
-      event.preventDefault();
-      insertAtCaret('  ');
-      return;
-    }
-
-    // Typing the third backtick opens a block and closes it in one go, with the
-    // caret placed on the empty line between the fences.
-    if (event.key === '`') {
-      const start = el.selectionStart;
-      if (start >= 2 && value.slice(start - 2, start) === '``' && !insideFence(value, start)) {
-        event.preventDefault();
-        const next = `${value.slice(0, start - 2)}\`\`\`\n\n\`\`\`${value.slice(el.selectionEnd)}`;
-        onChange(next);
-        requestAnimationFrame(() => {
-          el.focus();
-          const caret = start - 2 + 4;
-          el.setSelectionRange(caret, caret);
-          syncCaret();
-        });
-      }
-    }
-  };
-
-  const segments = segment(value);
   const canSend = (value.trim().length > 0 || images.length > 0) && !disabled;
 
   return (
@@ -336,73 +170,16 @@ export default function Composer({
           </Space>
         )}
 
-        <div style={{ position: 'relative' }}>
-          <div
-            ref={backdrop}
-            aria-hidden
-            style={{
-              ...SHARED,
-              position: 'absolute', inset: 0, overflow: 'hidden',
-              color: 'transparent', pointerEvents: 'none',
-            }}
-          >
-            {/* Blocks, not inline spans.
-                An inline background hugs the text it sits on, so a fenced block
-                came out as one ragged chip per line and the ``` line -- being
-                short -- read as the only thing shaded. A block fills the width,
-                which is what a code region looks like.
-
-                The segments are line-aligned by construction, so the newlines
-                between them are dropped: the block boxes are the line breaks,
-                and emitting both would double every one of them.
-
-                The font is deliberately not changed here. This layer only works
-                while it wraps character-for-character the way the textarea does,
-                and the textarea cannot set a different font for one range of its
-                own text -- so shading is what says "code", not the typeface. */}
-            {segments.map((seg, index) => (
-              <div
-                key={index}
-                style={seg.code ? {
-                  background: 'rgba(128,128,128,0.20)',
-                  borderRadius: 4,
-                  boxShadow: '0 0 0 4px rgba(128,128,128,0.20)',
-                } : undefined}
-              >
-                {/* A run ending in a newline renders no box for that last empty
-                    line unless something occupies it. */}
-                {seg.text}{'​'}
-              </div>
-            ))}
-          </div>
-
-          <textarea
-            ref={textarea}
-            value={value}
-            disabled={disabled}
-            onChange={(e) => { onChange(e.target.value); syncCaret(); }}
-            onScroll={syncScroll}
-            onKeyDown={onKeyDown}
-            onPaste={onPaste}
-            onKeyUp={syncCaret}
-            onClick={syncCaret}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
-            placeholder="輸入訊息…  ``` 開啟程式碼區塊，Enter 送出，Shift+Enter 換行"
-            rows={3}
-            style={{
-              ...SHARED,
-              position: 'relative',
-              width: '100%',
-              minHeight: 92,
-              resize: 'none',
-              outline: 'none',
-              background: 'transparent',
-              color: 'inherit',
-              display: 'block',
-            }}
-          />
-        </div>
+        <ComposerInput
+          ref={input}
+          value={value}
+          onChange={onChange}
+          onSend={onSend}
+          onPasteFiles={(files) => void attach(files)}
+          onInFenceChange={setInCode}
+          disabled={disabled}
+          placeholder="輸入訊息…  ``` 開啟程式碼區塊，Enter 送出，Shift+Enter 換行"
+        />
 
         {/* Left of the divide is what this message will be -- what is attached
             to it, which model answers it, whether the model may run code.

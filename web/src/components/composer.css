@@ -1,0 +1,87 @@
+/* The composer's editor.
+ *
+ * CodeMirror ships a lot of chrome this box does not want: its own background,
+ * its own focus ring, a gutter. All of that is stripped, because the field the
+ * user sees is the shell around this, which tracks focus itself. */
+
+.composer-input .cm-editor {
+  background: transparent;
+  max-height: 320px;
+}
+
+.composer-input .cm-editor.cm-focused {
+  outline: none;
+}
+
+.composer-input .cm-scroller {
+  overflow: auto;
+  /* Inherit the app's face, not the monospace CodeMirror assumes: this is a box
+     for prose that sometimes holds code, and the code says so for itself. */
+  font-family: inherit;
+  line-height: 1.6;
+}
+
+.composer-input .cm-content {
+  padding: 10px;
+  min-height: 72px;
+  font-size: 14px;
+  caret-color: currentColor;
+}
+
+.composer-input .cm-line {
+  padding: 0;
+}
+
+.composer-input .cm-placeholder {
+  color: currentColor;
+  opacity: 0.35;
+}
+
+/* A fenced block.
+ *
+ * The shading is on the line, so it reaches both edges of the field whatever the
+ * line holds -- which is the whole reason the fence markers could be dropped.
+ * The negative margin and matching padding put the fill past the text inset
+ * without moving the text or changing where it wraps. */
+.composer-input .cm-fence {
+  background: rgba(128, 128, 128, 0.2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, 'Noto Sans Mono CJK TC', monospace;
+  font-size: 13px;
+  margin: 0 -10px;
+  padding: 0 10px;
+}
+
+/* The fence lines: the block's top and bottom edge.
+ *
+ * Their text is replaced with nothing, so what is left is the shading -- which
+ * is what a code block's padding looks like. The height is set here rather than
+ * left to the line-height, because an empty line at full height reads as a
+ * blank line in the code rather than as the edge of the box. */
+.composer-input .cm-fence-open,
+.composer-input .cm-fence-close {
+  height: 7px;
+  overflow: hidden;
+  font-size: 0;
+}
+
+.composer-input .cm-fence-open {
+  border-radius: 6px 6px 0 0;
+}
+
+.composer-input .cm-fence-close {
+  border-radius: 0 0 6px 6px;
+}
+
+/* An unclosed block is one still being written; it gets a bottom edge anyway so
+   it does not look like it runs off the field. */
+.composer-input .cm-fence:last-child {
+  border-radius: 0 0 6px 6px;
+}
+
+/* CodeMirror paints selections itself once drawSelection is on; without a rule
+   the layer is invisible against the panel. */
+.composer-input .cm-selectionBackground,
+.composer-input .cm-focused .cm-selectionBackground,
+.composer-input ::selection {
+  background: rgba(120, 160, 220, 0.32);
+}
