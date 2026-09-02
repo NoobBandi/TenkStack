@@ -426,87 +426,104 @@ export default function Dashboard() {
                   // session outright.
                   title: 'CONTEXT', dataIndex: 'ctx_size', width: 200,
                   render: (n: number | null | undefined, row) => {
-                    const slots = row.slots;
-                    if (!slots?.length) {
+                    const slots = row.slots ?? [];
+                    const live = slots.length > 0;
+                    // The widest slot: what one conversation can actually reach.
+                    // The sum would promise a room no single request can enter.
+                    const ceiling = live
+                      ? slots.reduce((a, b) => (b.n_ctx > a.n_ctx ? b : a)).n_ctx
+                      : (n ?? 0);
+                    if (!ceiling) {
                       return (
-                        <Text style={{ fontSize: 11, fontFamily: MONO }}>
-                          {n ? `${Math.round(n / 1024)}K` : '—'}
-                        </Text>
+                        <Text style={{ fontSize: 13, fontFamily: MONO, opacity: 0.28 }}>—</Text>
                       );
                     }
-                    // One bar per slot, because that is how the machine is
-                  // divided. Drawing only the fullest hid the thing anyone
-                  // actually wants from this column: whether the pressure is one
-                  // long conversation or every slot filling at once. Those need
-                  // different answers and looked identical.
-                  const used = slots.reduce((n, sl) => n + sl.used, 0);
-                  const worst = slots.reduce((a, b) =>
-                    (b.used / b.n_ctx > a.used / a.n_ctx ? b : a));
-                  const worstPercent = Math.min(100, (worst.used / worst.n_ctx) * 100);
-                  // Coloured by the fullest slot, not by the total: a single
-                  // slot about to truncate is the failure, and averaging it
-                  // against an idle neighbour would report it as half a problem.
-                  // Amber matches the chat panel's own threshold; red is a step
-                  // past it, where a reply gets cut in half rather than merely
-                  // gets tight.
-                  const colour = worstPercent > 95 ? ACCENT.error
-                    : worstPercent > 85 ? ACCENT.warn : 'rgba(255,255,255,0.75)';
-                  return (
-                    <Tooltip title={slots.map((slot) =>
-                      `slot ${slot.id}: ${slot.used.toLocaleString()} / ${slot.n_ctx.toLocaleString()}`
-                      + ` (${((slot.used / slot.n_ctx) * 100).toFixed(0)}%)`
-                      + `${slot.busy ? ' ・ 使用中' : ''}`).join('\n')}>
+                    const used = slots.reduce((t, sl) => t + sl.used, 0);
+                    // Coloured by the fullest slot, not by the total: one slot
+                    // about to truncate is the failure, and averaging it against
+                    // an idle neighbour reports it as half a problem. Amber
+                    // matches the chat panel's threshold; red is a step past it,
+                    // where a reply gets cut in half rather than merely gets tight.
+                    const worstPercent = live ? Math.max(
+                      ...slots.map((sl) => Math.min(100, (sl.used / sl.n_ctx) * 100))) : 0;
+                    const colour = worstPercent > 95 ? ACCENT.error
+                      : worstPercent > 85 ? ACCENT.warn : 'rgba(255,255,255,0.88)';
+                    // One rule, divided where the machine is divided. Separate
+                    // bars read as unrelated readings; a single line split by a
+                    // hairline gap reads as one window shared out, which is what
+                    // it is. Drawn empty while stopped as well, so a row does not
+                    // change shape the moment a model loads.
+                    const segments: (typeof slots[number] | null)[] = live ? slots : [null];
+                    const body = (
                       <div>
                         <div style={{
-                          display: 'flex', alignItems: 'baseline',
-                          gap: 8, marginBottom: 8,
+                          display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 7,
                         }}>
-                            {/* Tokens rather than a percentage: a context limit is
-                              written in tokens, and a percentage of a window
-                              whose size is elsewhere is two numbers to hold at
-                              once.
-
-                              The denominator is one slot's ceiling, not the sum
-                              of them: what a conversation can reach is its own
-                              slot, and the sum would promise a room no single
-                              request can enter. */}
-                          <Text style={{ fontSize: 11, fontFamily: MONO, color: colour }}>
-                            {used.toLocaleString()}
+                          {/* Tokens rather than a percentage: a context limit is
+                            written in tokens, and a percentage of a window whose
+                            size is elsewhere is two numbers to hold at once. */}
+                          <Text style={{
+                            fontSize: 13, fontFamily: MONO, lineHeight: 1,
+                            fontVariantNumeric: 'tabular-nums',
+                            color: live ? colour : 'rgba(255,255,255,0.28)',
+                          }}>
+                            {live ? used.toLocaleString() : '—'}
                           </Text>
-                          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.45 }}>
-                            / {worst.n_ctx.toLocaleString()}
+                          <Text style={{
+                            fontSize: 10, fontFamily: MONO, opacity: 0.34,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}>
+                            / {ceiling.toLocaleString()}
                             {slots.length > 1 ? ` ×${slots.length}` : ''}
                           </Text>
                         </div>
-                        <div style={{ display: 'flex', gap: 3 }}>
-                          {slots.map((slot) => {
-                            const pc = Math.min(100, (slot.used / slot.n_ctx) * 100);
+                        <div style={{ display: 'flex', gap: 2 }}>
+                          {segments.map((slot, i) => {
+                            const pc = slot ? Math.min(100, (slot.used / slot.n_ctx) * 100) : 0;
                             const own = pc > 95 ? ACCENT.error
-                              : pc > 85 ? ACCENT.warn : 'rgba(255,255,255,0.75)';
+                              : pc > 85 ? ACCENT.warn : colour;
+                            const first = i === 0;
+                            const last = i === segments.length - 1;
+                            const end = 2;
                             return (
-                              <div key={slot.id} className="gauge-dots" style={{ flex: 1 }}>
+                              <div key={slot ? slot.id : 'empty'} style={{
+                                flex: 1, height: 4, overflow: 'hidden',
+                                background: 'rgba(255,255,255,0.07)',
+                                borderTopLeftRadius: first ? end : 0,
+                                borderBottomLeftRadius: first ? end : 0,
+                                borderTopRightRadius: last ? end : 0,
+                                borderBottomRightRadius: last ? end : 0,
+                              }}>
                                 <div style={{
-                                  height: '100%', width: `${pc}%`,
-                                  background: own, transition: 'width 300ms',
-                                  // One whole dot minimum. A slot holding a few
-                                  // hundred tokens of a 262K window is under half
-                                  // a percent, and a fraction of a dot is a
-                                  // smudge -- "a little" and "none" are the two
-                                  // states this column most has to separate.
-                                  minWidth: pc > 0 ? 7 : 0,
-                                  // An idle slot holding a cached conversation
-                                  // is not the same as one working through it,
-                                  // and the difference decides whether a full
-                                  // bar is a problem.
-                                  opacity: slot.busy ? 1 : 0.55,
+                                  height: '100%', width: `${pc}%`, background: own,
+                                  borderRadius: end, transition: 'width 300ms',
+                                  // A slot holding a few hundred tokens of a 262K
+                                  // window is under half a percent, and a sliver
+                                  // thinner than the radius is a smudge -- "a
+                                  // little" and "none" are the two states this
+                                  // column most has to separate.
+                                  minWidth: pc > 0 ? 4 : 0,
+                                  // An idle slot holding a cached conversation is
+                                  // not the same as one working through it, and
+                                  // the difference decides whether a full bar is
+                                  // a problem.
+                                  opacity: slot?.busy ? 1 : 0.5,
                                 }} />
                               </div>
                             );
                           })}
                         </div>
                       </div>
-                    </Tooltip>
-                  );
+                    );
+                    if (!live) return body;
+                    return (
+                      <Tooltip title={slots.map((slot) =>
+                        `slot ${slot.id}: ${slot.used.toLocaleString()} / ${slot.n_ctx.toLocaleString()}`
+                        + ` (${((slot.used / slot.n_ctx) * 100).toFixed(0)}%)`
+                        + `${slot.busy ? ' ・ 使用中' : ''}`).join('\n')}>
+                        {body}
+                      </Tooltip>
+                    );
                 },
               },
                 {

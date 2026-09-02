@@ -174,19 +174,6 @@ body {
  * 8px pitch with a 3px radius: the count of dots follows the column's width
  * instead of being fixed, which is right here -- they are a texture for reading
  * a proportion, not a scale to be counted off. */
-.gauge-dots {
-  height: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  -webkit-mask-image: repeating-radial-gradient(circle at 4px 50%, #000 0 3px, transparent 3px 4px);
-  mask-image: repeating-radial-gradient(circle at 4px 50%, #000 0 3px, transparent 3px 4px);
-  -webkit-mask-size: 8px 100%;
-  mask-size: 8px 100%;
-}
-.gauge-dots > * {
-  display: block;
-  height: 100%;
-}
-
 /* ── Syntax colours ────────────────────────────────────────────────────
  * Hand-picked instead of importing a highlight.js theme: every shipped theme
  * assumes a fixed background, and these have to sit on a translucent panel in
