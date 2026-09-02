@@ -2278,11 +2278,45 @@ def _log_request_shape(path: str, body: bytes, request: Request) -> None:
         shape = "openai"
     elif path.startswith("messages") and not path.startswith("messages/count"):
         shape = "anthropic"
+    elif path.startswith("responses"):
+        shape = "responses"
     else:
         return
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
+        return
+
+    # The Responses format keeps its turns under `input`, and the part of it
+    # worth recording is the `type` on each tool result: llama.cpp accepts only
+    # a fixed set, and which strings Codex actually sends is not written down
+    # anywhere -- it was "output_text" until it was something else, and the
+    # error names the rejected value without naming the one that arrived.
+    if shape == "responses":
+        items = payload.get("input") or []
+        kinds: list[str] = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "function_call_output":
+                continue
+            out = item.get("output")
+            if isinstance(out, str):
+                kinds.append("<string>")
+            elif isinstance(out, list):
+                for part in out:
+                    kinds.append(
+                        part.get("type", "<no type>") if isinstance(part, dict)
+                        else f"<{type(part).__name__}>")
+        logger.info(
+            "/v1 responses from %s: model=%s input=%d tools=%d "
+            "tool_output_types=%s",
+            request.headers.get("user-agent", "?")[:40],
+            payload.get("model"),
+            len(items) if isinstance(items, list) else 0,
+            len(payload.get("tools") or []),
+            kinds or "none",
+        )
         return
 
     agent = request.headers.get("user-agent", "?")[:40]
