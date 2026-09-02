@@ -329,6 +329,12 @@ export interface ModelFile {
   size_gib: number;
   modified: number;
   is_mmproj: boolean;
+  /** What the file is to the models that name it, taken from the flag that
+   *  names it: a projector is useless alone and a draft model is a second set
+   *  of weights that exists only to be guessed with, so they are not the same
+   *  kind of thing as the weights they sit beside. Inferred from the filename
+   *  for a file nothing references, which is the only clue an orphan leaves. */
+  role: 'weights' | 'projector' | 'draft' | 'lora' | 'control';
   /** Model IDs pointing at this file. Empty means it is an orphan. */
   used_by: string[];
 }

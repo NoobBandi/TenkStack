@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
   InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
@@ -75,6 +75,32 @@ function WeightList({ weights }: { weights: ModelWeight[] }) {
       </Text>
     </Space>
   );
+}
+
+/** A file's part in a model, in the order a repo is worth reading in. */
+const ROLE_ORDER: ModelFile['role'][] = ['weights', 'draft', 'projector', 'lora', 'control'];
+
+const ROLE_NAME: Record<ModelFile['role'], string> = {
+  weights: '權重', draft: '草稿', projector: '視覺投影', lora: 'LoRA', control: '控制向量',
+};
+
+// Colour carries the distinction that matters most here: weights are the model,
+// everything else only makes sense beside one.
+const ROLE_COLOUR: Record<ModelFile['role'], string | undefined> = {
+  weights: undefined, draft: 'purple', projector: 'cyan', lora: 'geekblue', control: 'geekblue',
+};
+
+/** Files that predate the `<owner>/<repo>/` layout, or were put there by hand. */
+const LOOSE = '（散落的檔案）';
+
+interface RepoGroup {
+  repo: string;
+  owner: string;
+  name: string;
+  files: ModelFile[];
+  bytes: number;
+  unused: number;
+  roles: Partial<Record<ModelFile['role'], number>>;
 }
 
 export default function Models() {
@@ -250,6 +276,43 @@ export default function Models() {
   const mmprojFiles = files.filter((f) => f.is_mmproj);
   const orphans = files.filter((f) => f.used_by.length === 0);
   const orphanBytes = orphans.reduce((sum, f) => sum + f.size_bytes, 0);
+
+  // One row per repo. A repo is what a model is downloaded as and what it is
+  // deleted as, and its total is the number anyone reading this table is after:
+  // flat, a repo's weights, its projector and its draft model were three
+  // unrelated rows with no total between them.
+  const repos = useMemo<RepoGroup[]>(() => {
+    const groups = new Map<string, RepoGroup>();
+    for (const file of files) {
+      // Files predating the `<owner>/<repo>/` layout, or put there by hand, are
+      // a group of their own rather than being hidden under a blank heading.
+      const repo = file.repo || LOOSE;
+      let group = groups.get(repo);
+      if (!group) {
+        const cut = repo.lastIndexOf('/');
+        group = {
+          repo,
+          owner: cut > 0 ? repo.slice(0, cut) : '',
+          name: cut > 0 ? repo.slice(cut + 1) : repo,
+          files: [], bytes: 0, unused: 0, roles: {},
+        };
+        groups.set(repo, group);
+      }
+      group.files.push(file);
+      group.bytes += file.size_bytes;
+      if (!file.used_by.length) group.unused += 1;
+      group.roles[file.role] = (group.roles[file.role] ?? 0) + 1;
+    }
+    for (const group of groups.values()) {
+      // Weights first inside a repo, then what hangs off them; the quant a
+      // model entry points at is what anyone is looking for.
+      group.files.sort((a, b) =>
+        ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)
+        || b.size_bytes - a.size_bytes);
+    }
+    // What is taking the space, which is the question this table answers.
+    return [...groups.values()].sort((a, b) => b.bytes - a.bytes);
+  }, [files]);
   const partialBytes = partials.reduce((sum, f) => sum + f.size_bytes, 0);
 
   return (
@@ -393,61 +456,150 @@ export default function Models() {
         title="磁碟上的模型檔"
         size="small"
         extra={
-          orphans.length > 0 && (
-            <Text type="warning" style={{ fontSize: 12 }}>
-              {orphans.length} 個未使用檔案，共 {gib(orphanBytes)}
+          <Space size={10}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {repos.length} 個來源・{gib(files.reduce((n, f) => n + f.size_bytes, 0))}
             </Text>
-          )
+            {orphans.length > 0 && (
+              <Text type="warning" style={{ fontSize: 12 }}>
+                {orphans.length} 個未使用，共 {gib(orphanBytes)}
+              </Text>
+            )}
+          </Space>
         }
       >
-        <Table<ModelFile>
-          dataSource={files}
-          rowKey="filename"
+        {/* Grouped by the repo the files came from, because that is the unit
+            they arrive in and the unit they leave in. Flat, a repo's weights,
+            its projector and its draft model were three unrelated rows sorted
+            between other repos' files, and the only number that mattered --
+            what this model costs on disk -- was not written anywhere.
+
+            Sorted by size, since the question this table answers is what is
+            taking the space. */}
+        <Table<RepoGroup>
+          dataSource={repos}
+          rowKey="repo"
           size="small"
           pagination={false}
+          showHeader={false}
           locale={{ emptyText: '~/ai/models 中沒有 GGUF 檔' }}
+          // A repo with something unused in it is the one worth opening, so it
+          // opens itself.
+          defaultExpandedRowKeys={repos.filter((r) => r.unused > 0).map((r) => r.repo)}
+          expandable={{
+            expandedRowRender: (group) => (
+              <Table<ModelFile>
+                dataSource={group.files}
+                rowKey="filename"
+                size="small"
+                pagination={false}
+                showHeader={false}
+                columns={[
+                  {
+                    title: '檔名',
+                    dataIndex: 'filename',
+                    render: (name: string, row) => (
+                      <Space size={8}>
+                        <Tag color={ROLE_COLOUR[row.role]} style={{ marginInlineEnd: 0 }}>
+                          {ROLE_NAME[row.role]}
+                        </Tag>
+                        <Text style={{ fontSize: 12, fontFamily: MONO }}>
+                          {name.split('/').pop()}
+                        </Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: '大小', dataIndex: 'size_gib', width: 90, align: 'right',
+                    render: (v: number) => (
+                      <Text style={{
+                        fontSize: 12, fontFamily: MONO,
+                        fontVariantNumeric: 'tabular-nums',
+                      }}>{v} GiB</Text>
+                    ),
+                  },
+                  {
+                    title: '使用中的模型', dataIndex: 'used_by', width: 260,
+                    render: (used: string[]) =>
+                      used.length ? (
+                        <Space size={4} wrap>
+                          {used.map((id) => <Tag key={id}>{id}</Tag>)}
+                        </Space>
+                      ) : (
+                        <Tag color="warning">未使用</Tag>
+                      ),
+                  },
+                  {
+                    title: '', width: 60, align: 'right',
+                    render: (_, row) => (
+                      <Popconfirm
+                        title={`刪除 ${row.filename}？`}
+                        description={`會從磁碟永久移除 ${row.size_gib} GiB，無法復原。`}
+                        onConfirm={() => onDeleteFile(row.filename)}
+                        okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
+                        disabled={row.used_by.length > 0}
+                      >
+                        <Tooltip title={row.used_by.length
+                          ? '仍被模型設定使用，需先移除該模型' : undefined}>
+                          <Button size="small" danger icon={<DeleteOutlined />}
+                                  disabled={row.used_by.length > 0} />
+                        </Tooltip>
+                      </Popconfirm>
+                    ),
+                  },
+                ]}
+              />
+            ),
+          }}
           columns={[
             {
-              title: '檔名',
-              dataIndex: 'filename',
-              // The name on one line and its repo under it, rather than one
-              // long path: the name is what identifies the quant and the repo
-              // is what disambiguates two of them.
-              render: (name: string, row) => (
+              title: '來源',
+              dataIndex: 'repo',
+              render: (_: string, group) => (
                 <div style={{ minWidth: 0 }}>
-                  <div>{name.split('/').pop()}</div>
-                  {row.repo && (
-                    <Text type="secondary" style={{ fontSize: 11 }}>{row.repo}</Text>
+                  <Text style={{ fontSize: 13 }}>{group.name}</Text>
+                  {group.owner && (
+                    <Text type="secondary" style={{ fontSize: 11, marginInlineStart: 8 }}>
+                      {group.owner}
+                    </Text>
                   )}
                 </div>
               ),
             },
-            { title: '大小', dataIndex: 'size_gib', width: 110, render: (v: number) => `${v} GiB` },
             {
-              title: '使用中的模型', dataIndex: 'used_by', width: 220,
-              render: (used: string[]) =>
-                used.length ? (
-                  <Space size={4} wrap>{used.map((id) => <Tag key={id}>{id}</Tag>)}</Space>
-                ) : (
-                  <Tag color="warning">未使用</Tag>
-                ),
+              // What the repo is made of, which is the thing the flat list
+              // could not say: two quants of the same weights and one projector
+              // is a different situation from two unrelated models.
+              title: '內容', width: 250,
+              render: (_, group) => (
+                <Space size={4} wrap>
+                  {ROLE_ORDER.map((role) => [role, group.roles[role] ?? 0] as const)
+                    .filter(([, n]) => n > 0)
+                    .map(([role, n]) => (
+                      <Tag key={role} color={ROLE_COLOUR[role]} style={{ marginInlineEnd: 0 }}>
+                        {ROLE_NAME[role]}{n > 1 ? ` ×${n}` : ''}
+                      </Tag>
+                    ))}
+                </Space>
+              ),
             },
             {
-              title: '', width: 90,
-              render: (_, row) => (
-                <Popconfirm
-                  title={`刪除 ${row.filename}？`}
-                  description={`會從磁碟永久移除 ${row.size_gib} GiB，無法復原。`}
-                  onConfirm={() => onDeleteFile(row.filename)}
-                  okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
-                  disabled={row.used_by.length > 0}
-                >
-                  <Tooltip title={row.used_by.length ? '仍被模型設定使用，需先移除該模型' : undefined}>
-                    <Button size="small" danger icon={<DeleteOutlined />}
-                            disabled={row.used_by.length > 0} />
-                  </Tooltip>
-                </Popconfirm>
+              title: '大小', width: 110, align: 'right',
+              render: (_, group) => (
+                <Text style={{
+                  fontSize: 13, fontFamily: MONO, fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {gib(group.bytes)}
+                </Text>
               ),
+            },
+            {
+              title: '', width: 90, align: 'right',
+              render: (_, group) => (group.unused > 0 ? (
+                <Tag color="warning" style={{ marginInlineEnd: 0 }}>
+                  {group.unused} 個未使用
+                </Tag>
+              ) : null),
             },
           ]}
         />

@@ -385,7 +385,30 @@ async def upsert_model(
 # two repos publishing the same quant of the same model under the same filename
 # is the normal case rather than a collision worth ignoring. A basename is no
 # longer an identity.
-_FILE_FLAGS = re.compile(r"--(?:model|mmproj)\s+(\S+\.gguf)")
+# Every flag llama-server takes that names a GGUF, long and short. Only --model
+# and --mmproj were here, which meant the draft model of a speculative-decoding
+# entry counted as referenced by nothing: the interface called it an orphan and
+# offered to delete weights a running model depends on.
+_FILE_FLAGS = re.compile(
+    r"(?:--(?P<long>model|mmproj|spec-draft-model|model-draft|lora|lora-scaled"
+    r"|control-vector|control-vector-scaled)"
+    r"|-(?P<short>m|mm|md))\s+(?P<path>\S+?\.gguf)")
+
+# What a file is to the model that names it. A repo holds weights, a projector
+# and sometimes a draft model side by side, and they are not interchangeable --
+# a projector is useless alone, and a draft model is a second set of weights
+# that only exists to be guessed with.
+_ROLES = {
+    "model": "weights", "m": "weights",
+    "mmproj": "projector", "mm": "projector",
+    "spec-draft-model": "draft", "model-draft": "draft", "md": "draft",
+    "lora": "lora", "lora-scaled": "lora",
+    "control-vector": "control", "control-vector-scaled": "control",
+}
+
+# Which one wins when a file is used two ways by two entries. A file being
+# somebody's weights is the strongest claim on it.
+_ROLE_ORDER = ["weights", "draft", "projector", "lora", "control"]
 
 # `${models-dir}/…`, which is llama-swap's macro for exactly this directory.
 _MACRO = re.compile(r"^\$\{[^}]+\}/")
@@ -401,9 +424,23 @@ def _files_in_cmd(cmd: Any) -> set[str]:
     manage what it was not given.
     """
     out = set()
-    for token in _FILE_FLAGS.findall(str(cmd or "")):
-        relative = _MACRO.sub("", token)
+    for match in _FILE_FLAGS.finditer(str(cmd or "")):
+        relative = _MACRO.sub("", match.group("path"))
         out.add(Path(relative).name if relative.startswith("/") else relative)
+    return out
+
+
+def _roles_in_cmd(cmd: Any) -> dict[str, str]:
+    """The same references, each with what the flag says it is for."""
+    out: dict[str, str] = {}
+    for match in _FILE_FLAGS.finditer(str(cmd or "")):
+        relative = _MACRO.sub("", match.group("path"))
+        name = Path(relative).name if relative.startswith("/") else relative
+        role = _ROLES.get(match.group("long") or match.group("short") or "", "weights")
+        if role not in _ROLE_ORDER:
+            continue
+        if name not in out or _ROLE_ORDER.index(role) < _ROLE_ORDER.index(out[name]):
+            out[name] = role
     return out
 
 
@@ -752,9 +789,13 @@ def list_gguf_files() -> list[dict]:
         models = {}
 
     references: dict[str, list[str]] = {}
+    roles: dict[str, str] = {}
     for model_id, spec in models.items():
-        for filename in _files_in_cmd(spec.get("cmd")):
+        for filename, role in _roles_in_cmd(spec.get("cmd")).items():
             references.setdefault(filename, []).append(model_id)
+            if (filename not in roles
+                    or _ROLE_ORDER.index(role) < _ROLE_ORDER.index(roles[filename])):
+                roles[filename] = role
 
     files = []
     # Recursive since downloads land under `<owner>/<repo>/`. Files sitting
@@ -774,6 +815,11 @@ def list_gguf_files() -> list[dict]:
             "size_gib": round(stat.st_size / 1024**3, 2),
             "modified": stat.st_mtime,
             "is_mmproj": path.name.lower().startswith("mmproj"),
+            # From the flag that names it where a model does; from the filename
+            # where nothing does, which is the only clue an orphan leaves.
+            "role": roles.get(
+                relative,
+                "projector" if path.name.lower().startswith("mmproj") else "weights"),
             "used_by": sorted(references.get(relative, [])),
         })
     return files
