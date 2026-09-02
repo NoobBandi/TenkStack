@@ -1,6 +1,6 @@
 import { Card, Progress, Space, Tooltip, Typography } from 'antd';
 import { ACCENT, LINE, MONO } from '../theme';
-import type { SystemSample, Throughput } from '../api';
+import type { SystemSample } from '../api';
 
 const { Text } = Typography;
 
@@ -112,9 +112,7 @@ function Dial({ title, percent, reading, note, noteTitle }: {
   );
 }
 
-export default function SystemStats(
-  { sample, throughput }: { sample: SystemSample | null; throughput: Throughput | null },
-) {
+export default function SystemStats({ sample }: { sample: SystemSample | null }) {
   const cpu = sample?.cpu;
   const mem = sample?.memory;
   const swap = sample?.swap;
@@ -190,25 +188,6 @@ export default function SystemStats(
         ) : (
           <Dial title="磁碟" percent={null} reading="—" note="—" />
         )}
-      </div>
-
-      {/* Throughput as a line, not a fourth dial: it is a rate with no ceiling
-          to fill, and a dial with nothing to fill is a circle pretending to be
-          a measurement. */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-        marginTop: 12, paddingTop: 9, borderTop: `1px solid ${LINE.faint}`,
-      }}>
-        <Text style={{ fontSize: 10, letterSpacing: 1.2, opacity: 0.45 }}>THROUGHPUT</Text>
-        <Space size={8} align="baseline">
-          <Text style={{ fontSize: 15, fontFamily: MONO, fontVariantNumeric: 'tabular-nums' }}>
-            {(throughput?.tokens_per_second ?? 0).toFixed(1)}
-            <span style={{ fontSize: 10, opacity: 0.45, marginLeft: 3 }}>t/s</span>
-          </Text>
-          <Text type="secondary" style={{ fontSize: 10 }}>
-            {throughput ? `最近 ${throughput.tokens} tokens` : '尚無資料'}
-          </Text>
-        </Space>
       </div>
 
       {/* Any disk beyond the first, as a line rather than a dial: a second

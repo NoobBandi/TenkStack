@@ -331,7 +331,7 @@ export default function Dashboard() {
         ) : (
           <GpuPanel gpus={gpus} showTemp={showTemp} />
         )}
-        <SystemStats sample={system} throughput={throughput} />
+        <SystemStats sample={system} />
       </div>
 
       {/* Rendered bare rather than in a Row: antd gives a gutter Row negative
@@ -351,6 +351,26 @@ export default function Dashboard() {
             title={<span style={{ fontSize: 12, opacity: 0.75 }}>請求進度</span>}
             size="small"
             style={{ height: '100%' }}
+            // The rate of the last finished request, beside the curve of the one
+            // running. It sat in the system card until now, between CPU and
+            // disk, where it was the one reading that said nothing about the
+            // machine and everything about the model. Here the two are the same
+            // measurement at two time scales: this is the whole-request average,
+            // the curve is a three-second window.
+            extra={
+              <Space size={6} align="baseline">
+                <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1 }}>上一次</Text>
+                <Text style={{
+                  fontSize: 13, fontFamily: MONO, fontVariantNumeric: 'tabular-nums',
+                }}>
+                  {(throughput?.tokens_per_second ?? 0).toFixed(1)}
+                  <span style={{ fontSize: 9, opacity: 0.45, marginLeft: 2 }}>t/s</span>
+                </Text>
+                <Text type="secondary" style={{ fontSize: 10 }}>
+                  {throughput ? `${throughput.tokens} tok` : '尚無資料'}
+                </Text>
+              </Space>
+            }
           >
             <RequestCurve traces={traces} />
           </Card>
