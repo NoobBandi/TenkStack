@@ -117,7 +117,7 @@ export default function ClientBadge({ requests }: { requests: InflightRequest[] 
   const models = [...new Set(parties.map((p) => p.model).filter(Boolean))];
 
   const detail = (
-    <div style={{ minWidth: 320 }}>
+    <div style={{ minWidth: 260, maxWidth: 420 }}>
       {/* A grid, not flex with minWidths. Flex sizes each cell to its own
           content and then fights the minimum, so a long client name pushed the
           address out of line with the row above it -- columns that do not line
@@ -175,9 +175,12 @@ export default function ClientBadge({ requests }: { requests: InflightRequest[] 
       {models.length > 0 && (
         <div style={{
           marginTop: 8, paddingTop: 7, borderTop: `1px solid ${LINE.faint}`,
-          fontSize: 10, fontFamily: MONO, opacity: 0.4,
+          display: 'flex', gap: 8, alignItems: 'baseline',
         }}>
-          {models.join(' ・ ')}
+          <Text style={{ fontSize: 9, letterSpacing: 1, opacity: 0.35 }}>模型</Text>
+          <Text style={{ fontSize: 10, fontFamily: MONO, opacity: 0.55 }}>
+            {models.join(' ・ ')}
+          </Text>
         </div>
       )}
     </div>
@@ -186,7 +189,11 @@ export default function ClientBadge({ requests }: { requests: InflightRequest[] 
   return (
     <Popover
       content={detail}
-      placement="bottomRight"
+      // bottomLeft, not bottomRight: antd names these by which edge aligns with
+      // the trigger, not by which way the panel grows. The badge sits at the
+      // left of a card title, so aligning its right edge sent the whole popover
+      // leftwards over the sidebar and the chart beside it.
+      placement="bottomLeft"
       trigger={['hover', 'click']}
       // antd's default inner padding is sized for a sentence of prose. This is
       // a dense table, and the stock 12px around it read as a small table
