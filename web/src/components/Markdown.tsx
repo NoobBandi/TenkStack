@@ -1,4 +1,4 @@
-import { isValidElement, memo, useState } from 'react';
+import { isValidElement, memo, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -7,6 +7,7 @@ import {
   CheckOutlined, CodeOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined,
 } from '@ant-design/icons';
 import { usePreview } from './preview';
+import { detectLanguage } from './detect';
 import './markdown.css';
 
 /** Languages the preview frame can render. */
@@ -86,6 +87,48 @@ function parseDiff(source: string): DiffRow[] {
     if (text.startsWith('-')) return { kind: 'del', old: old++, cur: null, text };
     return { kind: 'ctx', old: old++, cur: cur++, text };
   });
+}
+
+/**
+ * Name the fences that name nothing, so the same detector decides here as in
+ * the composer.
+ *
+ * highlight.js has an automatic mode and this renderer used it. It was measured
+ * when the composer needed the same thing: 5 of 7 on realistic multi-line
+ * snippets -- Rust as `ini`, Python as `lua` -- and near-random on a single
+ * line, with a relevance score that gave nothing to threshold on. The composer
+ * stopped using it; leaving it on here meant a block was coloured one way while
+ * being typed and another way once sent, and the second one was the worse
+ * guess.
+ *
+ * Only the rendering is rewritten. The message keeps whatever the writer or the
+ * model actually sent; this adds a word to a copy of it on its way to the
+ * parser.
+ *
+ * A block whose language cannot be worked out stays plain, which is the point:
+ * no colour beats the wrong colour.
+ */
+function label(markdown: string): string {
+  if (!markdown.includes('```')) return markdown;
+  const lines = markdown.split('\n');
+  const out = [...lines];
+
+  const fill = (open: number, close: number) => {
+    // Already named, by the writer or the model.
+    if (lines[open].trim().replace(/^`+/, '').trim()) return;
+    const guess = detectLanguage(lines.slice(open + 1, close).join('\n'));
+    if (guess) out[open] = `${lines[open].trimEnd()}${guess}`;
+  };
+
+  let open = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].trimStart().startsWith('```')) continue;
+    if (open === -1) { open = i; } else { fill(open, i); open = -1; }
+  }
+  // A fence still open is a reply still arriving; it gets named from what has
+  // landed so far, and named again as more does.
+  if (open !== -1) fill(open, lines.length);
+  return out.join('\n');
 }
 
 /**
@@ -250,12 +293,16 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
 }
 
 function Markdown({ children }: { children: string }) {
+  const source = useMemo(() => label(children), [children]);
   return (
     <div className="md">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        // ignoreMissing: a model inventing a language name must not throw.
-        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+        // detect is off: its guesses are the ones `label` was written to
+        // replace. ignoreMissing keeps a language name this build does not
+        // carry -- powershell and dockerfile are outside lowlight's common set
+        // -- from throwing; the block renders plain.
+        rehypePlugins={[[rehypeHighlight, { detect: false, ignoreMissing: true }]]}
         components={{
           pre: ({ children }) => <>{children}</>,
           code: ({ className, children, ...props }) => {
@@ -278,7 +325,7 @@ function Markdown({ children }: { children: string }) {
           ),
         }}
       >
-        {children}
+        {source}
       </ReactMarkdown>
     </div>
   );
