@@ -458,8 +458,8 @@ export default function Dashboard() {
                       + `${slot.busy ? ' ・ 使用中' : ''}`).join('\n')}>
                       <div>
                         <div style={{
-                          display: 'flex', justifyContent: 'space-between',
-                          gap: 6, marginBottom: 3,
+                          display: 'flex', alignItems: 'baseline',
+                          gap: 8, marginBottom: 8,
                         }}>
                             {/* Tokens rather than a percentage: a context limit is
                               written in tokens, and a percentage of a window
