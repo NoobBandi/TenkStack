@@ -9,7 +9,7 @@ import {
 import Composer from '../components/Composer';
 import ChatSettings from '../components/ChatSettings';
 import PreviewPanel from '../components/PreviewPanel';
-import { PreviewProvider, usePreview } from '../components/preview';
+import { NoPreview, PreviewProvider, usePreview } from '../components/preview';
 import ChatHistory from '../components/ChatHistory';
 import Markdown, { lastVisualBlock, splitCode } from '../components/Markdown';
 import Trace from '../components/Trace';
@@ -449,7 +449,9 @@ function ChatInner() {
                               so neither does this. */}
                           {splitCode(exchange.user.content).map((part, i) => (
                             part.code ? (
-                              <Markdown key={i}>{part.text}</Markdown>
+                              <NoPreview key={i}>
+                                <Markdown>{part.text}</Markdown>
+                              </NoPreview>
                             ) : (
                               <Text key={i} style={{
                                 whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.55,

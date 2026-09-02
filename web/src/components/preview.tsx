@@ -30,6 +30,18 @@ export function usePreview(): PreviewApi | null {
   return useContext(PreviewContext);
 }
 
+/**
+ * Cuts the panel off for a subtree.
+ *
+ * A code block offers to run itself only when there is somewhere to run it, so
+ * removing the somewhere removes the offer. Used around a message the user
+ * wrote: they pasted that code to ask about it, and a button offering to
+ * execute their own paste is answering a question nobody asked.
+ */
+export function NoPreview({ children }: { children: React.ReactNode }) {
+  return <PreviewContext.Provider value={null}>{children}</PreviewContext.Provider>;
+}
+
 export function PreviewProvider({ children }: { children: React.ReactNode }) {
   const [target, setTarget] = useState<PreviewTarget | null>(null);
 
