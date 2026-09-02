@@ -25,7 +25,7 @@
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react';
 import { EditorState, Prec, RangeSet, type Extension } from '@codemirror/state';
 import {
-  Decoration, EditorView, WidgetType, keymap, placeholder as placeholderExt,
+  Decoration, EditorView, keymap, placeholder as placeholderExt,
   drawSelection, type DecorationSet,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -77,51 +77,21 @@ function insideFence(text: string, caret: number): boolean {
 }
 
 /**
- * What the header says when the fence names nothing.
+ * Shade the block and blank its markers.
  *
- * Either the language that was worked out from the body, or a word saying that
- * is where one goes. Showing the guess matters as much as acting on it: the
- * block is about to be coloured as Python, and the writer should be able to see
- * that and disagree by typing over it.
- */
-class LanguageHint extends WidgetType {
-  label: string;
-  guessed: boolean;
-
-  constructor(label: string, guessed: boolean) {
-    super();
-    this.label = label;
-    this.guessed = guessed;
-  }
-
-  eq(other: LanguageHint) {
-    return other.label === this.label && other.guessed === this.guessed;
-  }
-
-  toDOM() {
-    const hint = document.createElement('span');
-    hint.className = this.guessed ? 'cm-fence-hint cm-fence-guess' : 'cm-fence-hint';
-    hint.textContent = this.label;
-    return hint;
-  }
-}
-
-/**
- * Shade the block; turn its closing marker into an edge and its opening one
- * into a header.
+ * Neither fence line is drawn. The opening one used to stay visible so a
+ * language could be typed into it, and that was the wrong trade: it put a field
+ * on screen that looked like it had to be filled in, on every block, for the
+ * sake of a case the detector already covers. What language a block is in is
+ * worked out from the code -- see ./detect -- and nothing is asked for.
  *
- * Only the backticks go. What follows them on that line is the language, and it
- * has to stay visible and typeable -- it is what decides how the body is
- * coloured, and a block whose language cannot be seen or set is a block that is
- * never coloured. The closing marker carries nothing, so it is blanked outright
- * and left as seven pixels of shading, which is what the bottom of a code block
- * looks like anyway.
- *
- * The lines themselves are kept. Hiding them outright with block decorations
- * that swallow a line break collapses on the case the shortcut produces most --
- * a new empty block, where the closing fence's range starts at the same offset
- * as the empty body line and takes it along, leaving nowhere to put the caret.
- * Keeping them also keeps arrow keys, selection and delete behaving as before.
+ * Both lines are kept in the layout, blanked, as seven pixels of shading, which
+ * is what the top and bottom of a code block look like anyway. Hiding them
+ * outright with block decorations that swallow a line break collapses on the
+ * case the shortcut produces most -- a new empty block, where the closing
+ * fence's range starts at the same offset as the empty body line and takes it
+ * along, leaving nowhere to put the caret. Keeping them also keeps arrow keys,
+ * selection and delete behaving as they did.
  */
 function decorate(state: EditorState): DecorationSet {
   const marks: { from: number; to: number; value: Decoration }[] = [];
@@ -142,45 +112,11 @@ function decorate(state: EditorState): DecorationSet {
         value: Decoration.line({ class: `cm-fence ${edge}`.trim() }),
       });
 
-      if (i === fence.open) {
-        // The indent and the backticks; never zero-length, a fence is at least
-        // three characters.
-        const lead = line.text.length - line.text.trimStart().length;
-        const ticks = /^`+/.exec(line.text.slice(lead))?.[0].length ?? 3;
-        const info = line.from + lead + ticks;
-        marks.push({ from: line.from, to: info, value: blank });
-        if (info < line.to) {
-          marks.push({
-            from: info, to: line.to,
-            value: Decoration.mark({ class: 'cm-fence-lang' }),
-          });
-        } else {
-          // Cheap: the detector reads a prefix and caches its answer, so this
-          // costs nothing the colouring pass has not already paid.
-          const hasBody = fence.close === null
-            ? last > fence.open : last > fence.open + 1;
-          const body = hasBody
-            ? state.sliceDoc(
-              state.doc.line(fence.open + 1).from,
-              fence.close ? state.doc.line(last - 1).to : state.doc.length)
-            : '';
-          const guess = body.trim() ? detectLanguage(body) : null;
-          // An empty block is not asked to identify itself. There is nothing in
-          // it to identify, and a prompt on a block the writer has only just
-          // opened reads as a field that has to be filled in -- which is the one
-          // thing the detector exists to avoid.
-          if (body.trim() || guess) {
-            marks.push({
-              from: line.to, to: line.to,
-              value: Decoration.widget({
-                widget: new LanguageHint(guess ?? '語言', guess !== null), side: 1,
-              }),
-            });
-          }
-        }
-      } else if (i === fence.close) {
+      if (i === fence.open || i === fence.close) {
+        // Never zero-length: a fence is at least three characters.
         marks.push({ from: line.from, to: line.to, value: blank });
       }
+
     }
   }
   return marks.length ? Decoration.set(marks.map(
@@ -209,6 +145,10 @@ const blocks = StateField.define<DecorationSet>({
  */
 const parsed = new Map<string, { from: number; to: number; cls: string }[]>();
 
+/** Bumped when a parser finishes loading. The document has not changed at that
+ *  point, so nothing else would tell the plugin its answer is now different. */
+let generation = 0;
+
 /** Runs of one block, relative to its start, so an edit elsewhere reuses them. */
 function runs(language: Language, body: string) {
   const key = `${language.name}\u0000${body}`;
@@ -229,14 +169,18 @@ const COLOUR_LIMIT = 20000;
 
 const colours = ViewPlugin.fromClass(class {
   decorations: DecorationSet = RangeSet.empty;
+  built = -1;
 
   constructor(view: EditorView) { this.decorations = this.build(view); }
 
   update(update: ViewUpdate) {
-    if (update.docChanged) this.decorations = this.build(update.view);
+    if (update.docChanged || this.built !== generation) {
+      this.decorations = this.build(update.view);
+    }
   }
 
   build(view: EditorView): DecorationSet {
+    this.built = generation;
     const marks: { from: number; to: number; cls: string }[] = [];
     const { state } = view;
 
@@ -279,7 +223,10 @@ function resolve(name: string, view: EditorView): Language | null {
   if (!found) return null;
   if (!(found instanceof LanguageDescription)) return found;
   if (found.support) return found.support.language;
-  void found.load().then(() => view.dispatch({}));
+  void found.load().then(() => {
+    generation += 1;
+    view.dispatch({});
+  });
   return null;
 }
 
@@ -471,7 +418,8 @@ export default function ComposerInput({
         run: (v) => {
           if (v.composing || !v.state.selection.main.empty) return false;
           const line = v.state.doc.lineAt(v.state.selection.main.head);
-          const fence = fences(v.state).find((f) => line.number === f.open);
+          const fence = fences(v.state).find(
+            (f) => line.number === f.open || line.number === f.open + 1);
           if (!fence) return false;
           if (fence.open === 1) {
             v.dispatch({
@@ -520,9 +468,7 @@ export default function ComposerInput({
       if (insideFence(v.state.doc.toString(), from)) return false;
       v.dispatch({
         changes: { from: from - 2, to, insert: '```\n\n```' },
-        // On the header, after the backticks: the language is the first thing
-        // to say about a block, and Enter drops into the body.
-        selection: { anchor: from - 2 + 3 },
+        selection: { anchor: from - 2 + 4 },
       });
       return true;
     });

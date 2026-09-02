@@ -25,23 +25,30 @@
  */
 
 const SIGNATURES: [string, RegExp][] = [
-  ['sh', /^#!.*\b(bash|sh|zsh)\b/m],
+  // A shebang settles it outright.
+  ['sh', /^#!.*\b(bash|sh|zsh|dash)\b/m],
   ['py', /^#!.*\bpython/m],
-  ['html', /^\s*<(!doctype|html|head|body|div|span|table|script)\b/im],
-  ['cpp', /^\s*#\s*include\s*[<"]/m],
-  ['rs', /^\s*(pub\s+)?fn\s+\w+|^\s*impl\b|\blet\s+mut\b|\buse\s+std::/m],
-  ['py', /^\s*(async\s+)?(def|class)\s+\w+.*:\s*$|^\s*(from\s+[\w.]+\s+)?import\s+\w/m],
-  ['ts', /^\s*(export\s+)?(interface|type)\s+\w+\s*[={]|:\s*(string|number|boolean|void)\b/m],
-  ['js', /^\s*(export|import)\b|^\s*(const|let|var)\s+\w+\s*=|=>|\bfunction\s*\w*\s*\(|console\.log\(/m],
-  ['sql', /\bselect\b[\s\S]{0,200}\bfrom\b|\binsert\s+into\b|\bcreate\s+table\b|\bupdate\s+\w+\s+set\b/i],
+  ['php', /<\?php/],
+  ['html', /^\s*<(!doctype|html|head|body|div|span|table|script|section|main)\b/im],
+  ['xml', /^\s*<\?xml\b/im],
+  ['cpp', /^\s*#\s*include\s*[<"]|\bstd::\w+|\bprintf\s*\(|\bint\s+main\s*\(/m],
+  ['rs', /^\s*(pub\s+)?fn\s+\w+|^\s*impl\b|\blet\s+mut\b|\buse\s+std::|\bprintln!\s*\(/m],
+  ['go', /^package\s+\w+\s*$|\bfmt\.\w+\(|^\s*func\s+(\(\w+[^)]*\)\s*)?\w+\(|:=/m],
+  ['py', /^\s*(async\s+)?(def|class)\s+\w+.*:\s*$|^\s*(from\s+[\w.]+\s+)?import\s+\w|^\s*(if|for|while|with|try|except|elif|else)\b.*:\s*$|\bself\.\w|^if __name__/m],
+  ['java', /\bSystem\.out\.print|^\s*import\s+java\.|^\s*(public|private|protected)\s+(static\s+)?(final\s+)?(class|void|int|String)\b/m],
+  ['ts', /^\s*(export\s+)?(interface|type)\s+\w+\s*[={]|:\s*(string|number|boolean|void)\b|\bas\s+const\b/m],
+  ['js', /^\s*(export|import)\b|^\s*(const|let|var)\s+\w+\s*=|=>|\bfunction\s*\w*\s*\(|console\.log\(|\brequire\s*\(|\bmodule\.exports\b/m],
+  ['rb', /^\s*def\s+\w+[\s\S]*^\s*end\s*$|^\s*puts\s|^\s*require\s+['"]/m],
+  ['sql', /\bselect\b[\s\S]{0,200}\bfrom\b|\binsert\s+into\b|\bcreate\s+table\b|\bupdate\s+\w+\s+set\b|\balter\s+table\b/i],
   ['dockerfile', /^FROM\s+\S+/m],
-  ['go', /^package\s+\w+\s*$|^\s*func\s+(\(\w+[^)]*\)\s*)?\w+\(/m],
-  ['java', /^\s*(public|private)\s+(static\s+)?(final\s+)?(class|void|int|String)\b/m],
-  ['php', /<\?php|^\s*\$\w+\s*=/m],
+  ['diff', /^diff --git |^@@ -\d+|^[+-]{3} [ab]?\//m],
+  ['ps1', /\$PSVersionTable|^\s*(Get|Set|New|Remove)-\w+/m],
   ['css', /^\s*[.#@]?[\w-]+[^;{}]*\{\s*$|\{[^{}]*[\w-]+\s*:\s*[^;{}]+[;}]/m],
   ['yaml', /^[\w-]+:\s*($|[|>])|^\s{2,}[\w-]+:\s/m],
   ['toml', /^\[[\w.]+\]\s*$/m],
-  ['sh', /^\s*(sudo|apt|npm|git|cd|ls|echo|export|curl|wget|systemctl|docker|mkdir|chmod)\s/m],
+  // Last, and deliberately: a shell transcript is mostly ordinary words, so it
+  // only wins once nothing with real syntax has.
+  ['sh', /^\s*(sudo|apt|apt-get|npm|npx|yarn|pnpm|git|cd|ls|cat|echo|export|source|curl|wget|systemctl|journalctl|docker|podman|mkdir|rm|cp|mv|chmod|chown|tar|grep|sed|awk|ssh|scp|pip|pip3|cargo|make|cmake|kubectl|brew)\s|^\s*\.\/\S+|\s\|\s*(grep|awk|sed|head|tail|sort|wc|jq)\b/m],
 ];
 
 /**

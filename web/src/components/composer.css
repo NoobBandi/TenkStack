@@ -71,41 +71,15 @@
  * is what a code block's padding looks like. The height is set here rather than
  * left to the line-height, because an empty line at full height reads as a
  * blank line in the code rather than as the edge of the box. */
+.composer-input .cm-fence-open,
 .composer-input .cm-fence-close {
   height: 7px;
   overflow: hidden;
   font-size: 0;
 }
 
-/* The opening fence keeps whatever follows its backticks -- the language -- and
-   becomes the block's header. Small and dim: it labels the block, it is not
-   part of the code. */
 .composer-input .cm-fence-open {
   border-radius: 6px 6px 0 0;
-  font-size: 11px;
-  line-height: 17px;
-  padding-top: 3px;
-}
-
-.composer-input .cm-fence-lang {
-  color: rgba(255, 255, 255, 0.5);
-  letter-spacing: 0.4px;
-}
-
-/* Says where to type it. Without this the header is a blank strip, and a block
-   nobody knows how to label is a block that never gets coloured. */
-.composer-input .cm-fence-hint {
-  color: rgba(255, 255, 255, 0.26);
-  letter-spacing: 0.4px;
-  pointer-events: none;
-}
-
-/* A guessed language, set apart from one that was typed. Italic rather than a
-   different colour: it is the same fact, held with less certainty, and the
-   writer can overrule it by typing over it. */
-.composer-input .cm-fence-guess {
-  color: rgba(255, 255, 255, 0.34);
-  font-style: italic;
 }
 
 .composer-input .cm-fence-close {
