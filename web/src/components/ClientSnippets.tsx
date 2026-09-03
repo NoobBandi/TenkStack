@@ -215,12 +215,12 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               + `small_model 不設會去要一個這台沒有的名字。`,
         },
         {
-          title: '③ 金鑰',
-          lang: sh,
-          body: 'opencode auth login',
-          note: '選單裡挑 Other，provider id 填 tenks（要和上面那個 key 一樣），再貼上金鑰。'
-              + '存在 ~/.local/share/opencode/auth.json，權限 0600，設定檔裡不會有金鑰。'
-              + '如果這個 provider 沒讀到，options 也接受 apiKey: "{env:TENKS_KEY}"。',
+          title: '③ 金鑰：在 opencode 裡打',
+          lang: 'bash',
+          body: '/connect',
+          note: '不是 shell 指令，是進 opencode 之後在對話框裡打的。'
+              + '選到上面設定的 tenks，貼上金鑰就好。'
+              + '存在 ~/.local/share/opencode/auth.json，權限 0600，設定檔裡不會有金鑰。',
         },
       ],
     },
@@ -247,26 +247,19 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '75',
               CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(output),
             },
-          }, null, 2),
-          note: '背景小工作會另外叫一個「快速模型」，不指定就會送 claude-haiku-*，這台沒有那個名字，所以兩個都要設。'
-              + 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE 是幾成滿才開始壓縮（0–100）；'
-              + '要完全關掉自動壓縮是 DISABLE_AUTO_COMPACT=1，但那樣就得自己記得下 /compact。',
-        },
-        {
-          title: '③ 金鑰',
-          lang: 'json',
-          body: JSON.stringify({
             apiKeyHelper: win
               ? `powershell -NoProfile -Command "Get-Content -Raw '${KEY_FILE.win}'"`
               : `cat ${KEY_FILE.unix}`,
           }, null, 2),
-          note: '和上面同一個檔案，放在最外層。apiKeyHelper 是 Claude Code 自己的機制：'
-              + '每次要送請求時執行這行指令，把 stdout 當成金鑰，所以金鑰不在設定檔裡。'
-              + `先把金鑰寫進 ${keyPath}（下面那格）。`
-              + '也可以直接在 env 裡加 ANTHROPIC_AUTH_TOKEN，但那樣金鑰就跟設定一起躺在檔案裡了。',
+          note: '背景小工作會另外叫一個「快速模型」，不指定就會送 claude-haiku-*，這台沒有那個名字，所以兩個都要設。'
+              + 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE 是幾成滿才開始壓縮（0–100）；'
+              + '要完全關掉自動壓縮是 DISABLE_AUTO_COMPACT=1，但那樣就得自己記得下 /compact。'
+              + 'apiKeyHelper 是 Claude Code 取金鑰的方式：每次送請求前執行那行指令，把 stdout 當金鑰，'
+              + `所以金鑰不在這個檔案裡，而在 ${keyPath}。`
+              + '也可以改成在 env 裡加 ANTHROPIC_AUTH_TOKEN 直接寫死，那樣就不需要金鑰檔。',
         },
         {
-          title: '④ 建立金鑰檔',
+          title: '③ 建立金鑰檔',
           lang: sh,
           body: writeKeyCommand(os),
         },
@@ -298,32 +291,26 @@ model_auto_compact_token_limit = ${compactAt}
 [model_providers.tenks]
 name = "TenkStack"
 base_url = "${base}"
-wire_api = "responses"`,
+wire_api = "responses"
+
+[model_providers.tenks.auth]
+${win
+  ? `command = "cmd"
+args = ["/c", "type", "%USERPROFILE%\\\\.tenks-key"]`
+  : `command = "cat"
+args = ["${keyAbs}"]`}
+refresh_interval_ms = 86400000`,
           note: `這三個數字是重點。Codex 預設會照它自己猜的視窗跑，猜錯就一路寫到撞牆，`
               + `回覆從工具呼叫中間被切斷之後那個 session 就永久壞掉——每次重送都是同一段殘缺 JSON，伺服器一律回 500。`
               + `model_auto_compact_token_limit 讓它在 ${compactAt.toLocaleString()} 就先摘要。`
-              + `另外 model_context_window 在 Codex 0.116–0.117 有過會弄壞自動壓縮的問題，那兩版請不要設。`,
-        },
-        {
-          title: '③ 金鑰：接在同一個檔案後面',
-          lang: 'ini',
-          body: win
-            ? `[model_providers.tenks.auth]
-command = "cmd"
-args = ["/c", "type", "%USERPROFILE%\\\\.tenks-key"]
-refresh_interval_ms = 86400000`
-            : `[model_providers.tenks.auth]
-command = "cat"
-args = ["${keyAbs}"]
-refresh_interval_ms = 86400000`,
-          note: 'Codex 會執行這行指令，把 stdout 當成 bearer token。'
-              + '這是它自己給的動態金鑰機制，本來是給 Vault、AWS SSO 那種短期憑證用的，讀一個檔案同樣成立。'
-              + 'auth 不能和 env_key 併用，兩個都寫會被拒絕。'
-              + 'args 裡要寫絕對路徑，TOML 不會展開 ~。'
+              + `另外 model_context_window 在 Codex 0.116–0.117 有過會弄壞自動壓縮的問題，那兩版請不要設。`
+              + `最後那段 auth 是金鑰：Codex 會執行那行指令，把 stdout 當成 bearer token——`
+              + `本來是給 Vault、AWS SSO 那種短期憑證用的，讀一個檔案同樣成立。`
+              + `它不能和 env_key 併用，兩個都寫會被拒絕。args 要寫絕對路徑，TOML 不會展開 ~。`
               + `refresh_interval_ms 預設 5 分鐘，靜態金鑰設長一點免得一直重跑。`,
         },
         {
-          title: '④ 建立金鑰檔',
+          title: '③ 建立金鑰檔',
           lang: sh,
           body: writeKeyCommand(os),
         },
@@ -348,6 +335,7 @@ refresh_interval_ms = 86400000`,
 model = "${modelId}"
 base_url = "${base}"
 name = "${modelName}（本機）"
+api_key = "sk-console-..."
 api_backend = "chat_completions"
 context_window = ${ctx}
 max_completion_tokens = ${output}
@@ -361,15 +349,9 @@ auto_compact_threshold_percent = 75`,
               + `auto_compact_threshold_percent 預設 85，這裡壓到 75 是因為這台的回覆長、`
               + `85% 才開始摘要容易在摘要途中就把剩下的空間用完。`
               + `驗證有沒有讀到用 grok inspect；指定執行 grok -p "你好" -m tenks-${modelId}；`
-              + `互動模式內用 /model tenks-${modelId} 切換。`,
-        },
-        {
-          title: '③ 金鑰：加進上面那個 [model.…] 區段',
-          lang: 'ini',
-          body: `api_key = "sk-console-..."`,
-          note: 'Grok Build 的 [model.…] 同時接受 api_key（直接寫）和 env_key（讀環境變數），'
-              + '官方文件偏好後者。這裡用 api_key 是因為它不需要另外一層設定，'
-              + '代價是金鑰躺在設定檔裡——那個檔案請 chmod 600。',
+              + `互動模式內用 /model tenks-${modelId} 切換。`
+              + `api_key 直接寫在裡面是 Grok Build 支援的兩種之一，另一種是 env_key 讀環境變數，`
+              + `官方文件偏好後者。既然金鑰躺在檔案裡，這個檔案請 chmod 600。`,
         },
       ],
     },
@@ -395,6 +377,7 @@ auto_compact_threshold_percent = 75`,
               tenks: {
                 baseUrl: base,
                 api: 'openai-completions',
+                apiKey: 'sk-console-...',
                 authHeader: true,
                 compat: {
                   supportsDeveloperRole: false,
@@ -418,27 +401,10 @@ auto_compact_threshold_percent = 75`,
               + '而 llama-server 這類 OpenAI 相容伺服器不認得，官方文件點名 Ollama／vLLM／SGLang 都要關。'
               + `contextWindow 填每個 slot 的實際視窗（目前 ${ctx.toLocaleString()}），`
               + 'cost 全填 0，本機沒有計費但欄位要在。'
-              + '確認有沒有讀到用 pi --list-models。',
-        },
-        {
-          title: '③ 金鑰：加進 tenks 這個 provider 裡',
-          lang: 'json',
-          body: JSON.stringify({
-            apiKey: win ? '$TENKS_KEY' : `!cat ${keyPath}`,
-          }, null, 2),
-          note: win
-            ? 'Pi 的 apiKey 支援三種寫法：直接寫字面值、"$環境變數"、或 "!指令" 執行後取 stdout。'
-              + 'Windows 上 !指令 走的是同一條路，用 !powershell -NoProfile -Command "Get-Content -Raw ..." 也可以。'
-              + '另一個選擇是在 pi 裡下 /login 存起來，或啟動時帶 --api-key。'
-            : 'Pi 的 apiKey 支援三種寫法：直接寫字面值、"$環境變數"、或 "!指令" 執行後取 stdout。'
-              + `這裡用 !cat 讀 ${keyPath}，金鑰就不在設定檔裡。`
-              + 'macOS 也可以走鑰匙圈："!security find-generic-password -ws tenks"。'
-              + '另一個選擇是在 pi 裡下 /login 存起來，或啟動時帶 --api-key。',
-        },
-        {
-          title: '④ 建立金鑰檔',
-          lang: sh,
-          body: writeKeyCommand(os),
+              + '確認有沒有讀到用 pi --list-models。'
+              + 'apiKey 這裡直接寫字面值；它也吃 "$環境變數" 和 "!指令"（取 stdout），'
+              + `例如 "!cat ${keyPath}" 或 macOS 的 "!security find-generic-password -ws tenks"，`
+              + '那樣金鑰就不在這個檔案裡。也可以在 pi 裡下 /login 存起來。',
         },
       ],
     },
