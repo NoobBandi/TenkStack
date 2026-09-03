@@ -678,6 +678,13 @@ export interface ComfyHistoryItem {
 export interface ComfyConfig {
   name: string;
   cli_args: string;
+  /** Where the container publishes on loopback. The outward port is derived
+   *  from it, so this is the one that can be chosen. */
+  port: number | null;
+  public_port: number | null;
+  /** The ports the console probes. Outside this range an instance exists and
+   *  nothing here would ever find it again. */
+  ports: number[];
   devices: string[];
   cards: {
     pci_bdf_address: string | null;
@@ -691,8 +698,9 @@ export const fetchComfyConfig = (port: number) =>
   get<ComfyConfig>(`/comfyui/config?port=${port}`);
 
 export const saveComfyConfig = (
-  name: string, addresses: string[], cli_args: string,
-) => send<{ ok: boolean }>('/comfyui/config', 'POST', { name, addresses, cli_args });
+  name: string, addresses: string[], cli_args: string, port?: number,
+) => send<{ ok: boolean }>('/comfyui/config', 'POST',
+  { name, addresses, cli_args, port });
 
 export const fetchComfyInstances = () => get<ComfyInstance[]>('/comfyui/instances');
 export const fetchComfyHistory = (port: number) =>

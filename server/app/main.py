@@ -1176,9 +1176,18 @@ async def comfyui_config(port: int = COMFYUI_PORTS[0],
         if any(box["name"] == name for box in boxes):
             claimed.add(key)
 
+    upstream = None
+    for published in ((info.get("HostConfig") or {}).get("PortBindings") or {}).values():
+        for entry in published or []:
+            with contextlib.suppress(TypeError, ValueError):
+                upstream = int(entry.get("HostPort"))
+
     return {
         "name": name,
         "cli_args": env.get("CLI_ARGS", ""),
+        "port": upstream,
+        "public_port": channels.public_port(upstream) if upstream else None,
+        "ports": list(comfy.PORTS),
         "devices": sorted(devices),
         "cards": [
             {
@@ -1206,7 +1215,9 @@ async def comfyui_reconfigure(payload: dict = Body(...),
     if not chosen:
         raise HTTPException(status_code=400, detail="至少要選一張卡")
     try:
-        await comfy.reconfigure(name, chosen, cards, str(payload.get("cli_args") or ""))
+        await comfy.reconfigure(
+            name, chosen, cards, str(payload.get("cli_args") or ""),
+            int(payload["port"]) if payload.get("port") else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}

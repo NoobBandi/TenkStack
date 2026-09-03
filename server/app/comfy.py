@@ -131,7 +131,7 @@ async def create(card: dict, cards: list[dict]) -> str:
 
     args = [
         "run", "-d", "--name", name, "--restart", "unless-stopped",
-        "-p", f"127.0.0.1:{port}:8188",
+        "-p", f"127.0.0.1:{target}:8188",
         *_device_flags(card, cards),
         "-v", f"{shared / 'models'}:/root/ComfyUI/models",
         "-v", f"{shared / 'hf-hub'}:/root/.cache/huggingface/hub",
@@ -160,7 +160,7 @@ async def create(card: dict, cards: list[dict]) -> str:
 
 
 async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
-                      cli_args: str = "") -> None:
+                      cli_args: str = "", port: int | None = None) -> None:
     """Rebuild one instance with a different set of cards.
 
     A container is bound to its cards at `docker run` and to nothing afterwards,
@@ -191,24 +191,39 @@ async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
     if not image:
         raise ValueError(f"讀不到 {name} 的映像名稱")
 
-    port = None
+    current = None
     bindings = (info.get("HostConfig") or {}).get("PortBindings") or {}
     for published in bindings.values():
         for entry in published or []:
             with contextlib.suppress(TypeError, ValueError):
-                port = int(entry.get("HostPort"))
-    if port is None:
+                current = int(entry.get("HostPort"))
+    if current is None:
         raise ValueError(f"讀不到 {name} 的連接埠")
+
+    target = current if port is None else int(port)
+    if target not in PORTS:
+        # Outside this range the console would not find the instance again: the
+        # probe walks these ports and nothing else knows where to look.
+        raise ValueError(f"連接埠要在 {PORTS.start}-{PORTS.stop - 1} 之間")
+    if target != current:
+        taken = set()
+        for entry in (await containers.survey(cards))["containers"]:
+            if entry["name"] == name:
+                continue
+            for published in containers._PUBLISHED.findall(entry["ports"] or ""):
+                taken.add(int(published))
+        if target in taken:
+            raise ValueError(f"連接埠 {target} 已經被別的容器用了")
 
     slot = name[len(PREFIX) + 1:] if name.startswith(f"{PREFIX}-") else name
     root = paths.COMFY_DIR
     shared = root / "storage-models"
     user = root / "storage-user"
 
-    # Kept published: the site block points at this port and the port is coming
-    # back. Tearing it down and writing it again would restart Caddy for no
-    # change.
-    await destroy(name, delete_image=False, unpublish=False)
+    # The site block is keyed on the upstream port, so it only has to be
+    # rewritten when that moves. Tearing it down for an unchanged port would
+    # restart Caddy for nothing.
+    await destroy(name, delete_image=False, unpublish=target != current)
 
     devices: list[str] = []
     for card in chosen:
@@ -231,7 +246,13 @@ async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
     ]
     if await containers._docker(*args) is None:
         raise ValueError(f"無法重建 {name}，詳細原因在主控台的日誌裡")
-    logger.info("rebuilt %s on %d card(s), CLI_ARGS=%r", name, len(chosen), cli_args)
+    if target != current:
+        try:
+            await channels.publish_comfyui(target, note=name)
+        except Exception:
+            logger.exception("rebuilt %s on :%d but could not publish it", name, target)
+    logger.info("rebuilt %s on %d card(s), port %d, CLI_ARGS=%r",
+                name, len(chosen), target, cli_args)
 
 
 async def state(card: dict, cards: list[dict], boxes: list[dict]) -> dict:

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Checkbox, Divider, Input, Popconfirm,
-  Select, Space, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Divider, Popconfirm, Space, Tag, Tooltip,
+  Typography,
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlusOutlined,
@@ -9,10 +9,10 @@ import {
 } from '@ant-design/icons';
 import {
   checkComfyUpdates, comfyAction, fetchComfyConfig, fetchComfyInstances,
-  fetchRuntimes, interruptComfy, restartComfy, saveComfyConfig, setCardRole,
-  updateComfy,
-  type ComfyConfig, type ComfyInstance, type RuntimeCoverage,
+  fetchRuntimes, interruptComfy, restartComfy, setCardRole, updateComfy,
+  type ComfyInstance, type RuntimeCoverage,
 } from '../api';
+import ContainerSettings from './comfy-settings';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -51,40 +51,6 @@ function instanceUrl(instance: ComfyInstance): string | null {
 }
 
 /**
- * The launch arguments the console writes for itself.
- *
- * Which cards a container has is the render nodes passed to `docker run`, and
- * that is already the selection: with one node passed, the container sees one
- * XPU and needs no flag at all -- which is why CLI_ARGS has been empty here all
- * along and everything worked. Typing a device selector was asking someone to
- * restate a choice they had already made with a checkbox.
- *
- * What a checkbox cannot say is which of two passed cards ComfyUI should run
- * on. That is `--default-device`, whose own help says the others stay visible,
- * so the second card remains available to a node that wants to place something
- * on it. It is a picker here and a flag in the container.
- *
- * Anything else a person needs goes in the free field beside it, and the two
- * are joined on the way out. On the way back in the generated part is stripped
- * off again, so the field holds what its owner put there and nothing else.
- */
-const GENERATED = /--default-device\s+\S+/g;
-
-function splitArgs(cli: string): { device: number; extra: string } {
-  const found = /--default-device\s+(\d+)/.exec(cli);
-  return {
-    device: found ? Number(found[1]) : 0,
-    extra: cli.replace(GENERATED, '').replace(/\s+/g, ' ').trim(),
-  };
-}
-
-function joinArgs(device: number, extra: string, cardCount: number): string {
-  // Only when it is not the default and there is another card it could mean.
-  const generated = device > 0 && cardCount > 1 ? `--default-device ${device}` : '';
-  return [generated, extra.trim()].filter(Boolean).join(' ');
-}
-
-/**
  * One instance, and everything that is true of it.
  *
  * The order is the order an operator reads in: what it is doing, the way in,
@@ -105,12 +71,6 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const [stopping, setStopping] = useState(false);
   const [checking, setChecking] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [config, setConfig] = useState<ComfyConfig | null>(null);
-  const [chosen, setChosen] = useState<string[]>([]);
-  const [extra, setExtra] = useState('');
-  /** Which of the passed cards ComfyUI runs on, as a position among them. */
-  const [device, setDevice] = useState(0);
 
   const url = instanceUrl(instance);
   const busy = instance.queue_running > 0;
@@ -118,23 +78,13 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const manager = instance.manager;
   const updating = manager?.processing ?? false;
 
-  const loadConfig = useCallback(async () => {
-    try {
-      const found = await fetchComfyConfig(instance.port);
-      setConfig(found);
-      setChosen(found.cards.filter((c) => c.held)
-        .map((c) => c.pci_bdf_address ?? '').filter(Boolean));
-      const parts = splitArgs(found.cli_args);
-      setExtra(parts.extra);
-      setDevice(parts.device);
-    } catch {
-      // A container the console cannot inspect is not one it should offer to
-      // rebuild; the section simply does not appear.
-      setConfig(null);
-    }
+  // Only the name, which the maintenance actions address the container by.
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    fetchComfyConfig(instance.port)
+      .then((found) => setName(found.name))
+      .catch(() => setName(null));
   }, [instance.port]);
-
-  useEffect(() => { void loadConfig(); }, [loadConfig]);
 
   /** `done` is optional: an action that reports its own result says it once. */
   const run = async (
@@ -185,8 +135,8 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
 
   const onUpdateImage = () =>
     run('更新映像', setStarting, async () => {
-      if (!config) throw new Error('讀不到容器名稱');
-      await comfyAction(config.name, 'update');
+      if (!name) throw new Error('讀不到容器名稱');
+      await comfyAction(name!, 'update');
     }, '已開始下載新映像並重建');
 
   const onRestart = () =>
@@ -197,28 +147,9 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
 
   const onRemove = () =>
     run('移除', setStarting, async () => {
-      if (!config) throw new Error('讀不到容器名稱');
-      await comfyAction(config.name, 'remove');
+      if (!name) throw new Error('讀不到容器名稱');
+      await comfyAction(name!, 'remove');
     }, '已移除');
-
-  const onApply = () =>
-    run('重建', setSaving, async () => {
-      if (!config) throw new Error('讀不到容器名稱');
-      await saveComfyConfig(config.name, ordered, joinArgs(device, extra, ordered.length));
-      await loadConfig();
-    }, '容器已重建');
-
-  const held = config?.cards.filter((c) => c.held).map((c) => c.pci_bdf_address ?? '') ?? [];
-  // Card order, not tick order: the backend passes the render nodes in the
-  // order the cards come in, so `--default-device N` counts the same way.
-  const ordered = (config?.cards ?? [])
-    .map((c) => c.pci_bdf_address ?? '')
-    .filter((a) => a && chosen.includes(a));
-  const composed = joinArgs(device, extra, ordered.length);
-  const changed = config !== null && (
-    composed !== config.cli_args
-    || chosen.length !== held.length
-    || chosen.some((a) => !held.includes(a)));
 
   // Plain words, because this is the line that decides whether somebody who has
   // never met ComfyUI tries to use it right now. "queue_running 0 / pending 0"
@@ -288,103 +219,11 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
         ComfyUI 是畫圖的工具，操作都在它自己的介面裡。
       </Text>
 
-      {config && (
-        <div style={{ marginTop: 14 }}>
-          <Text style={{ fontSize: 13 }}>這個容器用哪幾張卡</Text>
-          <div style={{ marginTop: 8 }}>
-            <Checkbox.Group
-              value={chosen}
-              onChange={(v) => setChosen(v as string[])}
-              style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}
-              options={config.cards.map((card, i) => ({
-                value: card.pci_bdf_address ?? '',
-                label: (
-                  <Space size={6}>
-                    <Text style={{ fontSize: 13 }}>卡 {i}</Text>
-                    <Text type="secondary" style={{ fontSize: 11 }}>{card.name}</Text>
-                  </Space>
-                ),
-              }))}
-            />
-          </div>
-
-          {/* Not a disclaimer -- the thing worth knowing before spending twenty
-              minutes here. Shown only when a second card is actually ticked,
-              because until then it is answering a question nobody asked. */}
-          {chosen.length > 1 && (
-            <Alert
-              style={{ marginTop: 10 }}
-              type="info"
-              message={
-                <Text style={{ fontSize: 12 }}>
-                  ComfyUI 一次只會在一張卡上算圖。多給的卡要靠 MultiGPU 類的節點
-                  才用得到，那個節點還沒安裝，可以在 ComfyUI Manager 裡裝。
-                </Text>
-              }
-            />
-          )}
-
-          {/* Only when there is a second card it could mean. With one card the
-              passthrough already is the selection, and asking again would be
-              asking someone to restate a choice they just made. */}
-          {ordered.length > 1 && (
-            <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
-              <Text style={{ fontSize: 13 }}>主要在哪張卡上算</Text>
-              <Select
-                size="small"
-                value={Math.min(device, ordered.length - 1)}
-                onChange={setDevice}
-                style={{ width: 150 }}
-                options={ordered.map((address, i) => ({
-                  value: i,
-                  label: `卡 ${config.cards.findIndex((c) => c.pci_bdf_address === address)}`,
-                }))}
-              />
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                另一張仍然看得到，留給節點用
-              </Text>
-            </div>
-          )}
-
-          <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Input
-              size="small"
-              value={extra}
-              onChange={(e) => setExtra(e.target.value)}
-              placeholder="額外參數，例如 --reserve-vram 2"
-              style={{ flex: '1 1 280px', fontFamily: MONO, fontSize: 12 }}
-            />
-            <Popconfirm
-              title="重建這個容器？"
-              description="容器本身會被換掉。連接埠、輸出目錄、設定檔與登入入口都不變。"
-              okText="重建" cancelText="取消"
-              disabled={!changed || !chosen.length}
-              onConfirm={() => void onApply()}
-            >
-              <Button size="small" type="primary" loading={saving}
-                      disabled={!changed || !chosen.length}>
-                套用
-              </Button>
-            </Popconfirm>
-            {changed && (
-              <Button size="small" onClick={() => void loadConfig()}>還原</Button>
-            )}
-          </div>
-
-          {/* What will actually be handed to ComfyUI. The console writes part of
-              it, so it says which part rather than leaving someone to wonder
-              what the picker did. */}
-          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-            CLI_ARGS = {composed || '（空的，用預設）'}
-          </Text>
-        </div>
-      )}
-
       <Divider style={{ margin: '14px 0 10px' }} />
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, flex: '1 1 auto' }}>
-          {config?.name ?? 'comfyui'} ・ v{instance.version} ・ :{instance.port}
+          {name ?? 'comfyui'} ・ v{instance.version} ・ :{instance.port}
           {instance.torch ? ` ・ torch ${instance.torch}` : ''}
         </Text>
 
@@ -407,7 +246,7 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
         </Tooltip>
         <Tooltip title="下載新的 docker 映像並用它重建容器，換的是整個執行環境">
           <Button size="small" icon={<CloudDownloadOutlined />}
-                  loading={starting} disabled={updating || !config}
+                  loading={starting} disabled={updating || !name}
                   onClick={() => void onUpdateImage()}>
             更新映像
           </Button>
@@ -420,13 +259,13 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
           </Button>
         </Tooltip>
         <Popconfirm
-          title={`移除 ${config?.name ?? '這個容器'}？`}
+          title={`移除 ${name ?? '這個容器'}？`}
           description="容器會被刪掉，output 與設定檔留在磁碟上。"
           okText="移除" cancelText="取消" okButtonProps={{ danger: true }}
-          disabled={!config}
+          disabled={!name}
           onConfirm={() => void onRemove()}
         >
-          <Button size="small" danger icon={<DeleteOutlined />} disabled={!config}>
+          <Button size="small" danger icon={<DeleteOutlined />} disabled={!name}>
             移除
           </Button>
         </Popconfirm>
@@ -588,18 +427,32 @@ export default function ComfyUI() {
         />
       )}
 
+      {/* One row per instance: what it is doing on the left, what it is made
+          of on the right. The two questions do not interleave -- one is
+          answered by pressing something and watching, the other by editing a
+          form and rebuilding -- and each instance carries its own pair, so a
+          second card's settings can never be edited under the first one's
+          heading. They stack below 900px. */}
       {instances?.map((i) => (
-        <Instance
-          key={i.port}
-          instance={i}
-          staleAfterUpdate={stale.has(i.port)}
-          onChanged={() => void refresh()}
-          onRestarted={() => setStale((prev) => {
-            const next = new Set(prev);
-            next.delete(i.port);
-            return next;
-          })}
-        />
+        <div key={i.port} style={{
+          display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap',
+        }}>
+          <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+            <Instance
+              instance={i}
+              staleAfterUpdate={stale.has(i.port)}
+              onChanged={() => void refresh()}
+              onRestarted={() => setStale((prev) => {
+                const next = new Set(prev);
+                next.delete(i.port);
+                return next;
+              })}
+            />
+          </div>
+          <div style={{ flex: '1 1 380px', minWidth: 0, maxWidth: 520 }}>
+            <ContainerSettings instance={i} onDone={() => void refresh()} />
+          </div>
+        </div>
       ))}
 
       <Spare onChanged={() => void refresh()} />
