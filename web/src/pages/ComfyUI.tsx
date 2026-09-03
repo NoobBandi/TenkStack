@@ -4,12 +4,14 @@ import {
   Typography,
 } from 'antd';
 import {
-  CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlusOutlined,
-  ReloadOutlined, SearchOutlined, StopOutlined, SyncOutlined,
+  CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlayCircleOutlined,
+  PlusOutlined, PoweroffOutlined, ReloadOutlined, SearchOutlined, StopOutlined,
+  SyncOutlined,
 } from '@ant-design/icons';
 import {
-  checkComfyUpdates, comfyAction, fetchComfyConfig, fetchComfyInstances,
-  fetchRuntimes, interruptComfy, restartComfy, setCardRole, updateComfy,
+  checkComfyUpdates, comfyAction, controlContainer, fetchComfyConfig,
+  fetchComfyInstances, fetchRuntimes, interruptComfy, restartComfy, setCardRole,
+  updateComfy,
   type ComfyInstance, type RuntimeCoverage,
 } from '../api';
 import ContainerSettings from './comfy-settings';
@@ -145,6 +147,12 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
       onRestarted();
     }, '已送出重啟');
 
+  const onStop = () =>
+    run('停止', setStarting, async () => {
+      if (!name) throw new Error('讀不到容器名稱');
+      await controlContainer(name, 'stop');
+    }, '已停止');
+
   const onRemove = () =>
     run('移除', setStarting, async () => {
       if (!name) throw new Error('讀不到容器名稱');
@@ -257,6 +265,15 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
             note: '重新啟動容器裡的 ComfyUI',
             loading: starting, disabled: false, run: onRestart,
           },
+          {
+            // Stopping keeps the container, and `--restart unless-stopped`
+            // means a container stopped by hand stays stopped across a reboot.
+            // That is the difference from 移除, and the reason both exist: one
+            // parks it, the other ends it.
+            key: 'stop', label: '停止', icon: <PoweroffOutlined />,
+            note: '停掉容器但留著，之後可以再啟動；重開機也不會自己起來',
+            loading: starting, disabled: !name, run: onStop,
+          },
         ].map((action) => (
           <div key={action.key} style={{
             display: 'flex', alignItems: 'center', gap: 12,
@@ -302,12 +319,19 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
 }
 
 /**
- * Cards with no instance on them.
+ * Cards that have nothing running on them.
  *
- * Only these, and only as an offer to make one. A card already belonging to an
- * instance is edited inside that instance, which is the whole point of the
- * split: creating a container and giving a container another card are different
- * decisions, and one switch cannot mean both.
+ * Two shapes, and both have to be here or one of them becomes unreachable. A
+ * card with no container at all is an offer to make one. A card whose container
+ * exists but is stopped is an offer to start it -- and without that row a
+ * stopped instance is invisible: the instance list is built by probing ports, so
+ * a stopped container answers nothing and vanishes from the page, while this
+ * list would have skipped it for having a container. Stopping it would have been
+ * a one-way door.
+ *
+ * A card already running its instance is edited inside that instance, which is
+ * the whole point of the split: creating a container and giving a container
+ * another card are different decisions, and one switch cannot mean both.
  */
 function Spare({ onChanged }: { onChanged: () => void }) {
   const { message } = AntApp.useApp();
@@ -343,11 +367,29 @@ function Spare({ onChanged }: { onChanged: () => void }) {
     }
   };
 
-  const spare = (rows ?? []).filter((r) => !r.comfy.container);
+  const start = async (row: RuntimeCoverage) => {
+    const key = row.pci_bdf_address ?? row.comfy.slot;
+    setBusy(key);
+    try {
+      await controlContainer(row.comfy.container ?? '', 'start');
+      message.success('已啟動');
+      await load();
+      onChanged();
+    } catch (error) {
+      message.error(`啟動失敗：${(error as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const stateOf = (row: RuntimeCoverage) =>
+    row.containers.find((c) => c.name === row.comfy.container)?.state ?? '';
+  const spare = (rows ?? []).filter(
+    (r) => !r.comfy.container || stateOf(r) !== 'running');
   if (!spare.length) return null;
 
   return (
-    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>還沒有實例的卡</span>}>
+    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>沒有在跑的卡</span>}>
       <Space direction="vertical" size={10} style={{ width: '100%' }}>
         {spare.map((row) => {
           const key = row.pci_bdf_address ?? row.comfy.slot;
@@ -362,9 +404,11 @@ function Spare({ onChanged }: { onChanged: () => void }) {
                 <Text style={{ fontSize: 13 }}>{row.name ?? '不明的卡'}</Text>
                 <div>
                   <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-                    {template
-                      ? `會叫 comfyui-${row.comfy.slot}${row.comfy.image_size ? ` ・ 映像 ${row.comfy.image_size}` : ''}`
-                      : '沒有這家廠商的 ComfyUI 映像範本'}
+                    {row.comfy.container
+                      ? `${row.comfy.container} ・ 已停止`
+                      : template
+                        ? `會叫 comfyui-${row.comfy.slot}${row.comfy.image_size ? ` ・ 映像 ${row.comfy.image_size}` : ''}`
+                        : '沒有這家廠商的 ComfyUI 映像範本'}
                   </Text>
                 </div>
               </div>
@@ -377,6 +421,11 @@ function Spare({ onChanged }: { onChanged: () => void }) {
                       ? `下載中 ${job.layers_done}/${job.layers_total}` : '啟動中'}
                   </Text>
                 </Space>
+              ) : row.comfy.container ? (
+                <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />}
+                        loading={busy === key} onClick={() => void start(row)}>
+                  啟動
+                </Button>
               ) : (
                 <Popconfirm
                   title={`在這張卡上建立 comfyui-${row.comfy.slot}？`}
