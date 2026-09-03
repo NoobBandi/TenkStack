@@ -524,12 +524,34 @@ export default function Files() {
 
       <Card size="small" styles={{ body: { padding: 12 } }}>
         <Space size={16} wrap style={{ width: '100%' }}>
-          <Segmented
-            size="small"
-            value={root}
-            onChange={(v) => { setRoot(v as string); setPath(''); }}
-            options={roots.map((r) => ({ label: r.label, value: r.key }))}
-          />
+          {/* Two strips, not one row of six. ComfyUI's trees are why this page
+              exists and there are several of them; the machine's own
+              directories are a different kind of place, and in one row they all
+              read as an undifferentiated list -- three of them starting with the
+              same word. Only the strip holding the selection shows one:
+              Segmented renders nothing as chosen when its value is not among
+              its options. */}
+          <Space direction="vertical" size={6}>
+            {([['comfy', 'ComfyUI'], ['other', '其他']] as const).map(([g, label]) => {
+              const mine = roots.filter((r) => r.group === g);
+              if (!mine.length) return null;
+              return (
+                <Space key={g} size={8}>
+                  <Text type="secondary" style={{
+                    fontSize: 11, width: 48, display: 'inline-block',
+                  }}>
+                    {label}
+                  </Text>
+                  <Segmented
+                    size="small"
+                    value={mine.some((r) => r.key === root) ? root : ''}
+                    onChange={(v) => { setRoot(v as string); setPath(''); }}
+                    options={mine.map((r) => ({ label: r.label, value: r.key }))}
+                  />
+                </Space>
+              );
+            })}
+          </Space>
           <Text type="secondary" style={{ fontSize: 11 }}>{activeRoot?.note}</Text>
           <Space size={6} style={{ marginLeft: 'auto' }}>
             <Text type="secondary" style={{ fontSize: 11 }}>隱藏檔</Text>

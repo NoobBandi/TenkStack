@@ -176,31 +176,53 @@ class Root:
     path: Path
     note: str
     readonly: bool = False
+    # Which strip of the picker this belongs on. ComfyUI's trees are why this
+    # module exists and there are several of them; the machine's own
+    # directories are a different kind of place and were sitting in the same
+    # row, so six buttons read as one undifferentiated list.
+    group: str = "other"
 
 
 def _comfy_roots() -> list[Root]:
-    """The three ComfyUI trees, which are why this module exists.
+    """The ComfyUI trees, which are why this module exists.
 
     Outputs are the one tree that is not shared: ComfyUI picks the next filename
     by scanning the directory for the highest counter, so two instances sharing
-    one would collide by construction. run-comfyui.sh gives each its own
-    `output-<name>`, and the names it used are the only record of what exists --
-    so they are found rather than configured.
+    one would collide by construction. Each instance gets its own
+    `output-<slot>`, and the directories are the only record of which have
+    existed -- so they are found rather than configured, and one whose instance
+    has since been removed is still here with everything it made.
+
+    Ordered by when each was last written, newest first. The list is otherwise
+    alphabetical, which puts a folder nobody has touched since August in front
+    of the one being written to right now, and the picker gives no other clue
+    which is which.
     """
     roots = [
         Root("models", "模型", COMFY_DIR / "storage-models/models",
-             "checkpoints、loras、vae 等等。所有 ComfyUI 實例共用這一份。"),
+             "checkpoints、loras、vae 等等。所有 ComfyUI 實例共用這一份。",
+             group="comfy"),
         Root("input", "輸入", COMFY_DIR / "storage-user/input",
-             "工作流讀得到的圖片與素材，所有實例共用。"),
+             "工作流讀得到的圖片與素材，所有實例共用。", group="comfy"),
     ]
-    found = sorted(p for p in (COMFY_DIR / "storage-user").glob("output-*") if p.is_dir())
+
+    def written(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    found = sorted(
+        (p for p in (COMFY_DIR / "storage-user").glob("output-*") if p.is_dir()),
+        key=written, reverse=True)
     for path in found:
-        name = path.name[len("output-"):]
+        slot = path.name[len("output-"):]
         roots.append(Root(
-            f"output-{name}",
-            f"輸出（{name}）" if len(found) > 1 else "輸出",
+            f"output-{slot}",
+            f"輸出 {slot}" if len(found) > 1 else "輸出",
             path,
-            "ComfyUI 寫出來的成品。每個實例一份，不共用。",
+            f"comfyui-{slot} 寫出來的成品。每個實例一份，不共用。",
+            group="comfy",
         ))
     return roots
 
@@ -409,6 +431,7 @@ def roots() -> list[dict]:
             "path": str(root.path),
             "exists": exists,
             "writable": exists and _can_write(root, root.path),
+            "group": root.group,
         })
     return out
 

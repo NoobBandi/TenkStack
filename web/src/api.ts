@@ -1372,6 +1372,9 @@ export interface FsRoot {
   note: string;
   path: string;
   exists: boolean;
+  /** Which strip of the picker this belongs on: ComfyUI's trees, or the
+   *  machine's own directories. Six buttons in one row read as one list. */
+  group: 'comfy' | 'other';
   /** Not assumed: ComfyUI's directories are created by a container running as
    *  root while the console is not, and a root may be declared read-only. An
    *  interface that offers an upload button over a directory it cannot write
