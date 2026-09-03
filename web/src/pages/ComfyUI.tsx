@@ -1,19 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  Alert, App as AntApp, Button, Card, Dropdown, Empty, Image, Popconfirm, Space,
-  Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Dropdown, Popconfirm, Space, Switch, Tag,
+  Tooltip, Typography,
 } from 'antd';
 import {
-  CloudDownloadOutlined, DownOutlined, ExportOutlined, FolderOpenOutlined,
-  PoweroffOutlined, ReloadOutlined, SearchOutlined, StopOutlined,
+  CloudDownloadOutlined, DeleteOutlined, DownOutlined, ExportOutlined,
+  ReloadOutlined, SearchOutlined, StopOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import {
-  checkComfyUpdates, comfyImageUrl, fetchComfyHistory, fetchComfyInstances,
-  interruptComfy, restartComfy, unloadAll, updateComfy,
-  type ComfyHistoryItem, type ComfyInstance,
+  checkComfyUpdates, comfyAction, fetchComfyInstances, fetchRuntimes,
+  interruptComfy, restartComfy, setCardRole, updateComfy,
+  type ComfyInstance, type RuntimeCoverage,
 } from '../api';
-import { useStream } from '../stream';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -270,128 +268,134 @@ function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
 }
 
 /**
- * Whose memory ComfyUI is competing for.
+ * Which cards run ComfyUI, and the switch that changes it.
  *
- * The one thing this console can say that ComfyUI cannot. Both live on the same
- * two cards, an LLM holds twenty-four gigabytes of each for as long as it stays
- * loaded, and nothing unloads it on a timer -- every model here is set to ttl 0.
- * So the first generation of the evening fails with a CUDA-shaped error message
- * inside somebody else's interface, and there is no way to tell from there that
- * the cause is a chat model somebody stopped using an hour ago.
+ * This lived on the runtime page, one column in a table about GPUs in general.
+ * That is where it belongs when the question is "what is this machine made of",
+ * and the wrong place entirely when the question is "why is there only one
+ * ComfyUI". A card is fixed at container start -- the device is a launch flag --
+ * so the number of instances is the number of cards switched on here, and
+ * nothing else sets it.
  *
- * Said here instead, before it happens, with the button that fixes it.
+ * Turning one on pulls an image of sixteen to twenty gigabytes and that runs in
+ * the background, so the row reports the pull rather than pretending the click
+ * finished the job.
  */
-function Vram({ instance }: { instance: ComfyInstance | null }) {
+function Cards({ onChanged }: { onChanged: () => void }) {
   const { message } = AntApp.useApp();
-  const { gpus, models } = useStream();
-  const [freeing, setFreeing] = useState(false);
+  const [rows, setRows] = useState<RuntimeCoverage[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  // "xpu:0 Intel(R) Arc(TM) Pro B70" -> 0. ComfyUI is bound to one card at
-  // launch, so only that card's headroom decides anything.
-  const mine = Number(/^xpu:(\d+)/.exec(instance?.device?.name ?? '')?.[1] ?? NaN);
-  const card = gpus.find((g) => g.index === mine) ?? gpus[0];
-  const loaded = models.filter((m) => m.running);
-  // A slot with tokens in it is a conversation somebody can come back to; a busy
-  // one is a request being answered right now.
-  const working = loaded.some((m) => m.slots?.some((s) => s.busy));
-  const holding = loaded.some((m) => m.slots?.some((s) => s.used > 0));
-
-  const free = card?.memory_total_mib && card?.memory_used_mib !== null
-    ? (card.memory_total_mib - (card.memory_used_mib ?? 0)) / 1024 : null;
-
-  const onFree = async () => {
-    setFreeing(true);
+  const load = useCallback(async () => {
     try {
-      await unloadAll();
-      message.success('已卸載，顯存騰出來了');
+      setRows(await fetchRuntimes());
+    } catch {
+      setRows((prev) => prev ?? []);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    // Only while something is being pulled does this need to move; a card that
+    // is not changing state answers the same thing every time.
+    const timer = window.setInterval(() => void load(), 4000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  const toggle = async (row: RuntimeCoverage, on: boolean) => {
+    const key = row.pci_bdf_address ?? row.comfy.slot;
+    setBusy(key);
+    try {
+      await setCardRole(row.pci_bdf_address ?? '', 'images', on);
+      message.success(on ? '開始建立，映像要下載一陣子' : '已移除');
+      await load();
+      onChanged();
     } catch (error) {
-      message.error(`卸載失敗：${(error as Error).message}`);
+      message.error(`${on ? '建立' : '移除'}失敗：${(error as Error).message}`);
     } finally {
-      setFreeing(false);
+      setBusy(null);
     }
   };
 
-  if (!gpus.length) return null;
+  const rebuild = async (row: RuntimeCoverage) => {
+    if (!row.comfy.container) return;
+    const key = row.pci_bdf_address ?? row.comfy.slot;
+    setBusy(key);
+    try {
+      await comfyAction(row.comfy.container, 'update');
+      message.success('開始更新映像並重建容器');
+      await load();
+    } catch (error) {
+      message.error(`更新失敗：${(error as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!rows) return null;
 
   return (
-    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>顯示卡記憶體</span>}>
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
-        {gpus.map((gpu) => {
-          const total = (gpu.memory_total_mib ?? 0) / 1024;
-          const used = (gpu.memory_used_mib ?? 0) / 1024;
-          const percent = total ? Math.min(100, (used / total) * 100) : 0;
-          const isMine = gpu.index === card?.index;
+    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>顯示卡</span>}>
+      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        {rows.map((row) => {
+          const key = row.pci_bdf_address ?? row.comfy.slot;
+          const job = row.comfy.job;
+          const running = !!row.comfy.container;
+          const template = row.comfy.template;
           return (
-            <div key={gpu.index} style={{
-              display: 'flex', alignItems: 'center', gap: 12,
+            <div key={key} style={{
+              display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
             }}>
-              <Text style={{
-                fontSize: 12, fontFamily: MONO, width: 74, flex: 'none',
-                opacity: isMine ? 1 : 0.5,
-              }}>
-                卡 {gpu.index}{isMine ? ' ・這張' : ''}
-              </Text>
-              <div style={{
-                flex: 1, height: 6, borderRadius: 3, overflow: 'hidden',
-                background: 'rgba(255,255,255,0.07)',
-              }}>
-                <div style={{
-                  height: '100%', width: `${percent}%`, borderRadius: 3,
-                  transition: 'width 300ms',
-                  background: percent > 85 ? ACCENT.warn : 'rgba(255,255,255,0.6)',
-                  opacity: isMine ? 1 : 0.4,
-                }} />
+              <Switch
+                size="small"
+                checked={running}
+                loading={busy === key || (!!job && job.state !== 'done' && job.state !== 'error')}
+                disabled={!template && !running}
+                onChange={(on) => void toggle(row, on)}
+              />
+              <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+                <Text style={{ fontSize: 13 }}>{row.name ?? '不明的卡'}</Text>
+                <div>
+                  <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+                    {row.comfy.container ?? (template ? `未建立・會叫 comfyui-${row.comfy.slot}` : '沒有這家廠商的映像範本')}
+                    {row.comfy.image_size ? ` ・ ${row.comfy.image_size}` : ''}
+                  </Text>
+                </div>
               </div>
-              <Text style={{
-                fontSize: 12, fontFamily: MONO, width: 132, flex: 'none',
-                textAlign: 'right', fontVariantNumeric: 'tabular-nums',
-                opacity: isMine ? 1 : 0.5,
-              }}>
-                剩 {(total - used).toFixed(1)} / {total.toFixed(1)} GB
-              </Text>
+
+              {job && job.state !== 'done' && (
+                <Space size={6}>
+                  <SyncOutlined spin={job.state !== 'error'}
+                                style={{ fontSize: 12, opacity: 0.7 }} />
+                  <Text style={{ fontSize: 12, fontFamily: MONO }}>
+                    {job.state === 'pulling'
+                      ? `下載中 ${job.layers_done}/${job.layers_total}`
+                      : job.state === 'error' ? '失敗' : '啟動中'}
+                  </Text>
+                </Space>
+              )}
+
+              {running && (
+                <Space size={6}>
+                  <Tooltip title="拉新的映像並用它重建這個容器。輸出與設定檔都在容器外，不會跟著消失。">
+                    <Button size="small" icon={<CloudDownloadOutlined />}
+                            loading={busy === key} onClick={() => void rebuild(row)}>
+                      更新映像
+                    </Button>
+                  </Tooltip>
+                  <Popconfirm
+                    title={`移除 comfyui-${row.comfy.slot}？`}
+                    description="容器會被刪掉，output 與設定檔留在磁碟上。"
+                    okText="移除" cancelText="取消" okButtonProps={{ danger: true }}
+                    onConfirm={() => void toggle(row, false)}
+                  >
+                    <Button size="small" danger icon={<DeleteOutlined />}>移除</Button>
+                  </Popconfirm>
+                </Space>
+              )}
             </div>
           );
         })}
-
-        {loaded.length > 0 && (
-          <Alert
-            type={free !== null && free < 8 ? 'warning' : 'info'}
-            showIcon
-            message={
-              <Text style={{ fontSize: 13 }}>
-                {loaded.map((m) => m.name ?? m.id).join('、')} 正載入中，佔用顯存
-              </Text>
-            }
-            description={
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {free !== null && free < 8
-                    ? `這張卡只剩 ${free.toFixed(1)} GB，畫圖可能會失敗。`
-                    : '目前還有空間，但大張的圖仍可能不夠用。'}
-                  {working
-                    ? '不過現在有請求正在跑，卸載會中斷對方。'
-                    : holding
-                      ? '目前沒有請求在跑，但對話快取還在，卸載後下次要重新讀入。'
-                      : ''}
-                </Text>
-                <Popconfirm
-                  title="卸載目前載入的模型？"
-                  description={working
-                    ? '現在有請求正在執行，卸載會直接中斷它。'
-                    : '下一次聊天會重新載入，約需要一分鐘。'}
-                  okText="卸載" cancelText="取消"
-                  okButtonProps={{ danger: working }}
-                  onConfirm={() => void onFree()}
-                >
-                  <Button size="small" color="orange" variant="filled"
-                          icon={<PoweroffOutlined />} loading={freeing}>
-                    卸載模型，騰出顯存
-                  </Button>
-                </Popconfirm>
-              </Space>
-            }
-          />
-        )}
       </Space>
     </Card>
   );
@@ -400,7 +404,6 @@ function Vram({ instance }: { instance: ComfyInstance | null }) {
 export default function ComfyUI() {
   const { message } = AntApp.useApp();
   const [instances, setInstances] = useState<ComfyInstance[] | null>(null);
-  const [history, setHistory] = useState<{ port: number; item: ComfyHistoryItem }[]>([]);
   const [updatingAll, setUpdatingAll] = useState(false);
   /** Ports whose update queue was running and then stopped. Derived from the
    *  poll rather than from the click, so it survives a page reload and catches
@@ -431,17 +434,6 @@ export default function ComfyUI() {
       const kept = [...prev].filter((p) => found.some((i) => i.port === p));
       return kept.length === prev.size ? prev : new Set(kept);
     });
-
-    // Fetched per instance and tagged, because a wall of thumbnails from an
-    // unnamed source stops being an answer as soon as there is more than one.
-    const perInstance = await Promise.all(
-      found.map((i) =>
-        fetchComfyHistory(i.port)
-          .then((items) => items.map((item) => ({ port: i.port, item })))
-          .catch(() => []),
-      ),
-    );
-    setHistory(perInstance.flat());
   }, []);
 
   useEffect(() => {
@@ -501,6 +493,8 @@ export default function ComfyUI() {
         />
       )}
 
+      <Cards onChanged={() => void refresh()} />
+
       {instances?.map((i) => (
         <Instance
           key={i.port}
@@ -515,60 +509,6 @@ export default function ComfyUI() {
         />
       ))}
 
-      {/* Where the memory is going, under the instance it decides the fate of.
-          Above the gallery, because it is the thing that stops the gallery
-          getting any new entries. */}
-      <Vram instance={instances?.[0] ?? null} />
-
-      <Card
-        title={<span style={{ fontSize: 12, opacity: 0.75 }}>最近的產出</span>}
-        size="small"
-        extra={
-          <Space size={8}>
-            {/* The one place someone standing here is likely to want next: the
-                gallery says what came out, this says what can go in. */}
-            <Link to="/files">
-              <Button size="small" icon={<FolderOpenOutlined />}>檔案</Button>
-            </Link>
-            <Button size="small" onClick={() => void refresh()}>重新整理</Button>
-          </Space>
-        }
-      >
-        {history.length === 0 ? (
-          <Empty
-            description={
-              instances?.length
-                // Not a failure worth an error state: ComfyUI keeps its history
-                // in memory, so a restarted container starts empty even though
-                // every image it has ever made is still in the output folder.
-                ? '這次啟動後尚無產出（ComfyUI 的歷史不跨重啟，圖檔仍在 output 目錄）'
-                : '尚無紀錄'
-            }
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-          />
-        ) : (
-          <Image.PreviewGroup>
-            <Space wrap size={12}>
-              {history.flatMap(({ port, item }) =>
-                item.images.map((img) => (
-                  <div key={`${port}-${item.prompt_id}-${img.filename}`} style={{ width: 160 }}>
-                    <Image
-                      src={comfyImageUrl(port, img)}
-                      width={160}
-                      height={160}
-                      style={{ objectFit: 'cover', borderRadius: 6 }}
-                    />
-                    <Text type="secondary" style={{ fontSize: 11, wordBreak: 'break-all' }}>
-                      {many && <span style={{ fontFamily: MONO }}>:{port} </span>}
-                      {img.filename}
-                    </Text>
-                  </div>
-                )),
-              )}
-            </Space>
-          </Image.PreviewGroup>
-        )}
-      </Card>
     </Space>
   );
 }
