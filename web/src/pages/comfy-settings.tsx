@@ -201,9 +201,9 @@ export default function ContainerSettings({ instance, onDone }: {
               type="info"
               message={
                 <Text style={{ fontSize: 12 }}>
-                  ComfyUI 一次只會在主要那張卡上算圖。另一張仍然看得到，
-                  但要靠 MultiGPU 類的節點才用得到，那個節點還沒安裝，
-                  可以在 ComfyUI Manager 裡裝。
+                  ComfyUI 一次只會在主要那張卡上算圖。另一張要靠 MultiGPU 節點
+                  才用得到，重建時會自動裝進容器裡；之後在工作流程裡用它的
+                  Loader 節點指定哪個部分放哪張卡。
                 </Text>
               }
             />

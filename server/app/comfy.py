@@ -159,6 +159,43 @@ async def create(card: dict, cards: list[dict]) -> str:
     return name
 
 
+# The node that makes a second card mean anything.
+#
+# ComfyUI runs its graph on one device. Handing a container two cards changes
+# nothing on its own; what uses the second one is a node that places components
+# by device, and this is that node. Upstream handles Intel directly -- its
+# device_utils enumerates `xpu:N` through torch.xpu and clears its cache the same
+# way -- so the fork that used to exist for XPU is not needed. It also ships no
+# requirements.txt, which is why installing it is a clone and nothing else.
+MULTIGPU_REPO = "https://github.com/pollockjj/ComfyUI-MultiGPU"
+MULTIGPU_DIR = "ComfyUI-MultiGPU"
+
+
+async def ensure_multigpu(name: str) -> bool:
+    """Put the MultiGPU node in this instance, if it is not already there.
+
+    Done through the container rather than on the host: `custom_nodes` is
+    created by the container and owned by root, and the console does not run as
+    root. Done before the rebuild rather than after, so the new container starts
+    with the node instead of needing a second restart to notice it.
+
+    A failure here is reported and not raised. The rebuild the caller asked for
+    is still valid without it -- one card fewer in use is not a broken
+    container -- and refusing to change the cards because GitHub was unreachable
+    would be the wrong trade.
+    """
+    target = f"/root/ComfyUI/custom_nodes/{MULTIGPU_DIR}"
+    if await containers._docker("exec", name, "test", "-d", target) is not None:
+        return True
+    logger.info("installing %s into %s", MULTIGPU_DIR, name)
+    done = await containers._docker(
+        "exec", name, "git", "clone", "--depth", "1", MULTIGPU_REPO, target)
+    if done is None:
+        logger.warning("could not install %s into %s", MULTIGPU_DIR, name)
+        return False
+    return True
+
+
 async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
                       cli_args: str = "", port: int | None = None) -> None:
     """Rebuild one instance with a different set of cards.
@@ -219,6 +256,11 @@ async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
     root = paths.COMFY_DIR
     shared = root / "storage-models"
     user = root / "storage-user"
+
+    # Before the teardown, while there is still a container to run it in. A
+    # second card is only worth having with the node that can address it.
+    if len(chosen) > 1:
+        await ensure_multigpu(name)
 
     # The site block is keyed on the upstream port, so it only has to be
     # rewritten when that moves. Tearing it down for an unchanged port would
