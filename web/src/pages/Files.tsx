@@ -583,16 +583,6 @@ export default function Files() {
               {activeRoot.note}
             </Text>
           )}
-            <div style={{ marginTop: 12 }}>
-              <PathBar
-                rootPath={activeRoot?.path ?? ''}
-                path={path}
-                onSegment={setPath}
-                onSubmit={(text) => void jump(text)}
-                editing={editingPath}
-                onEditing={setEditingPath}
-              />
-            </div>
           </div>
         }
         extra={
@@ -760,6 +750,21 @@ export default function Files() {
             )}
             <Splitter.Panel min={280}>
               <div>
+              {/* Above the table rather than in the card's header, so it lines
+                  up with 名稱 and stays lined up: the tree beside it is a
+                  resizable panel, and a header padded to today's width would
+                  come apart the first time somebody dragged it. The path
+                  describes what is in this column anyway. */}
+              <div style={{ padding: '2px 8px 10px' }}>
+                <PathBar
+                  rootPath={activeRoot?.path ?? ''}
+                  path={path}
+                  onSegment={setPath}
+                  onSubmit={(text) => void jump(text)}
+                  editing={editingPath}
+                  onEditing={setEditingPath}
+                />
+              </div>
               {gridding ? (
                 <Grid entries={entries} root={root} path={path} onOpen={open} />
               ) : (
