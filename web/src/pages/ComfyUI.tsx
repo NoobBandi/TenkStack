@@ -219,45 +219,68 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
         ComfyUI 是畫圖的工具，操作都在它自己的介面裡。
       </Text>
 
-      <Divider style={{ margin: '14px 0 10px' }} />
-
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, flex: '1 1 auto' }}>
+      <div style={{ marginTop: 10 }}>
+        <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
           {name ?? 'comfyui'} ・ v{instance.version} ・ :{instance.port}
           {instance.torch ? ` ・ torch ${instance.torch}` : ''}
         </Text>
+      </div>
 
-        {/* Every one of these stops the instance for minutes, so they are named
-            for what they change rather than all called 更新. Two of them used to
-            share that word in different places on the page. */}
-        <Tooltip title="問每個已安裝節點有沒有新版，要連四十次 GitHub">
-          <Button size="small" icon={<SearchOutlined />}
-                  loading={checking} disabled={updating}
-                  onClick={() => void onCheck()}>
-            檢查更新
-          </Button>
-        </Tooltip>
-        <Tooltip title="更新容器裡的 ComfyUI 本體與自訂節點，之後要重啟才生效">
-          <Button size="small" icon={<CloudDownloadOutlined />}
-                  loading={starting || updating} disabled={updating}
-                  onClick={() => void onUpdateNodes()}>
-            更新節點
-          </Button>
-        </Tooltip>
-        <Tooltip title="下載新的 docker 映像並用它重建容器，換的是整個執行環境">
-          <Button size="small" icon={<CloudDownloadOutlined />}
-                  loading={starting} disabled={updating || !name}
-                  onClick={() => void onUpdateImage()}>
-            更新映像
-          </Button>
-        </Tooltip>
-        <Tooltip title="重新啟動容器裡的 ComfyUI">
-          <Button size="small" icon={<ReloadOutlined />}
-                  loading={starting} danger={busy}
-                  onClick={() => void onRestart()}>
-            重啟
-          </Button>
-        </Tooltip>
+      <Divider style={{ margin: '14px 0 12px' }} />
+
+      {/* A list, not a row of five equal buttons.
+          Every one of these stops the instance for minutes, and as a row they
+          were indistinguishable: 檢查更新 sat at the same weight as 移除, and
+          the only thing separating "update the nodes" from "replace the whole
+          runtime" was a tooltip nobody hovers. The sentence beside each is what
+          that tooltip used to hide. */}
+      <Text type="secondary" style={{ fontSize: 11, letterSpacing: 1 }}>維護</Text>
+      <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
+        {[
+          {
+            key: 'check', label: '檢查更新', icon: <SearchOutlined />,
+            note: '問每個已安裝節點有沒有新版，要連四十次 GitHub',
+            loading: checking, disabled: updating, run: onCheck,
+          },
+          {
+            key: 'nodes', label: '更新節點', icon: <CloudDownloadOutlined />,
+            note: '更新容器裡的 ComfyUI 與自訂節點，之後要重啟才生效',
+            loading: starting || updating, disabled: updating, run: onUpdateNodes,
+          },
+          {
+            key: 'image', label: '更新映像', icon: <CloudDownloadOutlined />,
+            note: '下載新的 docker 映像重建容器，換掉整個執行環境',
+            loading: starting, disabled: updating || !name, run: onUpdateImage,
+          },
+          {
+            key: 'restart', label: '重啟', icon: <ReloadOutlined />,
+            note: '重新啟動容器裡的 ComfyUI',
+            loading: starting, disabled: false, run: onRestart,
+          },
+        ].map((action) => (
+          <div key={action.key} style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+          }}>
+            <Button
+              size="small" icon={action.icon}
+              loading={action.loading} disabled={action.disabled}
+              danger={action.key === 'restart' && busy}
+              style={{ width: 104, flex: 'none' }}
+              onClick={() => void action.run()}
+            >
+              {action.label}
+            </Button>
+            <Text type="secondary" style={{ fontSize: 11, minWidth: 0 }}>
+              {action.note}
+            </Text>
+          </div>
+        ))}
+      </Space>
+
+      <Divider style={{ margin: '14px 0 12px' }} />
+
+      {/* Apart, because it is the one that does not come back. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <Popconfirm
           title={`移除 ${name ?? '這個容器'}？`}
           description="容器會被刪掉，output 與設定檔留在磁碟上。"
@@ -265,10 +288,14 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
           disabled={!name}
           onConfirm={() => void onRemove()}
         >
-          <Button size="small" danger icon={<DeleteOutlined />} disabled={!name}>
+          <Button size="small" danger icon={<DeleteOutlined />} disabled={!name}
+                  style={{ width: 104, flex: 'none' }}>
             移除
           </Button>
         </Popconfirm>
+        <Text type="secondary" style={{ fontSize: 11, minWidth: 0 }}>
+          刪掉容器本身。output、工作流程與設定都在磁碟上，不會跟著走
+        </Text>
       </div>
     </Card>
   );
@@ -427,18 +454,16 @@ export default function ComfyUI() {
         />
       )}
 
-      {/* One row per instance: what it is doing on the left, what it is made
-          of on the right. The two questions do not interleave -- one is
-          answered by pressing something and watching, the other by editing a
-          form and rebuilding -- and each instance carries its own pair, so a
-          second card's settings can never be edited under the first one's
-          heading. They stack below 900px. */}
-      {instances?.map((i) => (
-        <div key={i.port} style={{
-          display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap',
-        }}>
-          <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+      {/* Two columns: what the instances are doing on the left, what they are
+          made of on the right. Cards with no instance yet sit under the left
+          side, because creating one is an operation and belongs with the other
+          operations -- not beside a settings form for a container that does not
+          exist. */}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Space direction="vertical" size={16} style={{ flex: '1 1 440px', minWidth: 0 }}>
+          {instances?.map((i) => (
             <Instance
+              key={i.port}
               instance={i}
               staleAfterUpdate={stale.has(i.port)}
               onChanged={() => void refresh()}
@@ -448,14 +473,17 @@ export default function ComfyUI() {
                 return next;
               })}
             />
-          </div>
-          <div style={{ flex: '1 1 380px', minWidth: 0, maxWidth: 520 }}>
-            <ContainerSettings instance={i} onDone={() => void refresh()} />
-          </div>
-        </div>
-      ))}
+          ))}
+          <Spare onChanged={() => void refresh()} />
+        </Space>
 
-      <Spare onChanged={() => void refresh()} />
+        <Space direction="vertical" size={16}
+               style={{ flex: '1 1 380px', minWidth: 0, maxWidth: 520 }}>
+          {instances?.map((i) => (
+            <ContainerSettings key={i.port} instance={i} onDone={() => void refresh()} />
+          ))}
+        </Space>
+      </div>
     </Space>
   );
 }
