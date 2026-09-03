@@ -82,7 +82,7 @@ export default function PathBar({
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'center', gap: 2, width: '100%',
+        display: 'flex', alignItems: 'center', gap: 2,
         fontFamily: MONO, fontSize: 12, minWidth: 0,
       }}
     >
@@ -121,7 +121,14 @@ export default function PathBar({
         const last = i === segments.length - 1;
         const relative = segments.slice(0, i + 1).join('/');
         return (
-          <span key={relative} style={{ display: 'flex', minWidth: 0 }}>
+          // baseline, not the container's default stretch: the last segment is
+          // a Text with `ellipsis`, which lays out as a block, so stretched
+          // beside a plain `/` the two sat at different heights and their glyphs
+          // stopped sharing a line. The dropdown's span already said center;
+          // this one never did.
+          <span key={relative} style={{
+            display: 'flex', alignItems: 'baseline', minWidth: 0,
+          }}>
             <Text style={{ opacity: 0.3 }}>/</Text>
             {last ? (
               <Text style={{ fontFamily: MONO, fontSize: 12 }} ellipsis>{segment}</Text>
@@ -133,19 +140,10 @@ export default function PathBar({
           </span>
         );
       })}
-      {/* At the end of the bar, not at the end of the path.
-          Right after the last segment it moved every time you changed
-          directory, and a control whose position is decided by how long the
-          current path happens to be is one you have to look for before every
-          use. Here it is in the same place always, and lines up with the right
-          edge of the column below. */}
       <Tooltip title="編輯路徑（Ctrl+L）">
         <EditOutlined
           onClick={() => onEditing(true)}
-          style={{
-            fontSize: 11, opacity: 0.35, cursor: 'pointer',
-            marginLeft: 'auto', paddingLeft: 12, flex: 'none',
-          }}
+          style={{ fontSize: 11, opacity: 0.35, marginLeft: 8, cursor: 'pointer' }}
         />
       </Tooltip>
     </div>
