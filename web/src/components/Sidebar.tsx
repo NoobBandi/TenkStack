@@ -216,22 +216,9 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
               />
             );
           })}
-          <div style={{
-            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-          }}>
-            <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
-              {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
-            </Text>
-            {/* The console reported which version of everything else was
-                installed and never its own, so the one build you are actually
-                looking at was the one you could not name. Beside the model
-                count because both answer "what am I running". */}
-            {version && (
-              <Text style={{ fontSize: 10, opacity: 0.3, fontFamily: MONO }}>
-                v{version}
-              </Text>
-            )}
-          </div>
+          <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
+            {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
+          </Text>
         </div>
       )}
 
@@ -249,7 +236,11 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
           <Text style={{
             fontSize: 10, opacity: 0.3, fontFamily: MONO, letterSpacing: 0.6,
           }}>
-            {__VERSION__}
+            {/* From the API, not from a build-time copy of package.json.
+                That copy was the version's third home and it broke the moment
+                the copy was deleted: `v${undefined}` is the literal string
+                vundefined, printed here in place of a number. */}
+            {version ? `v${version}` : ''}
           </Text>
         </div>
       </Tooltip>

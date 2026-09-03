@@ -1,15 +1,17 @@
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-/** The console's own version. package.json is the one place it lives. */
-const version = JSON.parse(readFileSync('./package.json', 'utf8')).version as string;
 
 /**
  * Which commit this build came from.
  *
- * Kept alongside the version rather than instead of it: the version says what
+ * The one build-time fact worth carrying: the version comes from the backend at
+ * runtime, but which commit produced this bundle is knowable only here.
+ * Previously kept alongside a version read out of package.json, which was that
+ * number's third home -- and when the copy went, `v${undefined}` printed the
+ * literal string vundefined where a version belonged.
+ *
  * release this is, the commit says which build of it is actually serving you,
  * and only the second can answer "did my deploy land". It is shown on hover, so
  * the visible line stays a version number. `--dirty` is included, so a build
@@ -28,7 +30,6 @@ function buildStamp(): string {
 
 export default defineConfig({
   define: {
-    __VERSION__: JSON.stringify(`v${version}`),
     __BUILD__: JSON.stringify(buildStamp()),
   },
   plugins: [react()],
