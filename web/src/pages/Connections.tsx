@@ -165,192 +165,188 @@ export default function Connections() {
   };
 
   return (
-    // Two columns: the addresses on the left, what to do with them on the
-    // right. They are read together -- the snippet is the address in a form a
-    // tool can take -- and stacked, checking a host meant scrolling past every
-    // endpoint to see it land in the config. They stack again below 1100px,
-    // where the code boxes would be too narrow to read a line of TOML in.
-    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-      <Space direction="vertical" size={16} style={{ flex: '1 1 460px', minWidth: 0 }}>
-        <Card
-          title="連線"
-          size="small"
-          loading={state === null}
-          extra={network && network.hosts.length > 1 && (
-            <Space size={8}>
-              <Text type="secondary" style={{ fontSize: 12 }}>從哪裡連</Text>
-              <Segmented
-                size="small"
-                value={hostKey}
-                onChange={(v) => setHostKey(v as string)}
-                options={network.hosts.map((h) => ({ label: h.label, value: h.key }))}
-              />
-            </Space>
-          )}
-        >
-          {host && (
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
-              {host.host} ・ {host.note}
-            </Text>
-          )}
-
-          {host?.tailscale && (
-            <Alert
-              type={host.cert_available ? 'success' : 'info'}
-              showIcon
-              icon={<SafetyCertificateOutlined />}
-              style={{ marginBottom: 12 }}
-              message={host.cert_available
-                ? 'Tailscale 網域可取得公開信任的憑證'
-                : 'Tailscale 傳輸本身已由 WireGuard 加密'}
-              description={host.cert_available
-                ? '若瀏覽器仍顯示憑證警告，代表 Caddy 尚未取得憑證。在這台機器上執行一次 sudo tailscale set --operator=$USER 後即會自動取得，不需要改設定。'
-                : 'IP 位址無法簽發公開憑證，請改用上方的 Tailscale 網域名稱。走 Tailscale 時即使是純 HTTP 也不會有明文外洩，流量在網路層已加密。'}
+    // One column, read top to bottom: where you are connecting from, then the
+    // machine, then the tool, then the file. Side by side, the two halves never
+    // ended level -- and could not, because the right one changes height with
+    // every tool chosen -- so the seam was a permanent ragged edge between two
+    // things that are actually one sequence.
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card
+        title="⓪ 從哪裡連"
+        size="small"
+        loading={state === null}
+        extra={network && network.hosts.length > 1 && (
+          <Space size={8}>
+            <Text type="secondary" style={{ fontSize: 12 }}>從哪裡連</Text>
+            <Segmented
+              size="small"
+              value={hostKey}
+              onChange={(v) => setHostKey(v as string)}
+              options={network.hosts.map((h) => ({ label: h.label, value: h.key }))}
             />
-          )}
+          </Space>
+        )}
+      >
+        {host && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+            {host.host} ・ {host.note}
+          </Text>
+        )}
 
-          <Table
-            dataSource={rows}
-            rowKey={(row) => row.endpoint.key}
-            size="small"
-            pagination={false}
-            locale={{ emptyText: '讀取中…' }}
-            columns={[
-              {
-                title: '入口', width: 150,
-                render: (_, row) => (
-                  <Space size={6}>
-                    <Tooltip title={row.endpoint.note}>
-                      <Text strong style={{ fontSize: 13 }}>{row.endpoint.label}</Text>
-                    </Tooltip>
-                    {row.endpoint.encrypted ? (
-                      <Tooltip title="TLS 加密">
-                        <LockOutlined style={{ opacity: 0.5, fontSize: 12 }} />
-                      </Tooltip>
-                    ) : (
-                      <Tooltip title="未加密：內容在區網上是明文">
-                        <UnlockOutlined style={{ color: ACCENT.warn, fontSize: 12 }} />
-                      </Tooltip>
-                    )}
-                    {row.channel && !row.channel.present && <Tag color="error">設定檔遺失</Tag>}
-                  </Space>
-                ),
-              },
-              {
-                // One line per port: a channel is no longer one site block, so
-                // the ComfyUI row has an address per card.
-                title: '網址',
-                render: (_, row) => (
-                  <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                    {/* The address is what the page is for, so it is the
-                        largest thing in the row -- and clicking it copies, which
-                        is what the button beside it used to be for. One target
-                        instead of two, and the bigger one. */}
-                    {urls(row).map((url) => (
-                      <Tooltip key={url} title="點一下複製">
-                        <Text code style={{ fontSize: 14, cursor: 'pointer' }}
-                              onClick={() => copy(url)}>
-                          {url}
-                        </Text>
-                      </Tooltip>
-                    ))}
-                    {!row.endpoint.listening && <Tag color="error">未監聽</Tag>}
-                  </Space>
-                ),
-              },
-              {
-                title: '誰能連', width: 250, align: 'right' as const,
-                render: (_, row) => {
-                  const channel = row.channel;
-                  if (!channel) {
-                    // The console and the API it carries are the same site block
-                    // in the main Caddyfile. Saying so is more useful than an
-                    // empty cell, and the two want different words: one *is* the
-                    // console, the other rides on it.
-                    const rides = row.endpoint.key !== 'console';
-                    return (
-                      <Tooltip title="它在 Caddyfile 主檔中，不受這頁的開關影響——否則就可能關掉正在操作的這個介面">
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {rides ? '跟主控台一起' : '這個介面本身'}
-                        </Text>
-                      </Tooltip>
-                    );
-                  }
-                  const reach = reachOf(channel);
-                  return (
-                    <Space direction="vertical" size={4} align="end" style={{ width: '100%' }}>
-                      <Segmented
-                        size="small"
-                        value={reach}
-                        disabled={!channel.enabled || busy !== null}
-                        options={REACH}
-                        onChange={(v) => setReach(channel, String(v))}
-                      />
-                      {reach === 'pick' && (
-                        <Checkbox.Group
-                          value={channel.scopes}
-                          disabled={busy !== null}
-                          onChange={(v) => setScopes(channel, v as string[])}
-                        >
-                          <Space size={10}>
-                            {NETWORKS.map((network_) => {
-                              const address = addresses?.[network_.key as 'lan' | 'tailscale'];
-                              return (
-                                <Tooltip
-                                  key={network_.key}
-                                  title={address ? `${network_.hint}（${address}）` : '這台機器上沒有這個網路'}
-                                >
-                                  <Checkbox value={network_.key} disabled={!address}>
-                                    <Text style={{ fontSize: 12 }}>{network_.label}</Text>
-                                  </Checkbox>
-                                </Tooltip>
-                              );
-                            })}
-                          </Space>
-                        </Checkbox.Group>
-                      )}
-                    </Space>
-                  );
-                },
-              },
-              {
-                title: '範例', width: 80, align: 'right' as const,
-                render: (_, row) => (SNIPPET_FOR[row.endpoint.key] ? (
-                  <Button type="link" size="small" style={{ padding: 0 }}
-                          onClick={() => setTab(SNIPPET_FOR[row.endpoint.key])}>
-                    設定範例
-                  </Button>
-                ) : null),
-              },
-              {
-                title: '', width: 60, align: 'right' as const,
-                render: (_, row) => (row.channel ? (
-                  <Switch
-                    size="small"
-                    checked={row.channel.enabled}
-                    loading={busy === row.channel.key}
-                    disabled={!row.channel.present || busy !== null}
-                    onChange={(next) => toggle(row.channel!, next)}
-                  />
-                ) : null),
-              },
-            ]}
-          />
-
+        {host?.tailscale && (
           <Alert
-            type="info"
+            type={host.cert_available ? 'success' : 'info'}
             showIcon
-            style={{ marginTop: 12 }}
-            icon={<GlobalOutlined />}
-            message="「所有介面」不等於對外網開放"
-            description="那還需要在路由器上轉發埠號。沒有開關的那幾列住在 Caddyfile 主檔裡，這頁關不掉它們——否則就可能關掉正在操作的這個介面。"
+            icon={<SafetyCertificateOutlined />}
+            style={{ marginBottom: 12 }}
+            message={host.cert_available
+              ? 'Tailscale 網域可取得公開信任的憑證'
+              : 'Tailscale 傳輸本身已由 WireGuard 加密'}
+            description={host.cert_available
+              ? '若瀏覽器仍顯示憑證警告，代表 Caddy 尚未取得憑證。在這台機器上執行一次 sudo tailscale set --operator=$USER 後即會自動取得，不需要改設定。'
+              : 'IP 位址無法簽發公開憑證，請改用上方的 Tailscale 網域名稱。走 Tailscale 時即使是純 HTTP 也不會有明文外洩，流量在網路層已加密。'}
           />
-        </Card>
-      </Space>
+        )}
 
-      <div style={{ flex: '1 1 520px', minWidth: 0 }}>
-        <ClientSnippets endpoints={endpoints} hostname={hostname} tab={tab} onTab={setTab} />
-      </div>
-    </div>
+        <Table
+          dataSource={rows}
+          rowKey={(row) => row.endpoint.key}
+          size="small"
+          pagination={false}
+          locale={{ emptyText: '讀取中…' }}
+          columns={[
+            {
+              title: '入口', width: 150,
+              render: (_, row) => (
+                <Space size={6}>
+                  <Tooltip title={row.endpoint.note}>
+                    <Text strong style={{ fontSize: 13 }}>{row.endpoint.label}</Text>
+                  </Tooltip>
+                  {row.endpoint.encrypted ? (
+                    <Tooltip title="TLS 加密">
+                      <LockOutlined style={{ opacity: 0.5, fontSize: 12 }} />
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="未加密：內容在區網上是明文">
+                      <UnlockOutlined style={{ color: ACCENT.warn, fontSize: 12 }} />
+                    </Tooltip>
+                  )}
+                  {row.channel && !row.channel.present && <Tag color="error">設定檔遺失</Tag>}
+                </Space>
+              ),
+            },
+            {
+              // One line per port: a channel is no longer one site block, so
+              // the ComfyUI row has an address per card.
+              title: '網址',
+              render: (_, row) => (
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  {/* The address is what the page is for, so it is the
+                      largest thing in the row -- and clicking it copies, which
+                      is what the button beside it used to be for. One target
+                      instead of two, and the bigger one. */}
+                  {urls(row).map((url) => (
+                    <Tooltip key={url} title="點一下複製">
+                      <Text code style={{ fontSize: 14, cursor: 'pointer' }}
+                            onClick={() => copy(url)}>
+                        {url}
+                      </Text>
+                    </Tooltip>
+                  ))}
+                  {!row.endpoint.listening && <Tag color="error">未監聽</Tag>}
+                </Space>
+              ),
+            },
+            {
+              title: '誰能連', width: 250, align: 'right' as const,
+              render: (_, row) => {
+                const channel = row.channel;
+                if (!channel) {
+                  // The console and the API it carries are the same site block
+                  // in the main Caddyfile. Saying so is more useful than an
+                  // empty cell, and the two want different words: one *is* the
+                  // console, the other rides on it.
+                  const rides = row.endpoint.key !== 'console';
+                  return (
+                    <Tooltip title="它在 Caddyfile 主檔中，不受這頁的開關影響——否則就可能關掉正在操作的這個介面">
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {rides ? '跟主控台一起' : '這個介面本身'}
+                      </Text>
+                    </Tooltip>
+                  );
+                }
+                const reach = reachOf(channel);
+                return (
+                  <Space direction="vertical" size={4} align="end" style={{ width: '100%' }}>
+                    <Segmented
+                      size="small"
+                      value={reach}
+                      disabled={!channel.enabled || busy !== null}
+                      options={REACH}
+                      onChange={(v) => setReach(channel, String(v))}
+                    />
+                    {reach === 'pick' && (
+                      <Checkbox.Group
+                        value={channel.scopes}
+                        disabled={busy !== null}
+                        onChange={(v) => setScopes(channel, v as string[])}
+                      >
+                        <Space size={10}>
+                          {NETWORKS.map((network_) => {
+                            const address = addresses?.[network_.key as 'lan' | 'tailscale'];
+                            return (
+                              <Tooltip
+                                key={network_.key}
+                                title={address ? `${network_.hint}（${address}）` : '這台機器上沒有這個網路'}
+                              >
+                                <Checkbox value={network_.key} disabled={!address}>
+                                  <Text style={{ fontSize: 12 }}>{network_.label}</Text>
+                                </Checkbox>
+                              </Tooltip>
+                            );
+                          })}
+                        </Space>
+                      </Checkbox.Group>
+                    )}
+                  </Space>
+                );
+              },
+            },
+            {
+              title: '範例', width: 80, align: 'right' as const,
+              render: (_, row) => (SNIPPET_FOR[row.endpoint.key] ? (
+                <Button type="link" size="small" style={{ padding: 0 }}
+                        onClick={() => setTab(SNIPPET_FOR[row.endpoint.key])}>
+                  設定範例
+                </Button>
+              ) : null),
+            },
+            {
+              title: '', width: 60, align: 'right' as const,
+              render: (_, row) => (row.channel ? (
+                <Switch
+                  size="small"
+                  checked={row.channel.enabled}
+                  loading={busy === row.channel.key}
+                  disabled={!row.channel.present || busy !== null}
+                  onChange={(next) => toggle(row.channel!, next)}
+                />
+              ) : null),
+            },
+          ]}
+        />
+
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginTop: 12 }}
+          icon={<GlobalOutlined />}
+          message="「所有介面」不等於對外網開放"
+          description="那還需要在路由器上轉發埠號。沒有開關的那幾列住在 Caddyfile 主檔裡，這頁關不掉它們——否則就可能關掉正在操作的這個介面。"
+        />
+      </Card>
+
+      <ClientSnippets endpoints={endpoints} hostname={hostname} tab={tab} onTab={setTab} />
+    </Space>
   );
 }

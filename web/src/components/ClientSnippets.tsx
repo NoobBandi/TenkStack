@@ -173,13 +173,13 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
       caption: 'compaction 的欄位名以 $schema 指向的實際 schema 為準——文件上寫的 keep.tokens／buffer 是另一版，填了不會生效。',
       steps: [
         {
-          title: '① 開啟設定檔',
+          title: '③ 開啟設定檔',
           lang: sh,
           body: openCommand(os, '~/.config/opencode/opencode.json',
             '$env:USERPROFILE\\.config\\opencode\\opencode.json'),
         },
         {
-          title: '② 貼進去：模型參數',
+          title: '④ 貼進去：模型參數',
           lang: 'json',
           body: JSON.stringify({
             $schema: 'https://opencode.ai/config.json',
@@ -215,7 +215,7 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               + `small_model 不設會去要一個這台沒有的名字。`,
         },
         {
-          title: '③ 金鑰：在 opencode 裡打',
+          title: '⑤ 金鑰：在 opencode 裡打',
           lang: 'bash',
           body: '/connect',
           note: '不是 shell 指令，是進 opencode 之後在對話框裡打的。'
@@ -231,13 +231,13 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
       caption: 'ANTHROPIC_BASE_URL 不要帶 /v1，Claude Code 自己會接上 /v1/messages。env 裡的值一律是字串，數字也要加引號。',
       steps: [
         {
-          title: '① 開啟設定檔',
+          title: '③ 開啟設定檔',
           lang: sh,
           body: openCommand(os, '~/.claude/settings.json',
             '$env:USERPROFILE\\.claude\\settings.json'),
         },
         {
-          title: '② 貼進去：模型參數',
+          title: '④ 貼進去：模型參數',
           lang: 'json',
           body: JSON.stringify({
             env: {
@@ -259,7 +259,7 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               + '也可以改成在 env 裡加 ANTHROPIC_AUTH_TOKEN 直接寫死，那樣就不需要金鑰檔。',
         },
         {
-          title: '③ 建立金鑰檔',
+          title: '⑤ 建立金鑰檔',
           lang: sh,
           body: writeKeyCommand(os),
         },
@@ -273,13 +273,13 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
              + 'llama-server 有 /v1/responses 所以能用。內建的 provider id（openai／ollama／lmstudio）不能覆寫，要取自己的名字。',
       steps: [
         {
-          title: '① 開啟設定檔',
+          title: '③ 開啟設定檔',
           lang: sh,
           body: openCommand(os, '~/.codex/config.toml',
             '$env:USERPROFILE\\.codex\\config.toml'),
         },
         {
-          title: '② 貼進去：模型參數',
+          title: '④ 貼進去：模型參數',
           lang: 'ini',
           body: `model_provider = "tenks"
 model = "${modelId}"
@@ -310,7 +310,7 @@ refresh_interval_ms = 86400000`,
               + `refresh_interval_ms 預設 5 分鐘，靜態金鑰設長一點免得一直重跑。`,
         },
         {
-          title: '③ 建立金鑰檔',
+          title: '⑤ 建立金鑰檔',
           lang: sh,
           body: writeKeyCommand(os),
         },
@@ -323,13 +323,13 @@ refresh_interval_ms = 86400000`,
       caption: 'api_backend 選 chat_completions，llama-server 這條路最穩。',
       steps: [
         {
-          title: '① 開啟設定檔',
+          title: '③ 開啟設定檔',
           lang: sh,
           body: openCommand(os, '~/.grok/config.toml',
             '$env:USERPROFILE\\.grok\\config.toml'),
         },
         {
-          title: '② 貼進去：模型參數',
+          title: '④ 貼進去：模型參數',
           lang: 'ini',
           body: `[model.tenks-${modelId}]
 model = "${modelId}"
@@ -364,13 +364,13 @@ auto_compact_threshold_percent = 75`,
              + '這個檔案每次打開 /model 都會重讀，改完不用重開。',
       steps: [
         {
-          title: '① 開啟設定檔',
+          title: '③ 開啟設定檔',
           lang: sh,
           body: openCommand(os, '~/.pi/agent/models.json',
             '$env:USERPROFILE\\.pi\\agent\\models.json'),
         },
         {
-          title: '② 貼進去：模型參數',
+          title: '④ 貼進去：模型參數',
           lang: 'json',
           body: JSON.stringify({
             providers: {
@@ -415,12 +415,12 @@ auto_compact_threshold_percent = 75`,
       caption: 'chat_template_kwargs 關掉思考模式——留著的話回覆會先產一段 <think>。',
       steps: [
         {
-          title: '① 建立金鑰檔',
+          title: '③ 建立金鑰檔',
           lang: sh,
           body: writeKeyCommand(os),
         },
         {
-          title: '② 送一個請求',
+          title: '④ 送一個請求',
           lang: sh,
           body: win
             ? `$key = (Get-Content -Raw "${KEY_FILE.win}").Trim()
@@ -453,12 +453,12 @@ Invoke-RestMethod -Uri "${base}/chat/completions" -Method Post \`
       caption: '用官方 openai 套件，指向這台的 base_url 就好。',
       steps: [
         {
-          title: '① 建立金鑰檔',
+          title: '③ 建立金鑰檔',
           lang: sh,
           body: writeKeyCommand(os),
         },
         {
-          title: '② 程式',
+          title: '④ 程式',
           lang: 'python',
           body: `from pathlib import Path
 from openai import OpenAI
@@ -487,15 +487,15 @@ print(resp.choices[0].message.content)`,
   ];
 
   return (
-    <Card title="用戶端設定範例" size="small">
+      <Card size="small">
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         {/* The machine first, because every command below is different on each
             one and a reader who skips this gets three boxes they cannot run.
             Detected, and still a control: someone reading this on a laptop is
             often setting up the desktop beside it. */}
         <Space size={10} wrap>
-          <Text style={{ fontSize: 11, opacity: 0.4, width: 52, display: 'inline-block' }}>
-            作業系統
+          <Text style={{ fontSize: 12, opacity: 0.6, width: 84, display: 'inline-block' }}>
+            ① 作業系統
           </Text>
           <Segmented
             size="small"
@@ -516,8 +516,10 @@ print(resp.choices[0].message.content)`,
             chosen when its value is not among its options. */}
         {groups.map((g) => (
           <Space key={g.key} size={10} wrap>
-            <Text style={{ fontSize: 11, opacity: 0.4, width: 52, display: 'inline-block' }}>
-              {g.label}
+            <Text style={{ fontSize: 12, opacity: 0.6, width: 84, display: 'inline-block' }}>
+              {/* Numbered once: the two rows are one choice, and numbering both
+                  would make picking a tool look like two steps. */}
+              {g.key === 'agent' ? '② ' : '　 '}{g.label}
             </Text>
             <Segmented
               size="small"
