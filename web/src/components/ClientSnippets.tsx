@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { App as AntApp, Button, Card, Segmented, Space, Typography } from 'antd';
+import { App as AntApp, Button, Card, Segmented, Space, Tooltip, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import hljs from 'highlight.js/lib/core';
 import bash from 'highlight.js/lib/languages/bash';
@@ -8,7 +8,8 @@ import json from 'highlight.js/lib/languages/json';
 import python from 'highlight.js/lib/languages/python';
 import powershell from 'highlight.js/lib/languages/powershell';
 import { fetchLastUsedModel, fetchModels, type Endpoint, type ModelInfo } from '../api';
-import { LINE, MONO } from '../theme';
+import { LINE } from '../theme';
+import CodeSurface from './CodeSurface';
 import {
   detectOs, openCommand, shellLang, writeKeyCommand,
   KEY_FILE, KEY_FILE_ABS, type Os, type Snippet,
@@ -27,27 +28,39 @@ hljs.registerLanguage('powershell', powershell);
 hljs.registerLanguage('python', python);
 
 /**
- * One snippet, coloured by highlight.js and painted by the palette in
- * index.css -- the same one the markdown renderer uses, so a config here and a
- * fenced block in a reply look like the same kind of thing.
+ * One snippet, in the same frame a fenced block in a reply gets.
+ *
+ * Coloured by highlight.js and painted by the palette in index.css -- the same
+ * one the markdown renderer uses -- and now drawn by the same component too, so
+ * a config to paste and a block a model wrote are visibly one kind of object.
  *
  * dangerouslySetInnerHTML is safe here because highlight.js escapes what it is
  * given before wrapping it in spans; a model id containing markup comes back as
  * entities. Checked rather than assumed.
  */
-function Code({ body, lang }: { body: string; lang: string }) {
+function Code({ body, lang, name, onCopy }: {
+  body: string;
+  lang: string;
+  name: string;
+  onCopy: () => void;
+}) {
   const html = hljs.highlight(body, { language: lang, ignoreIllegals: true }).value;
+  const lines = body.split('\n');
   return (
-    <pre style={BOX}>
+    <CodeSurface
+      name={name}
+      actions={(
+        <Tooltip title="複製">
+          <Button type="text" size="small" icon={<CopyOutlined />} onClick={onCopy} />
+        </Tooltip>
+      )}
+      // A one-line command needs no gutter; numbering it says "1".
+      gutter={lines.length > 1 && lines.map((_, i) => <span key={i}>{i + 1}</span>)}
+    >
       <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
-    </pre>
+    </CodeSurface>
   );
 }
-
-const BOX: React.CSSProperties = {
-  background: 'rgba(255,255,255,0.04)', padding: 12, borderRadius: 6,
-  overflowX: 'auto', margin: 0, fontSize: 12, lineHeight: 1.55, fontFamily: MONO,
-};
 
 /**
  * Ready-made client configuration.
@@ -538,14 +551,11 @@ print(resp.choices[0].message.content)`,
 
         {active.steps.map((step) => (
           <div key={step.title}>
-            <Space size={8} style={{ marginBottom: 5 }}>
-              <Text style={{ fontSize: 12, opacity: 0.75 }}>{step.title}</Text>
-              <Button type="text" size="small" icon={<CopyOutlined />}
-                      onClick={() => copy(step.body)}>
-                複製
-              </Button>
-            </Space>
-            <Code body={step.body} lang={step.lang} />
+            {/* The step name is the block's name, in the block's own header.
+                It used to be a line of text above the box with a copy button
+                beside it, which put two headers on one listing. */}
+            <Code body={step.body} lang={step.lang} name={step.title}
+                  onCopy={() => copy(step.body)} />
             {step.note && (
               <Paragraph type="secondary" style={{
                 fontSize: 11.5, margin: '6px 0 0', opacity: 0.75,

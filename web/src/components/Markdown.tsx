@@ -4,9 +4,10 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { App as AntApp, Button, Tooltip } from 'antd';
 import {
-  CheckOutlined, CodeOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined,
+  CheckOutlined, CopyOutlined, DownloadOutlined, PlayCircleOutlined,
 } from '@ant-design/icons';
 import { usePreview } from './preview';
+import CodeSurface from './CodeSurface';
 import { detectLanguage } from './detect';
 import './markdown.css';
 
@@ -246,16 +247,13 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
   const removed = rows?.filter((r) => r.kind === 'del').length ?? 0;
 
   return (
-    <div className="md-code">
-      <div className="md-code-bar">
-        <span className="md-code-name">
-          <CodeOutlined />
-          {/* The name the code gives itself, and only that: a block that
-              declares no path is not a file, and calling it snippet.txt in the
-              header would invent one. The language is what it is instead. */}
-          <span>{declaredName(source) ?? language ?? 'text'}</span>
-        </span>
-        <span className="md-code-actions">
+    <CodeSurface
+      // The name the code gives itself, and only that: a block that declares no
+      // path is not a file, and calling it snippet.txt in the header would
+      // invent one. The language is what it is instead.
+      name={declaredName(source) ?? language ?? 'text'}
+      actions={(
+        <>
           {isDiff && (
             <span className="md-code-stat">
               <span className="md-code-add">+{added}</span>
@@ -285,46 +283,30 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
               onClick={copy}
             />
           </Tooltip>
+        </>
+      )}
+      gutter={numbered && (rows ?? lines).map((row, i) => (
+        <span key={i} className={
+          typeof row === 'string' ? undefined : `md-code-n-${row.kind}`
+        }>
+          {typeof row === 'string'
+            ? i + 1
+            : (row.kind === 'del' ? row.old : row.cur) ?? ''}
         </span>
-      </div>
+      ))}
+    >
       {/* Nothing runs until the button is pressed, and then it runs in the panel
           at the page edge rather than here. Rendering a reply must never execute
           what is in it -- the code arrives token by token from a model, so
           auto-running would mean running half-written documents too. */}
-      <div className="md-code-body">
-        {numbered && (
-          // Outside the scrolling box, so the numbers stay put while a long
-          // line is scrolled. Alignment is by line-height alone: both sides are
-          // pinned to the same pixel value rather than a ratio, because 1.55 of
-          // 13px and 1.55 of 11px are different numbers and the drift compounds
-          // down the block.
-          <div className="md-code-gutter" aria-hidden>
-            {(rows ?? lines).map((row, i) => (
-              <span key={i} className={
-                typeof row === 'string' ? undefined : `md-code-n-${row.kind}`
-              }>
-                {typeof row === 'string'
-                  ? i + 1
-                  : (row.kind === 'del' ? row.old : row.cur) ?? ''}
-              </span>
-            ))}
-          </div>
-        )}
-        {rows ? (
-          <pre className={numbered ? 'md-code-numbered' : undefined}>
-            {rows.map((row, i) => (
-              <span key={i} className={`md-code-row md-code-r-${row.kind}`}>
-                {row.text || ' '}
-              </span>
-            ))}
-          </pre>
-        ) : (
-          <pre className={numbered ? 'md-code-numbered' : undefined}>
-            <code className={className}>{children}</code>
-          </pre>
-        )}
-      </div>
-    </div>
+      {rows
+        ? rows.map((row, i) => (
+          <span key={i} className={`md-code-row md-code-r-${row.kind}`}>
+            {row.text || ' '}
+          </span>
+        ))
+        : <code className={className}>{children}</code>}
+    </CodeSurface>
   );
 }
 
