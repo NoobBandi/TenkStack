@@ -522,66 +522,78 @@ export default function Files() {
         />
       )}
 
-      <Card size="small" styles={{ body: { padding: 12 } }}>
-        <Space size={16} wrap align="start" style={{ width: '100%' }}>
-          {/* Two strips, not one row of six. ComfyUI's trees are why this page
-              exists and there are several of them; the machine's own
-              directories are a different kind of place, and in one row they all
-              read as an undifferentiated list -- three of them starting with the
-              same word. Only the strip holding the selection shows one:
-              Segmented renders nothing as chosen when its value is not among
-              its options. */}
-          <Space direction="vertical" size={6}>
-            {([['comfy', 'ComfyUI'], ['other', '其他']] as const).map(([g, label]) => {
-              const mine = roots.filter((r) => r.group === g);
-              if (!mine.length) return null;
-              return (
-                <Space key={g} size={8}>
-                  <Text type="secondary" style={{
-                    fontSize: 11, width: 48, display: 'inline-block',
-                  }}>
-                    {label}
-                  </Text>
-                  <Segmented
-                    size="small"
-                    value={mine.some((r) => r.key === root) ? root : ''}
-                    onChange={(v) => { setRoot(v as string); setPath(''); }}
-                    options={mine.map((r) => ({ label: r.label, value: r.key }))}
-                  />
-                </Space>
-              );
-            })}
-          </Space>
-          <Text style={{
-            fontSize: 11, fontFamily: MONO, opacity: 0.5, marginLeft: 'auto',
-          }}>
-            磁碟可用 {bytes(free)}
-          </Text>
-        </Space>
-
-        {/* The chosen place's own line, under the strips rather than beside
-            them. In the same row it was vertically centred against a two-row
-            block and read as a caption for neither of them. */}
-        {activeRoot?.note && (
-          <Text type="secondary" style={{
-            fontSize: 11, display: 'block', marginTop: 10,
-          }}>
-            {activeRoot.note}
-          </Text>
-        )}
-      </Card>
-
+      {/* One block, not two. The places, the path and the listing are the
+          same object seen at three scales -- picking a place changes the path,
+          which changes the listing -- and a border between the first and the
+          other two said they were separate things. */}
       <Card
         size="small"
+        // The header holds a block now, and antd's title is a single ellipsised
+        // line by default -- left alone it would clip the second strip and the
+        // note off the end of the first one.
+        styles={{
+          title: { whiteSpace: 'normal', overflow: 'visible' },
+          header: { padding: '10px 12px' },
+        }}
         title={
-          <PathBar
-            rootPath={activeRoot?.path ?? ''}
-            path={path}
-            onSegment={setPath}
-            onSubmit={(text) => void jump(text)}
-            editing={editingPath}
-            onEditing={setEditingPath}
-          />
+          <div>
+          <Space size={16} wrap align="start" style={{ width: '100%' }}>
+            {/* Two strips, not one row of six. ComfyUI's trees are why this page
+                exists and there are several of them; the machine's own
+                directories are a different kind of place, and in one row they all
+                read as an undifferentiated list -- three of them starting with the
+                same word. Only the strip holding the selection shows one:
+                Segmented renders nothing as chosen when its value is not among
+                its options. */}
+            <Space direction="vertical" size={6}>
+              {([['comfy', 'ComfyUI'], ['other', '其他']] as const).map(([g, label]) => {
+                const mine = roots.filter((r) => r.group === g);
+                if (!mine.length) return null;
+                return (
+                  <Space key={g} size={8}>
+                    <Text type="secondary" style={{
+                      fontSize: 11, width: 48, display: 'inline-block',
+                    }}>
+                      {label}
+                    </Text>
+                    <Segmented
+                      size="small"
+                      value={mine.some((r) => r.key === root) ? root : ''}
+                      onChange={(v) => { setRoot(v as string); setPath(''); }}
+                      options={mine.map((r) => ({ label: r.label, value: r.key }))}
+                    />
+                  </Space>
+                );
+              })}
+            </Space>
+            <Text style={{
+              fontSize: 11, fontFamily: MONO, opacity: 0.5, marginLeft: 'auto',
+            }}>
+              磁碟可用 {bytes(free)}
+            </Text>
+          </Space>
+
+          {/* The chosen place's own line, under the strips rather than beside
+              them. In the same row it was vertically centred against a two-row
+              block and read as a caption for neither of them. */}
+          {activeRoot?.note && (
+            <Text type="secondary" style={{
+              fontSize: 11, display: 'block', marginTop: 10,
+            }}>
+              {activeRoot.note}
+            </Text>
+          )}
+            <div style={{ marginTop: 12 }}>
+              <PathBar
+                rootPath={activeRoot?.path ?? ''}
+                path={path}
+                onSegment={setPath}
+                onSubmit={(text) => void jump(text)}
+                editing={editingPath}
+                onEditing={setEditingPath}
+              />
+            </div>
+          </div>
         }
         extra={
           <Space size={8}>
