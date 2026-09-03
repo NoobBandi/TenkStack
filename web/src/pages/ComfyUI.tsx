@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Divider, Input, Popconfirm,
-  Space, Tag, Tooltip, Typography,
+  Select, Space, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlusOutlined,
@@ -51,6 +51,40 @@ function instanceUrl(instance: ComfyInstance): string | null {
 }
 
 /**
+ * The launch arguments the console writes for itself.
+ *
+ * Which cards a container has is the render nodes passed to `docker run`, and
+ * that is already the selection: with one node passed, the container sees one
+ * XPU and needs no flag at all -- which is why CLI_ARGS has been empty here all
+ * along and everything worked. Typing a device selector was asking someone to
+ * restate a choice they had already made with a checkbox.
+ *
+ * What a checkbox cannot say is which of two passed cards ComfyUI should run
+ * on. That is `--default-device`, whose own help says the others stay visible,
+ * so the second card remains available to a node that wants to place something
+ * on it. It is a picker here and a flag in the container.
+ *
+ * Anything else a person needs goes in the free field beside it, and the two
+ * are joined on the way out. On the way back in the generated part is stripped
+ * off again, so the field holds what its owner put there and nothing else.
+ */
+const GENERATED = /--default-device\s+\S+/g;
+
+function splitArgs(cli: string): { device: number; extra: string } {
+  const found = /--default-device\s+(\d+)/.exec(cli);
+  return {
+    device: found ? Number(found[1]) : 0,
+    extra: cli.replace(GENERATED, '').replace(/\s+/g, ' ').trim(),
+  };
+}
+
+function joinArgs(device: number, extra: string, cardCount: number): string {
+  // Only when it is not the default and there is another card it could mean.
+  const generated = device > 0 && cardCount > 1 ? `--default-device ${device}` : '';
+  return [generated, extra.trim()].filter(Boolean).join(' ');
+}
+
+/**
  * One instance, and everything that is true of it.
  *
  * The order is the order an operator reads in: what it is doing, the way in,
@@ -74,7 +108,9 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<ComfyConfig | null>(null);
   const [chosen, setChosen] = useState<string[]>([]);
-  const [args, setArgs] = useState('');
+  const [extra, setExtra] = useState('');
+  /** Which of the passed cards ComfyUI runs on, as a position among them. */
+  const [device, setDevice] = useState(0);
 
   const url = instanceUrl(instance);
   const busy = instance.queue_running > 0;
@@ -88,7 +124,9 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
       setConfig(found);
       setChosen(found.cards.filter((c) => c.held)
         .map((c) => c.pci_bdf_address ?? '').filter(Boolean));
-      setArgs(found.cli_args);
+      const parts = splitArgs(found.cli_args);
+      setExtra(parts.extra);
+      setDevice(parts.device);
     } catch {
       // A container the console cannot inspect is not one it should offer to
       // rebuild; the section simply does not appear.
@@ -166,13 +204,19 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const onApply = () =>
     run('重建', setSaving, async () => {
       if (!config) throw new Error('讀不到容器名稱');
-      await saveComfyConfig(config.name, chosen, args);
+      await saveComfyConfig(config.name, ordered, joinArgs(device, extra, ordered.length));
       await loadConfig();
     }, '容器已重建');
 
   const held = config?.cards.filter((c) => c.held).map((c) => c.pci_bdf_address ?? '') ?? [];
+  // Card order, not tick order: the backend passes the render nodes in the
+  // order the cards come in, so `--default-device N` counts the same way.
+  const ordered = (config?.cards ?? [])
+    .map((c) => c.pci_bdf_address ?? '')
+    .filter((a) => a && chosen.includes(a));
+  const composed = joinArgs(device, extra, ordered.length);
   const changed = config !== null && (
-    args !== config.cli_args
+    composed !== config.cli_args
     || chosen.length !== held.length
     || chosen.some((a) => !held.includes(a)));
 
@@ -280,12 +324,34 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
             />
           )}
 
+          {/* Only when there is a second card it could mean. With one card the
+              passthrough already is the selection, and asking again would be
+              asking someone to restate a choice they just made. */}
+          {ordered.length > 1 && (
+            <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+              <Text style={{ fontSize: 13 }}>主要在哪張卡上算</Text>
+              <Select
+                size="small"
+                value={Math.min(device, ordered.length - 1)}
+                onChange={setDevice}
+                style={{ width: 150 }}
+                options={ordered.map((address, i) => ({
+                  value: i,
+                  label: `卡 ${config.cards.findIndex((c) => c.pci_bdf_address === address)}`,
+                }))}
+              />
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                另一張仍然看得到，留給節點用
+              </Text>
+            </div>
+          )}
+
           <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <Input
               size="small"
-              value={args}
-              onChange={(e) => setArgs(e.target.value)}
-              placeholder="啟動參數，例如 --oneapi-device-selector level_zero:1"
+              value={extra}
+              onChange={(e) => setExtra(e.target.value)}
+              placeholder="額外參數，例如 --reserve-vram 2"
               style={{ flex: '1 1 280px', fontFamily: MONO, fontSize: 12 }}
             />
             <Popconfirm
@@ -304,6 +370,13 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
               <Button size="small" onClick={() => void loadConfig()}>還原</Button>
             )}
           </div>
+
+          {/* What will actually be handed to ComfyUI. The console writes part of
+              it, so it says which part rather than leaving someone to wonder
+              what the picker did. */}
+          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+            CLI_ARGS = {composed || '（空的，用預設）'}
+          </Text>
         </div>
       )}
 
