@@ -1278,6 +1278,12 @@ export interface VersionReport {
 
 export const fetchVersions = () => get<VersionReport>('/versions');
 
+/** Just this project's version. Separate from the report above, which probes
+ *  llama-swap, Caddy, llama.cpp, every ComfyUI instance and the GPU -- two
+ *  thirds of a second of subprocesses to answer a constant. */
+export const fetchConsoleVersion = () =>
+  get<{ version: string }>('/version').then((d) => d.version);
+
 // ---------------------------------------------------------------------------
 // The console's own settings, and the machine it is installed on
 // ---------------------------------------------------------------------------

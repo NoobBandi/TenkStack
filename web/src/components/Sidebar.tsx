@@ -6,7 +6,9 @@ import {
   PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
-import { fetchVersions, type GpuSample, type ModelInfo, type SystemSample } from '../api';
+import {
+  fetchConsoleVersion, type GpuSample, type ModelInfo, type SystemSample,
+} from '../api';
 import { LINE, MONO } from '../theme';
 import { deviceTag } from '../hardware';
 
@@ -74,9 +76,11 @@ function Meter({ label, value, percent, warn }: {
 export default function Sidebar({ collapsed, onCollapse, gpus, models, system }: Props) {
   const [version, setVersion] = useState('');
   useEffect(() => {
-    // Once. The version cannot change under a running build, so polling it
-    // would be asking a question whose answer is fixed.
-    fetchVersions().then((v) => setVersion(v.console)).catch(() => undefined);
+    // Once, and from the endpoint that only answers this. The full version
+    // report probes every moving part on the machine, which is two thirds of a
+    // second of subprocesses to render five characters that cannot change while
+    // the process runs.
+    fetchConsoleVersion().then(setVersion).catch(() => undefined);
   }, []);
 
   const location = useLocation();

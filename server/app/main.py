@@ -58,20 +58,7 @@ COMFYUI_PUBLIC_OFFSET = ports.COMFYUI_PUBLIC_FIRST - ports.COMFYUI_FIRST
 GPU_POLL_SECONDS = 2.0
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
-# Read rather than repeated. This was a third copy of the version, and the
-# copies had already drifted: pyproject said 0.1.0 while this and the frontend
-# said 0.2.0. Each half of the project now states it once, in the file that
-# owns it.
-def _version() -> str:
-    try:
-        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as f:
-            return tomllib.load(f)["project"]["version"]
-    except Exception:
-        # A version is not worth failing to start over.
-        return "0"
-
-
-app = FastAPI(title="TenkStack", version=_version())
+app = FastAPI(title="TenkStack", version=versions.console_version())
 
 app.add_middleware(
     CORSMiddleware,
@@ -199,6 +186,17 @@ async def read_gpu_history(seconds: int = 900, points: int = 600):
 async def read_gpu_devices():
     """Every GPU with its full inventory and live counters."""
     return await gpu.list_devices()
+
+
+@app.get("/api/version")
+async def read_version():
+    """Just this project's version.
+
+    Separate from /api/versions, which probes llama-swap, Caddy, llama.cpp,
+    every ComfyUI instance and the GPU -- two thirds of a second of subprocesses
+    to answer a question that is a constant. The sidebar wants the constant.
+    """
+    return {"version": versions.console_version()}
 
 
 @app.get("/api/versions")

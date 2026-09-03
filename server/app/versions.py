@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import tomllib
 from pathlib import Path
 
 import httpx
@@ -152,19 +153,28 @@ async def _comfyui() -> dict:
     }
 
 
-def _console() -> str:
+_CONSOLE_VERSION: str | None = None
+
+
+def console_version() -> str:
     """This project's version, from the file that owns it.
 
-    Read rather than repeated. There were three copies once and they had already
-    drifted -- pyproject said 0.1.0 while the backend and the frontend said
-    0.2.0 -- so each half states it once and everything else asks.
+    The one reader. It was two -- this module parsed pyproject for the version
+    report while `main` parsed it again for the OpenAPI document -- which is the
+    same duplication the copies in package.json were, one layer down.
+
+    Cached, because it cannot change while the process runs and a file read per
+    request to answer a fixed question is a file read for nothing.
     """
-    try:
-        import tomllib
-        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as f:
-            return str(tomllib.load(f)["project"]["version"])
-    except Exception:
-        return ""
+    global _CONSOLE_VERSION
+    if _CONSOLE_VERSION is None:
+        try:
+            with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as f:
+                _CONSOLE_VERSION = str(tomllib.load(f)["project"]["version"])
+        except Exception:
+            # A version is not worth failing to start over.
+            _CONSOLE_VERSION = "0"
+    return _CONSOLE_VERSION
 
 
 async def collect() -> dict:
@@ -198,7 +208,7 @@ async def collect() -> dict:
         # The console's own, which was the one thing this list did not carry:
         # it reported every moving part except itself, so "which version am I
         # looking at" was the one question the version card could not answer.
-        "console": _console(),
+        "console": console_version(),
         "system": [
             {"label": label, "value": value}
             for label, value in (
