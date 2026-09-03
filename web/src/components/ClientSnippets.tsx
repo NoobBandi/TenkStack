@@ -9,6 +9,10 @@ import python from 'highlight.js/lib/languages/python';
 import powershell from 'highlight.js/lib/languages/powershell';
 import { fetchLastUsedModel, fetchModels, type Endpoint, type ModelInfo } from '../api';
 import { LINE, MONO } from '../theme';
+import {
+  detectOs, openCommand, shellLang, writeKeyCommand,
+  KEY_FILE, KEY_FILE_ABS, type Os, type Snippet,
+} from './snippet-types';
 
 const { Paragraph, Text } = Typography;
 
@@ -53,10 +57,19 @@ const BOX: React.CSSProperties = {
  * is pasting an example and then having to work out which host and which model
  * id belong in it.
  *
- * Every box is a whole file, valid as it stands. It used to carry explanation
- * inside it, which meant the JSON one could not be pasted into a JSON file and
- * the reader had to edit before saving -- exactly the step this card exists to
- * remove. Prose is above the box now, and the box is only ever the artefact.
+ * Read as a sequence, in the order the work is done: which machine you are on,
+ * which tool, the command that opens that tool's config file, what to put in
+ * it, and how that tool wants its key. The order is the point -- the config
+ * used to come first and the file it belongs in was a sentence above it, so the
+ * first thing anyone did was go and find out where that file was.
+ *
+ * Every box is a whole artefact, valid as it stands: a command to run or a file
+ * to paste, never one carrying explanation inside it. Prose sits above the box.
+ *
+ * No `export` anywhere. Each tool has its own way to be given a key -- a login
+ * command, a helper, a file read on demand, a literal in its own config -- and
+ * an `export` in front of the binary is none of them: it survives one shell and
+ * teaches nobody where the key actually belongs.
  *
  * The compaction settings are here for the same reason the slot meter is on the
  * dashboard. A client that walks into the end of the window gets its reply cut
@@ -69,25 +82,6 @@ const BOX: React.CSSProperties = {
 function urlFor(endpoint: Endpoint, host: string): string {
   const path = endpoint.path === '/' ? '' : endpoint.path;
   return `${endpoint.scheme}://${host}:${endpoint.port}${path}`;
-}
-
-interface Block {
-  /** The file this is, or what it is for. Shown above the box. */
-  title: string;
-  body: string;
-  /** A highlight.js language id, from the five registered above. */
-  lang: string;
-  note?: string;
-}
-
-interface Snippet {
-  key: string;
-  label: string;
-  group: 'agent' | 'raw';
-  caption: string;
-  blocks: Block[];
-  shellCaption?: string;
-  shell?: { linux: string; windows: string };
 }
 
 /**
@@ -108,10 +102,7 @@ interface Props {
 export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Props) {
   const { message } = AntApp.useApp();
   const [models, setModels] = useState<ModelInfo[]>([]);
-  // Which shell the command box is written for. `export` and `$env:` are
-  // different languages, and on Windows the second one lasts only as long as
-  // the window.
-  const [shell, setShell] = useState<'linux' | 'windows'>('linux');
+  const [os, setOs] = useState<Os>(detectOs);
 
   // The id of the last request in llama-swap's history, for when nothing is
   // loaded. Fetched alongside the list because it is only ever needed as that
@@ -169,17 +160,26 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
   const reserved = Math.floor(ctx / 8);
   const keepRecent = Math.floor(ctx / 6);
 
+  const win = os === 'windows';
+  const keyPath = win ? KEY_FILE.win : KEY_FILE.unix;
+  const keyAbs = os === 'mac' ? KEY_FILE_ABS.mac : KEY_FILE_ABS.unix;
+  const sh = shellLang(os);
+
   const snippets: Snippet[] = [
     {
       key: 'opencode',
       label: 'Opencode',
       group: 'agent',
-      caption: `設定檔放 ~/.config/opencode/opencode.json（Windows 是 %USERPROFILE%\\.config\\opencode\\opencode.json）。`
-             + `金鑰用 {env:TENKS_KEY} 從環境變數讀，不寫進檔案。`
-             + `compaction 的欄位名以 $schema 指向的實際 schema 為準——文件上寫的 keep.tokens／buffer 是另一版，填了不會生效。`,
-      blocks: [
+      caption: 'compaction 的欄位名以 $schema 指向的實際 schema 為準——文件上寫的 keep.tokens／buffer 是另一版，填了不會生效。',
+      steps: [
         {
-          title: '~/.config/opencode/opencode.json',
+          title: '① 開啟設定檔',
+          lang: sh,
+          body: openCommand(os, '~/.config/opencode/opencode.json',
+            '$env:USERPROFILE\\.config\\opencode\\opencode.json'),
+        },
+        {
+          title: '② 貼進去：模型參數',
           lang: 'json',
           body: JSON.stringify({
             $schema: 'https://opencode.ai/config.json',
@@ -187,7 +187,7 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               tenks: {
                 npm: '@ai-sdk/openai-compatible',
                 name: 'TenkStack',
-                options: { baseURL: base, apiKey: '{env:TENKS_KEY}' },
+                options: { baseURL: base },
                 models: {
                   [modelId]: {
                     name: modelName,
@@ -214,28 +214,34 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               + `prune 會丟掉舊的工具輸出，對反覆讀同一批檔案的工作省很多；預設是關的。`
               + `small_model 不設會去要一個這台沒有的名字。`,
         },
+        {
+          title: '③ 金鑰',
+          lang: sh,
+          body: 'opencode auth login',
+          note: '選單裡挑 Other，provider id 填 tenks（要和上面那個 key 一樣），再貼上金鑰。'
+              + '存在 ~/.local/share/opencode/auth.json，權限 0600，設定檔裡不會有金鑰。'
+              + '如果這個 provider 沒讀到，options 也接受 apiKey: "{env:TENKS_KEY}"。',
+        },
       ],
-      shellCaption: '金鑰放環境變數。PowerShell 的 $env: 只在這個視窗有效，要留著改用 setx（新開的視窗才生效）。',
-      shell: {
-        linux: `export TENKS_KEY="sk-console-..."\nopencode`,
-        windows: `$env:TENKS_KEY = "sk-console-..."\nopencode`,
-      },
     },
     {
       key: 'claude-code',
       label: 'Claude Code',
       group: 'agent',
-      caption: 'Linux／macOS 放 ~/.claude/settings.json，Windows 放 %USERPROFILE%\\.claude\\settings.json。'
-             + 'ANTHROPIC_BASE_URL 不要帶 /v1，Claude Code 自己會接上 /v1/messages。'
-             + 'env 裡的值一律是字串，數字也要加引號。',
-      blocks: [
+      caption: 'ANTHROPIC_BASE_URL 不要帶 /v1，Claude Code 自己會接上 /v1/messages。env 裡的值一律是字串，數字也要加引號。',
+      steps: [
         {
-          title: '~/.claude/settings.json',
+          title: '① 開啟設定檔',
+          lang: sh,
+          body: openCommand(os, '~/.claude/settings.json',
+            '$env:USERPROFILE\\.claude\\settings.json'),
+        },
+        {
+          title: '② 貼進去：模型參數',
           lang: 'json',
           body: JSON.stringify({
             env: {
               ANTHROPIC_BASE_URL: origin,
-              ANTHROPIC_AUTH_TOKEN: 'sk-console-...',
               ANTHROPIC_MODEL: modelId,
               ANTHROPIC_DEFAULT_HAIKU_MODEL: modelId,
               CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: '75',
@@ -246,33 +252,41 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
               + 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE 是幾成滿才開始壓縮（0–100）；'
               + '要完全關掉自動壓縮是 DISABLE_AUTO_COMPACT=1，但那樣就得自己記得下 /compact。',
         },
+        {
+          title: '③ 金鑰',
+          lang: 'json',
+          body: JSON.stringify({
+            apiKeyHelper: win
+              ? `powershell -NoProfile -Command "Get-Content -Raw '${KEY_FILE.win}'"`
+              : `cat ${KEY_FILE.unix}`,
+          }, null, 2),
+          note: '和上面同一個檔案，放在最外層。apiKeyHelper 是 Claude Code 自己的機制：'
+              + '每次要送請求時執行這行指令，把 stdout 當成金鑰，所以金鑰不在設定檔裡。'
+              + `先把金鑰寫進 ${keyPath}（下面那格）。`
+              + '也可以直接在 env 裡加 ANTHROPIC_AUTH_TOKEN，但那樣金鑰就跟設定一起躺在檔案裡了。',
+        },
+        {
+          title: '④ 建立金鑰檔',
+          lang: sh,
+          body: writeKeyCommand(os),
+        },
       ],
-      shellCaption: '不想改設定檔就用環境變數跑一次。',
-      shell: {
-        linux: `export ANTHROPIC_BASE_URL="${origin}"
-export ANTHROPIC_AUTH_TOKEN="sk-console-..."
-export ANTHROPIC_MODEL="${modelId}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${modelId}"
-export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="75"
-claude`,
-        windows: `$env:ANTHROPIC_BASE_URL = "${origin}"
-$env:ANTHROPIC_AUTH_TOKEN = "sk-console-..."
-$env:ANTHROPIC_MODEL = "${modelId}"
-$env:ANTHROPIC_DEFAULT_HAIKU_MODEL = "${modelId}"
-$env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = "75"
-claude`,
-      },
     },
     {
       key: 'codex',
       label: 'Codex',
       group: 'agent',
-      caption: 'Linux／macOS 放 ~/.codex/config.toml，Windows 放 %USERPROFILE%\\.codex\\config.toml。'
-             + 'Codex 只講 OpenAI 協定，而且從 2026 年 2 月起只剩 Responses API（wire_api = "chat" 已移除）；'
+      caption: 'Codex 只講 OpenAI 協定，而且從 2026 年 2 月起只剩 Responses API（wire_api = "chat" 已移除）；'
              + 'llama-server 有 /v1/responses 所以能用。內建的 provider id（openai／ollama／lmstudio）不能覆寫，要取自己的名字。',
-      blocks: [
+      steps: [
         {
-          title: '~/.codex/config.toml',
+          title: '① 開啟設定檔',
+          lang: sh,
+          body: openCommand(os, '~/.codex/config.toml',
+            '$env:USERPROFILE\\.codex\\config.toml'),
+        },
+        {
+          title: '② 貼進去：模型參數',
           lang: 'ini',
           body: `model_provider = "tenks"
 model = "${modelId}"
@@ -284,35 +298,56 @@ model_auto_compact_token_limit = ${compactAt}
 [model_providers.tenks]
 name = "TenkStack"
 base_url = "${base}"
-env_key = "TENKS_KEY"
 wire_api = "responses"`,
           note: `這三個數字是重點。Codex 預設會照它自己猜的視窗跑，猜錯就一路寫到撞牆，`
               + `回覆從工具呼叫中間被切斷之後那個 session 就永久壞掉——每次重送都是同一段殘缺 JSON，伺服器一律回 500。`
               + `model_auto_compact_token_limit 讓它在 ${compactAt.toLocaleString()} 就先摘要。`
               + `另外 model_context_window 在 Codex 0.116–0.117 有過會弄壞自動壓縮的問題，那兩版請不要設。`,
         },
+        {
+          title: '③ 金鑰：接在同一個檔案後面',
+          lang: 'ini',
+          body: win
+            ? `[model_providers.tenks.auth]
+command = "cmd"
+args = ["/c", "type", "%USERPROFILE%\\\\.tenks-key"]
+refresh_interval_ms = 86400000`
+            : `[model_providers.tenks.auth]
+command = "cat"
+args = ["${keyAbs}"]
+refresh_interval_ms = 86400000`,
+          note: 'Codex 會執行這行指令，把 stdout 當成 bearer token。'
+              + '這是它自己給的動態金鑰機制，本來是給 Vault、AWS SSO 那種短期憑證用的，讀一個檔案同樣成立。'
+              + 'auth 不能和 env_key 併用，兩個都寫會被拒絕。'
+              + 'args 裡要寫絕對路徑，TOML 不會展開 ~。'
+              + `refresh_interval_ms 預設 5 分鐘，靜態金鑰設長一點免得一直重跑。`,
+        },
+        {
+          title: '④ 建立金鑰檔',
+          lang: sh,
+          body: writeKeyCommand(os),
+        },
       ],
-      shellCaption: '金鑰不寫在設定檔裡，Codex 只記變數名稱，值從環境變數讀。',
-      shell: {
-        linux: `export TENKS_KEY="sk-console-..."\ncodex`,
-        windows: `$env:TENKS_KEY = "sk-console-..."\ncodex`,
-      },
     },
     {
       key: 'grok',
       label: 'Grok Build',
       group: 'agent',
-      caption: '設定檔放 ~/.grok/config.toml（Windows 是 %USERPROFILE%\\.grok\\config.toml，'
-             + '或用 $GROK_HOME 指定）。api_backend 選 chat_completions，llama-server 這條路最穩。',
-      blocks: [
+      caption: 'api_backend 選 chat_completions，llama-server 這條路最穩。',
+      steps: [
         {
-          title: '~/.grok/config.toml',
+          title: '① 開啟設定檔',
+          lang: sh,
+          body: openCommand(os, '~/.grok/config.toml',
+            '$env:USERPROFILE\\.grok\\config.toml'),
+        },
+        {
+          title: '② 貼進去：模型參數',
           lang: 'ini',
           body: `[model.tenks-${modelId}]
 model = "${modelId}"
 base_url = "${base}"
 name = "${modelName}（本機）"
-env_key = "TENKS_KEY"
 api_backend = "chat_completions"
 context_window = ${ctx}
 max_completion_tokens = ${output}
@@ -328,24 +363,113 @@ auto_compact_threshold_percent = 75`,
               + `驗證有沒有讀到用 grok inspect；指定執行 grok -p "你好" -m tenks-${modelId}；`
               + `互動模式內用 /model tenks-${modelId} 切換。`,
         },
+        {
+          title: '③ 金鑰：加進上面那個 [model.…] 區段',
+          lang: 'ini',
+          body: `api_key = "sk-console-..."`,
+          note: 'Grok Build 的 [model.…] 同時接受 api_key（直接寫）和 env_key（讀環境變數），'
+              + '官方文件偏好後者。這裡用 api_key 是因為它不需要另外一層設定，'
+              + '代價是金鑰躺在設定檔裡——那個檔案請 chmod 600。',
+        },
       ],
-      shellCaption: '金鑰放環境變數。',
-      shell: {
-        linux: `export TENKS_KEY="sk-console-..."\ngrok`,
-        windows: `$env:TENKS_KEY = "sk-console-..."\ngrok`,
-      },
+    },
+    {
+      key: 'pi',
+      label: 'Pi Agent',
+      group: 'agent',
+      caption: 'Pi 的自訂 provider 走 ~/.pi/agent/models.json；'
+             + '另一條 pi.registerProvider() 是寫 extension 用的，接一台自架伺服器不需要走到那裡。'
+             + '這個檔案每次打開 /model 都會重讀，改完不用重開。',
+      steps: [
+        {
+          title: '① 開啟設定檔',
+          lang: sh,
+          body: openCommand(os, '~/.pi/agent/models.json',
+            '$env:USERPROFILE\\.pi\\agent\\models.json'),
+        },
+        {
+          title: '② 貼進去：模型參數',
+          lang: 'json',
+          body: JSON.stringify({
+            providers: {
+              tenks: {
+                baseUrl: base,
+                api: 'openai-completions',
+                authHeader: true,
+                compat: {
+                  supportsDeveloperRole: false,
+                  supportsReasoningEffort: false,
+                },
+                models: [
+                  {
+                    id: modelId,
+                    name: modelName,
+                    reasoning: false,
+                    input: vision ? ['text', 'image'] : ['text'],
+                    contextWindow: ctx,
+                    maxTokens: output,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          }, null, 2),
+          note: 'compat 那兩個是重點：Pi 對支援推理的模型會送 developer 角色和 reasoning_effort，'
+              + '而 llama-server 這類 OpenAI 相容伺服器不認得，官方文件點名 Ollama／vLLM／SGLang 都要關。'
+              + `contextWindow 填每個 slot 的實際視窗（目前 ${ctx.toLocaleString()}），`
+              + 'cost 全填 0，本機沒有計費但欄位要在。'
+              + '確認有沒有讀到用 pi --list-models。',
+        },
+        {
+          title: '③ 金鑰：加進 tenks 這個 provider 裡',
+          lang: 'json',
+          body: JSON.stringify({
+            apiKey: win ? '$TENKS_KEY' : `!cat ${keyPath}`,
+          }, null, 2),
+          note: win
+            ? 'Pi 的 apiKey 支援三種寫法：直接寫字面值、"$環境變數"、或 "!指令" 執行後取 stdout。'
+              + 'Windows 上 !指令 走的是同一條路，用 !powershell -NoProfile -Command "Get-Content -Raw ..." 也可以。'
+              + '另一個選擇是在 pi 裡下 /login 存起來，或啟動時帶 --api-key。'
+            : 'Pi 的 apiKey 支援三種寫法：直接寫字面值、"$環境變數"、或 "!指令" 執行後取 stdout。'
+              + `這裡用 !cat 讀 ${keyPath}，金鑰就不在設定檔裡。`
+              + 'macOS 也可以走鑰匙圈："!security find-generic-password -ws tenks"。'
+              + '另一個選擇是在 pi 裡下 /login 存起來，或啟動時帶 --api-key。',
+        },
+        {
+          title: '④ 建立金鑰檔',
+          lang: sh,
+          body: writeKeyCommand(os),
+        },
+      ],
     },
     {
       key: 'curl',
       label: 'curl',
       group: 'raw',
-      caption: '先在 shell 設好 TENKS_KEY。chat_template_kwargs 關掉思考模式——留著的話回覆會先產一段 <think>。',
-      blocks: [
+      caption: 'chat_template_kwargs 關掉思考模式——留著的話回覆會先產一段 <think>。',
+      steps: [
         {
-          title: 'Chat Completions',
-          lang: 'bash',
-          body: `curl ${base}/chat/completions \\
-  -H "Authorization: Bearer $TENKS_KEY" \\
+          title: '① 建立金鑰檔',
+          lang: sh,
+          body: writeKeyCommand(os),
+        },
+        {
+          title: '② 送一個請求',
+          lang: sh,
+          body: win
+            ? `$key = (Get-Content -Raw "${KEY_FILE.win}").Trim()
+$body = @{
+  model = "${modelId}"
+  messages = @(@{ role = "user"; content = "你好" })
+  max_tokens = ${output}
+  chat_template_kwargs = @{ enable_thinking = $false }
+} | ConvertTo-Json -Depth 5
+
+Invoke-RestMethod -Uri "${base}/chat/completions" -Method Post \`
+  -Headers @{ Authorization = "Bearer $key" } \`
+  -ContentType "application/json" -Body $body`
+            : `curl ${base}/chat/completions \\
+  -H "Authorization: Bearer $(cat ${KEY_FILE.unix})" \\
   -H "Content-Type: application/json" \\
   -d '{
     "model": "${modelId}",
@@ -361,13 +485,22 @@ auto_compact_threshold_percent = 75`,
       label: 'Python',
       group: 'raw',
       caption: '用官方 openai 套件，指向這台的 base_url 就好。',
-      blocks: [
+      steps: [
         {
-          title: 'openai',
+          title: '① 建立金鑰檔',
+          lang: sh,
+          body: writeKeyCommand(os),
+        },
+        {
+          title: '② 程式',
           lang: 'python',
-          body: `from openai import OpenAI
+          body: `from pathlib import Path
+from openai import OpenAI
 
-client = OpenAI(base_url="${base}", api_key="sk-console-...")
+client = OpenAI(
+    base_url="${base}",
+    api_key=Path.home().joinpath(".tenks-key").read_text().strip(),
+)
 
 resp = client.chat.completions.create(
     model="${modelId}",
@@ -390,6 +523,26 @@ print(resp.choices[0].message.content)`,
   return (
     <Card title="用戶端設定範例" size="small">
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        {/* The machine first, because every command below is different on each
+            one and a reader who skips this gets three boxes they cannot run.
+            Detected, and still a control: someone reading this on a laptop is
+            often setting up the desktop beside it. */}
+        <Space size={10} wrap>
+          <Text style={{ fontSize: 11, opacity: 0.4, width: 52, display: 'inline-block' }}>
+            作業系統
+          </Text>
+          <Segmented
+            size="small"
+            value={os}
+            onChange={(v) => setOs(v as Os)}
+            options={[
+              { label: 'macOS', value: 'mac' },
+              { label: 'Linux', value: 'linux' },
+              { label: 'Windows', value: 'windows' },
+            ]}
+          />
+        </Space>
+
         {/* Two rows rather than one list: an agent needs a config file and a
             compaction policy, a raw call needs neither, and putting them in one
             strip made curl look like something you configure. Only the row
@@ -415,58 +568,26 @@ print(resp.choices[0].message.content)`,
           {' '}位址與模型 id 取自這台機器目前的狀態。API key 到「使用者」頁建立，只會顯示一次。
         </Paragraph>
 
-        {active.blocks.map((block) => (
-          <div key={block.title}>
+        {active.steps.map((step) => (
+          <div key={step.title}>
             <Space size={8} style={{ marginBottom: 5 }}>
-              <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.55 }}>
-                {block.title}
-              </Text>
+              <Text style={{ fontSize: 12, opacity: 0.75 }}>{step.title}</Text>
               <Button type="text" size="small" icon={<CopyOutlined />}
-                      onClick={() => copy(block.body)}>
+                      onClick={() => copy(step.body)}>
                 複製
               </Button>
             </Space>
-            <Code body={block.body} lang={block.lang} />
-            {block.note && (
+            <Code body={step.body} lang={step.lang} />
+            {step.note && (
               <Paragraph type="secondary" style={{
                 fontSize: 11.5, margin: '6px 0 0', opacity: 0.75,
                 paddingLeft: 9, borderLeft: `1px solid ${LINE.faint}`,
               }}>
-                {block.note}
+                {step.note}
               </Paragraph>
             )}
           </div>
         ))}
-
-        {/* The command box exists because the boxes above are files and this is
-            something you type. Keeping them apart is the difference between a
-            config to paste and a command to run -- and the command is not the
-            same command on both platforms. */}
-        {active.shell && (
-          <div>
-            <Space size={10} wrap style={{ marginBottom: 5 }}>
-              <Segmented
-                size="small"
-                value={shell}
-                onChange={(v) => setShell(v as 'linux' | 'windows')}
-                options={[
-                  { label: 'Linux／macOS', value: 'linux' },
-                  { label: 'Windows PowerShell', value: 'windows' },
-                ]}
-              />
-              <Button type="text" size="small" icon={<CopyOutlined />}
-                      onClick={() => copy(active.shell![shell])}>
-                複製
-              </Button>
-            </Space>
-            {active.shellCaption && (
-              <Paragraph type="secondary" style={{ fontSize: 12, margin: '0 0 5px' }}>
-                {active.shellCaption}
-              </Paragraph>
-            )}
-            <Code body={active.shell[shell]} lang={shell === 'windows' ? 'powershell' : 'bash'} />
-          </div>
-        )}
       </Space>
     </Card>
   );
