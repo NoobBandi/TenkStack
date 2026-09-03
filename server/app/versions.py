@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from pathlib import Path
 
 import httpx
 
@@ -151,6 +152,21 @@ async def _comfyui() -> dict:
     }
 
 
+def _console() -> str:
+    """This project's version, from the file that owns it.
+
+    Read rather than repeated. There were three copies once and they had already
+    drifted -- pyproject said 0.1.0 while the backend and the frontend said
+    0.2.0 -- so each half states it once and everything else asks.
+    """
+    try:
+        import tomllib
+        with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as f:
+            return str(tomllib.load(f)["project"]["version"])
+    except Exception:
+        return ""
+
+
 async def collect() -> dict:
     """Everything installed, grouped the way it is actually arranged.
 
@@ -179,6 +195,10 @@ async def collect() -> dict:
             "swap": swap,
         },
         "comfyui": instances,
+        # The console's own, which was the one thing this list did not carry:
+        # it reported every moving part except itself, so "which version am I
+        # looking at" was the one question the version card could not answer.
+        "console": _console(),
         "system": [
             {"label": label, "value": value}
             for label, value in (

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Layout, Menu, Tooltip, Typography } from 'antd';
 import {
   ApiOutlined, AppstoreOutlined, CloudDownloadOutlined, ContainerOutlined,
@@ -5,7 +6,7 @@ import {
   PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
-import type { GpuSample, ModelInfo, SystemSample } from '../api';
+import { fetchVersions, type GpuSample, type ModelInfo, type SystemSample } from '../api';
 import { LINE, MONO } from '../theme';
 import { deviceTag } from '../hardware';
 
@@ -71,6 +72,13 @@ function Meter({ label, value, percent, warn }: {
 }
 
 export default function Sidebar({ collapsed, onCollapse, gpus, models, system }: Props) {
+  const [version, setVersion] = useState('');
+  useEffect(() => {
+    // Once. The version cannot change under a running build, so polling it
+    // would be asking a question whose answer is fixed.
+    fetchVersions().then((v) => setVersion(v.console)).catch(() => undefined);
+  }, []);
+
   const location = useLocation();
   const loaded = models.filter((m) => m.running);
   const busy = gpus.some((g) => g.busy);
@@ -204,9 +212,22 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
               />
             );
           })}
-          <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
-            {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
-          </Text>
+          <div style={{
+            display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+          }}>
+            <Text style={{ fontSize: 10, opacity: 0.45, fontFamily: MONO }}>
+              {loaded.length ? `${loaded.length} MODEL LOADED` : 'NO MODEL'}
+            </Text>
+            {/* The console reported which version of everything else was
+                installed and never its own, so the one build you are actually
+                looking at was the one you could not name. Beside the model
+                count because both answer "what am I running". */}
+            {version && (
+              <Text style={{ fontSize: 10, opacity: 0.3, fontFamily: MONO }}>
+                v{version}
+              </Text>
+            )}
+          </div>
         </div>
       )}
 

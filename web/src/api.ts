@@ -1258,6 +1258,9 @@ export async function setChannelScopes(key: string, scopes: string[]) {
 /** What is installed, shaped the way the machine is arranged rather than as a
  *  flat list: one launcher row per vendor, one ComfyUI row per instance. */
 export interface VersionReport {
+  /** This project's own version, which the report used to omit -- it named
+   *  every moving part except itself. */
+  console: string;
   inference: {
     launchers: { launcher: string; version: string; built: string }[];
     /** The build serving right now, when a model is loaded. It can differ from
