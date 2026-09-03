@@ -187,12 +187,6 @@ export default function Connections() {
           </Space>
         )}
       >
-        {host && (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
-            {host.host} ・ {host.note}
-          </Text>
-        )}
-
         {host?.tailscale && (
           <Alert
             type={host.cert_available ? 'success' : 'info'}
