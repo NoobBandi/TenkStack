@@ -13,16 +13,26 @@ DRM_CLASS = Path("/sys/class/drm")
 
 
 def render_path(address: str) -> str:
-    """The stable device path for one card's render node.
+    """The device path for one card's render node, resolved to its number.
 
-    By path rather than by number: `renderD128` is assigned in probe order, so
-    a card added later can quietly move it to another device -- and a container
-    created with the number then talks to the wrong card. Falls back to the
-    whole of `/dev/dri` where the machine has no by-path links, which gives the
-    container every node rather than the wrong one.
+    Found by path, handed over by number, and both halves are necessary.
+
+    Found by path because `renderD128` is assigned in probe order, so a card
+    added later can quietly move it to another device and looking the node up by
+    number would risk a container talking to the wrong card.
+
+    Handed over by number because docker cannot take the by-path name. `--device`
+    is parsed as `host:container:permissions`, and the link contains the PCI
+    address -- `pci-0000:10:00.0-render` -- so docker reads `00.0-render` as the
+    permission bits and refuses the flag outright. Nothing with a colon in its
+    name can be passed through. Resolving here is also when docker would have
+    resolved it, so nothing is lost by doing it a moment earlier.
+
+    Falls back to the whole of `/dev/dri` where the machine has no by-path
+    links, which gives the container every node rather than the wrong one.
     """
     node = Path(f"/dev/dri/by-path/pci-{address.lower()}-render")
-    return str(node) if node.exists() else "/dev/dri"
+    return str(node.resolve()) if node.exists() else "/dev/dri"
 
 
 def pci_for_render(node: str) -> str | None:

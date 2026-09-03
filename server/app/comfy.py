@@ -131,7 +131,7 @@ async def create(card: dict, cards: list[dict]) -> str:
 
     args = [
         "run", "-d", "--name", name, "--restart", "unless-stopped",
-        "-p", f"127.0.0.1:{target}:8188",
+        "-p", f"127.0.0.1:{port}:8188",
         *_device_flags(card, cards),
         "-v", f"{shared / 'models'}:/root/ComfyUI/models",
         "-v", f"{shared / 'hf-hub'}:/root/.cache/huggingface/hub",
@@ -273,7 +273,7 @@ async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
 
     args = [
         "run", "-d", "--name", name, "--restart", "unless-stopped",
-        "-p", f"127.0.0.1:{port}:8188",
+        "-p", f"127.0.0.1:{target}:8188",
         *devices,
         "-e", f"CLI_ARGS={cli_args}",
         "-v", f"{shared / 'models'}:/root/ComfyUI/models",
