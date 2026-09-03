@@ -238,10 +238,10 @@ async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
         raise ValueError(f"讀不到 {name} 的連接埠")
 
     target = current if port is None else int(port)
-    if target not in PORTS:
-        # Outside this range the console would not find the instance again: the
-        # probe walks these ports and nothing else knows where to look.
-        raise ValueError(f"連接埠要在 {PORTS.start}-{PORTS.stop - 1} 之間")
+    if not 1024 <= target <= 65535:
+        # Below 1024 needs privileges the console does not have, and there is
+        # nothing above 65535.
+        raise ValueError("連接埠要在 1024-65535 之間")
     if target != current:
         taken = set()
         for entry in (await containers.survey(cards))["containers"]:

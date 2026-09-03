@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Input, Popconfirm, Segmented, Select,
+  Alert, App as AntApp, Button, Card, InputNumber, Popconfirm, Segmented, Select,
   Space, Tag, Typography,
 } from 'antd';
 import {
@@ -56,6 +56,83 @@ export function joinArgs(device: number, extra: string, cardCount: number): stri
   // Newlines are how a long argument list stays readable in the box; the
   // container wants one line.
   return [generated, extra.replace(/\s+/g, ' ').trim()].filter(Boolean).join(' ');
+}
+
+/**
+ * The arguments worth offering, taken from `main.py --help` in the image that
+ * is actually running rather than from memory: it lists ninety-nine, and these
+ * are the ones that decide anything on a machine sharing its cards with an LLM.
+ *
+ * A tag select rather than a plain list, so a flag that takes a value can be
+ * edited after it is picked and a flag nobody thought to list can still be
+ * typed. `--default-device` is deliberately absent and filtered out if typed:
+ * the console writes that one from the card list, and two of them would fight.
+ */
+const ARGUMENT_GROUPS = [
+  {
+    label: '顯存',
+    options: [
+      { value: '--lowvram', label: '--lowvram　模型分段搬進顯存，省顯存但較慢' },
+      { value: '--novram', label: '--novram　lowvram 還不夠時用' },
+      { value: '--highvram', label: '--highvram　模型用完留在顯存裡，較快但佔著' },
+      { value: '--gpu-only', label: '--gpu-only　連文字編碼器都留在顯存' },
+      { value: '--reserve-vram 2', label: '--reserve-vram N　留 N GB 給別人，數字可改' },
+      { value: '--disable-smart-memory', label: '--disable-smart-memory　用完就放掉，不留快取' },
+      { value: '--cache-none', label: '--cache-none　不快取節點結果，最省記憶體' },
+    ],
+  },
+  {
+    label: '精度',
+    options: [
+      { value: '--bf16-unet', label: '--bf16-unet　擴散模型用 bf16' },
+      { value: '--fp16-vae', label: '--fp16-vae　VAE 用 fp16，可能出現全黑的圖' },
+      { value: '--fp32-vae', label: '--fp32-vae　VAE 用完整精度' },
+      { value: '--cpu-vae', label: '--cpu-vae　VAE 放 CPU 跑，換顯存' },
+      { value: '--force-fp16', label: '--force-fp16　強制 fp16' },
+      { value: '--force-fp32', label: '--force-fp32　強制 fp32' },
+    ],
+  },
+  {
+    label: '速度',
+    options: [
+      { value: '--fast', label: '--fast　開啟未充分測試的加速，可能影響畫質' },
+      { value: '--async-offload', label: '--async-offload　非同步搬運權重' },
+      { value: '--use-pytorch-cross-attention', label: '--use-pytorch-cross-attention' },
+      { value: '--use-sage-attention', label: '--use-sage-attention' },
+      { value: '--disable-mmap', label: '--disable-mmap　載入 safetensors 不用 mmap' },
+    ],
+  },
+  {
+    label: '其他',
+    options: [
+      { value: '--preview-method none', label: '--preview-method none　關掉取樣預覽' },
+      { value: '--disable-all-custom-nodes', label: '--disable-all-custom-nodes　只載本體，排錯用' },
+      { value: '--disable-api-nodes', label: '--disable-api-nodes　關掉需要外部 API 的節點' },
+    ],
+  },
+];
+
+/**
+ * Words to tags, keeping a flag and its value together.
+ *
+ * A flag followed by a word that does not itself start a flag is that flag's
+ * value. That covers the listed ones and the ninety or so that are not listed:
+ * split into separate chips, deleting the flag would leave its value behind as
+ * a bare word the container would then choke on.
+ */
+function toTags(extra: string): string[] {
+  const words = extra.split(/\s+/).filter(Boolean);
+  const tags: string[] = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const next = words[i + 1];
+    if (words[i].startsWith('-') && next && !next.startsWith('-')) {
+      tags.push(`${words[i]} ${next}`);
+      i += 1;
+    } else {
+      tags.push(words[i]);
+    }
+  }
+  return tags;
 }
 
 export default function ContainerSettings({ instance, onDone }: {
@@ -213,33 +290,48 @@ export default function ContainerSettings({ instance, onDone }: {
         <div>
           <Text style={{ fontSize: 13 }}>對外連接埠</Text>
           <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center' }}>
-            <Select
+            <InputNumber
               size="small"
-              value={port ?? undefined}
-              onChange={setPort}
+              value={port}
+              onChange={(v) => setPort(v ?? null)}
+              min={1024}
+              max={65535}
               style={{ width: 110 }}
-              options={config.ports.map((p) => ({ value: p, label: String(p) }))}
             />
             <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
               → 對外 {port === null ? '—' : 8444 + (port - 8188)}
             </Text>
           </div>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            這是容器在本機上的連接埠，對外的那個由它推算。只有這幾個號碼，
-            因為主控台就是在這個範圍裡尋找實例的。
+            這是容器在本機上的連接埠，對外的那個由它推算。
+            {port !== null && !config.ports.includes(port) && (
+              // Outside the convention the console still finds it, but only by
+              // asking docker what this container publishes -- so a container
+              // that is not running is one it cannot look up.
+              ' 這個號碼在慣例的 ' + config.ports[0] + '-'
+              + config.ports[config.ports.length - 1]
+              + ' 之外，主控台會改用容器實際發佈的埠去找，容器停掉時就找不到。'
+            )}
           </Text>
         </div>
 
         <div>
           <Text style={{ fontSize: 13 }}>額外參數</Text>
-          <Input.TextArea
-            value={extra}
-            onChange={(e) => setExtra(e.target.value)}
-            autoSize={{ minRows: 3, maxRows: 8 }}
-            placeholder={'一行一個或全部寫一行都可以，例如\n--reserve-vram 2\n--highvram'}
-            style={{ marginTop: 8, fontFamily: MONO, fontSize: 12 }}
+          <Select
+            mode="tags"
+            value={toTags(extra)}
+            onChange={(tags: string[]) => setExtra(
+              // The console writes this one from the card list; a typed copy
+              // would fight it.
+              tags.filter((t) => !t.startsWith('--default-device')).join(' '))}
+            options={ARGUMENT_GROUPS}
+            placeholder="從清單挑，或直接打字"
+            style={{ width: '100%', marginTop: 8 }}
+            optionFilterProp="label"
+            tokenSeparators={[',']}
           />
           <Text type="secondary" style={{ fontSize: 11 }}>
+            清單是這顆映像 --help 列出來的；沒列到的直接打進去也會照送。
             選哪張卡不用寫在這裡，主控台會自己加。
           </Text>
         </div>

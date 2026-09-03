@@ -1039,10 +1039,34 @@ async def _probe_comfyui(port: int) -> dict | None:
     return record
 
 
+async def _comfyui_ports() -> list[int]:
+    """Where to look for instances.
+
+    The fixed range, plus whatever the ComfyUI containers actually publish.
+    Probing only the range meant the range was the rule: an instance moved to
+    any other port existed, answered, and was invisible here -- which made the
+    port a choice between four numbers rather than a choice.
+
+    The range is still probed on its own account, because an instance started
+    outside this console -- by hand, by a script -- has no container name this
+    would recognise and the convention is the only thing pointing at it.
+    """
+    ports = set(COMFYUI_PORTS)
+    try:
+        listing = await containers._docker(
+            "ps", "--filter", f"name={comfy.PREFIX}", "--format", "{{.Ports}}")
+    except Exception:
+        listing = None
+    for line in (listing or "").splitlines():
+        for published in containers._PUBLISHED.findall(line):
+            ports.add(int(published))
+    return sorted(ports)
+
+
 @app.get("/api/comfyui/instances")
 async def read_comfyui_instances():
     """Every ComfyUI on this machine, in port order."""
-    found = await asyncio.gather(*(_probe_comfyui(p) for p in COMFYUI_PORTS))
+    found = await asyncio.gather(*(_probe_comfyui(p) for p in await _comfyui_ports()))
     return [i for i in found if i is not None]
 
 
@@ -1187,6 +1211,10 @@ async def comfyui_config(port: int = COMFYUI_PORTS[0],
         "cli_args": env.get("CLI_ARGS", ""),
         "port": upstream,
         "public_port": channels.public_port(upstream) if upstream else None,
+        # Not a list of choices any more -- the port is typed. Kept as what
+        # the console probes without being told, so the interface can say when
+        # a chosen port is outside it and will only be found while its container
+        # is running.
         "ports": list(comfy.PORTS),
         "devices": sorted(devices),
         "cards": [
