@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
   App as AntApp, Alert, Button, Card, Dropdown, Empty, Input, Modal, Progress, Segmented,
-  Space, Splitter, Table, Tag, Tooltip, Typography,
+  Space, Splitter, Table, Tag, theme, Tooltip, Typography,
 } from 'antd';
 import type { InputRef } from 'antd';
 import {
@@ -102,6 +102,7 @@ function looksVisual(entries: FsEntry[]): boolean {
 
 export default function Files() {
   const { message, modal } = AntApp.useApp();
+  const { token } = theme.useToken();
   const [roots, setRoots] = useState<FsRoot[]>([]);
   const [root, setRoot] = useState('models');
   const [path, setPath] = useState('');
@@ -751,11 +752,21 @@ export default function Files() {
             <Splitter.Panel min={280}>
               <div>
               {/* Above the table rather than in the card's header, so it lines
-                  up with 名稱 and stays lined up: the tree beside it is a
+                  up with the rows and stays lined up: the tree beside it is a
                   resizable panel, and a header padded to today's width would
-                  come apart the first time somebody dragged it. The path
-                  describes what is in this column anyway. */}
-              <div style={{ padding: '2px 8px 10px' }}>
+                  come apart the first time somebody dragged it.
+
+                  Indented to where a row's name begins, which is antd's own
+                  arithmetic rather than a number picked by eye: the selection
+                  column is `controlHeight` wide and the cell beside it carries
+                  `paddingXS`. Taken from the tokens so it follows the theme
+                  instead of drifting from it. */}
+              <div style={{
+                paddingLeft: token.controlHeight + token.paddingXS,
+                paddingRight: token.paddingXS,
+                paddingTop: 2,
+                paddingBottom: 10,
+              }}>
                 <PathBar
                   rootPath={activeRoot?.path ?? ''}
                   path={path}
