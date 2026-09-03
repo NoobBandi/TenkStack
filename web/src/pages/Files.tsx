@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
   App as AntApp, Alert, Button, Card, Dropdown, Empty, Input, Modal, Progress, Segmented,
-  Space, Splitter, Switch, Table, Tag, Tooltip, Typography,
+  Space, Splitter, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import type { InputRef } from 'antd';
 import {
@@ -108,7 +108,6 @@ export default function Files() {
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [writable, setWritable] = useState(false);
   const [free, setFree] = useState(0);
-  const [hidden, setHidden] = useState(false);
   // What is typed, and what has been asked for. Separated so that typing stays
   // responsive while the request trails it by a beat.
   const [typed, setTyped] = useState('');
@@ -157,12 +156,13 @@ export default function Files() {
   const activeRoot = roots.find((r) => r.key === root);
   const at = (name: string) => `${root}:${path}/${name}`;
 
-  const load = useCallback(async (
-    key: string, where: string, showHidden: boolean, needle: string,
-  ) => {
+  const load = useCallback(async (key: string, where: string, needle: string) => {
     setLoading(true);
     try {
-      const data = await fetchFsListing(key, where, showHidden, needle);
+      // Hidden files always. A dotfile is a file, and a switch that decides
+      // whether the listing is the truth is a switch somebody leaves in the
+      // wrong position and then wonders where their file went.
+      const data = await fetchFsListing(key, where, true, needle);
       setEntries(data.entries);
       setWritable(data.writable);
       setFree(data.free);
@@ -184,9 +184,9 @@ export default function Files() {
   // shape the disk no longer has -- and navigation must not trigger this, or
   // the tree would collapse and re-read on every step.
   const reload = useCallback(() => {
-    void load(root, path, hidden, query);
+    void load(root, path, query);
     setTreeToken((n) => n + 1);
-  }, [load, root, path, hidden, query]);
+  }, [load, root, path, query]);
 
   useEffect(() => {
     fetchFsRoots().then((d) => setRoots(d.roots)).catch(() => undefined);
@@ -208,8 +208,8 @@ export default function Files() {
     // Clearing both is the only honest option.
     setPreviewing(null);
     setSelected([]);
-    void load(root, path, hidden, query);
-  }, [root, path, hidden, query, load]);
+    void load(root, path, query);
+  }, [root, path, query, load]);
 
   // Offered where there are pictures, but never taken away once chosen: a
   // deliberate switch to the grid should survive stepping into a subfolder.
@@ -317,7 +317,7 @@ export default function Files() {
       .then(() => {
         setTransfers((prev) => prev.filter((t) => t.id !== id));
         message.success(`${file.name} 已上傳`);
-        if (which === root && where === path) void load(root, path, hidden, query);
+        if (which === root && where === path) void load(root, path, query);
       })
       .catch((error: Error) => {
         // Kept in the list rather than cleared: the bytes are still on disk as a
@@ -523,7 +523,7 @@ export default function Files() {
       )}
 
       <Card size="small" styles={{ body: { padding: 12 } }}>
-        <Space size={16} wrap style={{ width: '100%' }}>
+        <Space size={16} wrap align="start" style={{ width: '100%' }}>
           {/* Two strips, not one row of six. ComfyUI's trees are why this page
               exists and there are several of them; the machine's own
               directories are a different kind of place, and in one row they all
@@ -552,15 +552,23 @@ export default function Files() {
               );
             })}
           </Space>
-          <Text type="secondary" style={{ fontSize: 11 }}>{activeRoot?.note}</Text>
-          <Space size={6} style={{ marginLeft: 'auto' }}>
-            <Text type="secondary" style={{ fontSize: 11 }}>隱藏檔</Text>
-            <Switch size="small" checked={hidden} onChange={setHidden} />
-            <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.5, marginLeft: 10 }}>
-              磁碟可用 {bytes(free)}
-            </Text>
-          </Space>
+          <Text style={{
+            fontSize: 11, fontFamily: MONO, opacity: 0.5, marginLeft: 'auto',
+          }}>
+            磁碟可用 {bytes(free)}
+          </Text>
         </Space>
+
+        {/* The chosen place's own line, under the strips rather than beside
+            them. In the same row it was vertically centred against a two-row
+            block and read as a caption for neither of them. */}
+        {activeRoot?.note && (
+          <Text type="secondary" style={{
+            fontSize: 11, display: 'block', marginTop: 10,
+          }}>
+            {activeRoot.note}
+          </Text>
+        )}
       </Card>
 
       <Card
@@ -630,7 +638,7 @@ export default function Files() {
                 />
               </Tooltip>
             )}
-            <Button size="small" onClick={() => void load(root, path, hidden, query)}>重新整理</Button>
+            <Button size="small" onClick={() => void load(root, path, query)}>重新整理</Button>
             <Tooltip title="快捷鍵（?）">
               <Button
                 size="small" type="text" icon={<QuestionCircleOutlined />}
@@ -941,7 +949,7 @@ export default function Files() {
           path={path}
           name={editing}
           onClose={() => setEditing(null)}
-          onSaved={() => void load(root, path, hidden, query)}
+          onSaved={() => void load(root, path, query)}
         />
       )}
 
