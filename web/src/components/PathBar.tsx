@@ -82,7 +82,7 @@ export default function PathBar({
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'center', gap: 2,
+        display: 'flex', alignItems: 'center', gap: 2, width: '100%',
         fontFamily: MONO, fontSize: 12, minWidth: 0,
       }}
     >
@@ -133,10 +133,19 @@ export default function PathBar({
           </span>
         );
       })}
+      {/* At the end of the bar, not at the end of the path.
+          Right after the last segment it moved every time you changed
+          directory, and a control whose position is decided by how long the
+          current path happens to be is one you have to look for before every
+          use. Here it is in the same place always, and lines up with the right
+          edge of the column below. */}
       <Tooltip title="編輯路徑（Ctrl+L）">
         <EditOutlined
           onClick={() => onEditing(true)}
-          style={{ fontSize: 11, opacity: 0.35, marginLeft: 8, cursor: 'pointer' }}
+          style={{
+            fontSize: 11, opacity: 0.35, cursor: 'pointer',
+            marginLeft: 'auto', paddingLeft: 12, flex: 'none',
+          }}
         />
       </Tooltip>
     </div>
