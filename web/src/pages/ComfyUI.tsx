@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Dropdown, Popconfirm, Space, Switch, Tag,
-  Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Checkbox, Dropdown, Input, Modal, Popconfirm,
+  Space, Switch, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, DownOutlined, ExportOutlined,
-  ReloadOutlined, SearchOutlined, StopOutlined, SyncOutlined,
+  ReloadOutlined, SearchOutlined, SettingOutlined, StopOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import {
-  checkComfyUpdates, comfyAction, fetchComfyInstances, fetchRuntimes,
-  interruptComfy, restartComfy, setCardRole, updateComfy,
-  type ComfyInstance, type RuntimeCoverage,
+  checkComfyUpdates, comfyAction, fetchComfyConfig, fetchComfyInstances,
+  fetchRuntimes, interruptComfy, restartComfy, saveComfyConfig, setCardRole,
+  updateComfy,
+  type ComfyConfig, type ComfyInstance, type RuntimeCoverage,
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
 
@@ -212,6 +213,8 @@ function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
             </Button>
           )}
 
+          <Settings instance={instance} onDone={onChanged} />
+
           {manager && (
             <Dropdown
               disabled={updating}
@@ -264,6 +267,138 @@ function Instance({ instance, onChanged, staleAfterUpdate, onRestarted }: {
         </Space>
       </div>
     </Card>
+  );
+}
+
+/**
+ * What the container is made of, as something that can be changed.
+ *
+ * The cards are a `docker run` argument. Nothing reads them back out of
+ * ComfyUI, nothing changes them at runtime, and until now the only way to move
+ * one was to delete the instance and make another -- which is also how you lose
+ * a settings profile somebody spent an evening on. Changing them here replaces
+ * the container and keeps everything else: the name, the port, the directories,
+ * and the site block in front of it.
+ *
+ * The note about one card is not a disclaimer, it is the thing worth knowing
+ * before spending twenty minutes on this. Two render nodes make two XPUs
+ * visible to torch; ComfyUI still runs its graph on one of them. Splitting a
+ * model across cards is a MultiGPU-style custom node's job -- it decides where
+ * the UNet goes and where the text encoder goes -- and passing both cards in is
+ * the prerequisite for that rather than a substitute for it.
+ */
+function Settings({ instance, onDone }: { instance: ComfyInstance; onDone: () => void }) {
+  const { message } = AntApp.useApp();
+  const [open, setOpen] = useState(false);
+  const [config, setConfig] = useState<ComfyConfig | null>(null);
+  const [chosen, setChosen] = useState<string[]>([]);
+  const [args, setArgs] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    setOpen(true);
+    setConfig(null);
+    try {
+      const found = await fetchComfyConfig(instance.port);
+      setConfig(found);
+      setChosen(found.cards.filter((c) => c.held)
+        .map((c) => c.pci_bdf_address ?? '').filter(Boolean));
+      setArgs(found.cli_args);
+    } catch (error) {
+      message.error((error as Error).message);
+      setOpen(false);
+    }
+  };
+
+  const save = async () => {
+    if (!config) return;
+    setSaving(true);
+    try {
+      await saveComfyConfig(config.name, chosen, args);
+      message.success('容器已重建');
+      setOpen(false);
+      onDone();
+    } catch (error) {
+      message.error(`重建失敗：${(error as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const changed = config !== null && (
+    args !== config.cli_args
+    || chosen.length !== config.cards.filter((c) => c.held).length
+    || chosen.some((a) => !config.cards.find((c) => c.pci_bdf_address === a)?.held)
+  );
+
+  return (
+    <>
+      <Button size="small" icon={<SettingOutlined />} onClick={() => void load()}>
+        容器設定
+      </Button>
+      <Modal
+        open={open}
+        title="容器設定"
+        onCancel={() => setOpen(false)}
+        onOk={() => void save()}
+        okText="重建容器"
+        cancelText="取消"
+        okButtonProps={{ loading: saving, disabled: !changed || !chosen.length }}
+        destroyOnHidden
+      >
+        {config && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Text style={{ fontSize: 13 }}>這個容器可以用哪幾張卡</Text>
+              <div style={{ marginTop: 8 }}>
+                <Checkbox.Group
+                  value={chosen}
+                  onChange={(v) => setChosen(v as string[])}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+                  options={config.cards.map((card, i) => ({
+                    value: card.pci_bdf_address ?? '',
+                    label: (
+                      <Space size={8}>
+                        <Text style={{ fontSize: 13 }}>卡 {i}</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>{card.name}</Text>
+                      </Space>
+                    ),
+                  }))}
+                />
+              </div>
+              <Alert
+                style={{ marginTop: 10 }}
+                type="info"
+                message={
+                  <Text style={{ fontSize: 12 }}>
+                    ComfyUI 一次只會在一張卡上算圖。給它兩張是為了讓
+                    MultiGPU 類的節點能把模型的不同部分放到另一張卡上——
+                    那個節點還沒安裝，可以在 ComfyUI Manager 裡裝。
+                  </Text>
+                }
+              />
+            </div>
+
+            <div>
+              <Text style={{ fontSize: 13 }}>啟動參數</Text>
+              <Input
+                value={args}
+                onChange={(e) => setArgs(e.target.value)}
+                placeholder="例如 --oneapi-device-selector level_zero:1"
+                style={{ marginTop: 8, fontFamily: MONO, fontSize: 12 }}
+              />
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                原樣傳給 ComfyUI 的 CLI_ARGS。留空就是預設。
+              </Text>
+            </div>
+
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              按下重建會換掉容器本身。連接埠、輸出目錄、設定檔與登入入口都不變。
+            </Text>
+          </Space>
+        )}
+      </Modal>
+    </>
   );
 }
 

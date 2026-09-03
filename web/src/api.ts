@@ -672,6 +672,28 @@ export interface ComfyHistoryItem {
   images: { filename: string; subfolder: string; type: string }[];
 }
 
+/** One instance's container, as something editable. The cards it holds are a
+ *  `docker run` argument and nothing reads them back out of ComfyUI, so this is
+ *  the only place the current answer exists. */
+export interface ComfyConfig {
+  name: string;
+  cli_args: string;
+  devices: string[];
+  cards: {
+    pci_bdf_address: string | null;
+    name: string | null;
+    vendor: string;
+    held: boolean;
+  }[];
+}
+
+export const fetchComfyConfig = (port: number) =>
+  get<ComfyConfig>(`/comfyui/config?port=${port}`);
+
+export const saveComfyConfig = (
+  name: string, addresses: string[], cli_args: string,
+) => send<{ ok: boolean }>('/comfyui/config', 'POST', { name, addresses, cli_args });
+
 export const fetchComfyInstances = () => get<ComfyInstance[]>('/comfyui/instances');
 export const fetchComfyHistory = (port: number) =>
   get<ComfyHistoryItem[]>(`/comfyui/history?port=${port}&limit=12`);

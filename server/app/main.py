@@ -1136,6 +1136,82 @@ async def comfyui_update(port: int = COMFYUI_PORTS[0], core: bool = True, nodes:
     return {"ok": True}
 
 
+@app.get("/api/comfyui/config")
+async def comfyui_config(port: int = COMFYUI_PORTS[0],
+                         _: dict = Depends(auth.require_owner)):
+    """What one instance's container is made of, as something editable.
+
+    The cards a container holds are a `docker run` argument and nothing reads
+    them back out of ComfyUI, so this is the only place the current answer
+    exists. Every card in the machine is listed, not only the held ones, because
+    the question being asked is which ones it *should* have.
+    """
+    cards = await gpu.list_devices()
+    held = await containers.by_card(cards)
+    name = None
+    for key, boxes in held.items():
+        for box in boxes:
+            if box["name"].startswith(f"{comfy.PREFIX}-") and f":{port}" in (box.get("ports") or ""):
+                name = box["name"]
+    if name is None:
+        # Fall back to the port convention, since a container that publishes on
+        # a non-default interface would not match above.
+        names = [n for n in await containers.names() if n.startswith(f"{comfy.PREFIX}-")]
+        name = names[0] if len(names) == 1 else None
+    if name is None:
+        raise HTTPException(status_code=404, detail="找不到對應的 ComfyUI 容器")
+
+    detail = await containers._inspect([name])
+    info = detail.get(name) or {}
+    devices = {
+        str(entry.get("PathOnHost") or "")
+        for entry in ((info.get("HostConfig") or {}).get("Devices") or [])
+    }
+    env = dict(
+        item.split("=", 1) for item in ((info.get("Config") or {}).get("Env") or [])
+        if "=" in item
+    )
+    claimed = set()
+    for key, boxes in held.items():
+        if any(box["name"] == name for box in boxes):
+            claimed.add(key)
+
+    return {
+        "name": name,
+        "cli_args": env.get("CLI_ARGS", ""),
+        "devices": sorted(devices),
+        "cards": [
+            {
+                "pci_bdf_address": card.get("pci_bdf_address"),
+                "name": card.get("name"),
+                "vendor": card.get("vendor"),
+                "held": containers.bus_key(card.get("pci_bdf_address") or "") in claimed,
+            }
+            for card in cards
+        ],
+    }
+
+
+@app.post("/api/comfyui/config")
+async def comfyui_reconfigure(payload: dict = Body(...),
+                              _: dict = Depends(auth.require_owner)):
+    """Rebuild one instance with a different set of cards."""
+    name = str(payload.get("name") or "")
+    wanted = {str(a) for a in (payload.get("addresses") or [])}
+    cards = await gpu.list_devices()
+    keys = {containers.bus_key(a) for a in wanted if a}
+    chosen = [c for c in cards
+              if c.get("pci_bdf_address")
+              and containers.bus_key(c["pci_bdf_address"]) in keys]
+    if not chosen:
+        raise HTTPException(status_code=400, detail="至少要選一張卡")
+    try:
+        await comfy.reconfigure(name, chosen, cards, str(payload.get("cli_args") or ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @app.post("/api/comfyui/restart")
 async def comfyui_restart(port: int = COMFYUI_PORTS[0]):
     """Restart ComfyUI so an update takes effect.

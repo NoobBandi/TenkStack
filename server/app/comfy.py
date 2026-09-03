@@ -159,6 +159,81 @@ async def create(card: dict, cards: list[dict]) -> str:
     return name
 
 
+async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
+                      cli_args: str = "") -> None:
+    """Rebuild one instance with a different set of cards.
+
+    A container is bound to its cards at `docker run` and to nothing afterwards,
+    so changing which cards it has means replacing the container. Everything
+    else is kept: the same name, the same published port, the same directories,
+    and the site block in front of it -- the instance the user opens is the same
+    instance, with different hardware behind it.
+
+    The volumes are not read back off the old container; they are derived from
+    the slot exactly as `create` derives them. Reading them back would preserve
+    a mistake as faithfully as a choice.
+
+    Note what this does and does not buy. Two render nodes make two XPUs visible
+    to torch, and ComfyUI still runs its graph on one of them: splitting a model
+    across cards is the job of a MultiGPU-style custom node, which decides where
+    each component goes. Passing both cards in is the prerequisite for that, not
+    a substitute for it.
+    """
+    if not chosen:
+        raise ValueError("至少要指定一張卡")
+
+    detail = await containers._inspect([name])
+    info = detail.get(name)
+    if not info:
+        raise ValueError(f"沒有這個容器：{name}")
+
+    image = (info.get("Config") or {}).get("Image")
+    if not image:
+        raise ValueError(f"讀不到 {name} 的映像名稱")
+
+    port = None
+    bindings = (info.get("HostConfig") or {}).get("PortBindings") or {}
+    for published in bindings.values():
+        for entry in published or []:
+            with contextlib.suppress(TypeError, ValueError):
+                port = int(entry.get("HostPort"))
+    if port is None:
+        raise ValueError(f"讀不到 {name} 的連接埠")
+
+    slot = name[len(PREFIX) + 1:] if name.startswith(f"{PREFIX}-") else name
+    root = paths.COMFY_DIR
+    shared = root / "storage-models"
+    user = root / "storage-user"
+
+    # Kept published: the site block points at this port and the port is coming
+    # back. Tearing it down and writing it again would restart Caddy for no
+    # change.
+    await destroy(name, delete_image=False, unpublish=False)
+
+    devices: list[str] = []
+    for card in chosen:
+        devices.extend(_device_flags(card, cards))
+
+    args = [
+        "run", "-d", "--name", name, "--restart", "unless-stopped",
+        "-p", f"127.0.0.1:{port}:8188",
+        *devices,
+        "-e", f"CLI_ARGS={cli_args}",
+        "-v", f"{shared / 'models'}:/root/ComfyUI/models",
+        "-v", f"{shared / 'hf-hub'}:/root/.cache/huggingface/hub",
+        "-v", f"{shared / 'torch-hub'}:/root/.cache/torch/hub",
+        "-v", f"{user / 'input'}:/root/ComfyUI/input",
+        "-v", f"{user / f'output-{slot}'}:/root/ComfyUI/output",
+        "-v", f"{user / 'user-profile'}:/root/ComfyUI/user",
+        "-v", f"{user / 'user-scripts'}:/root/user-scripts",
+        "-v", f"{root / f'storage-{slot}'}:/root",
+        image,
+    ]
+    if await containers._docker(*args) is None:
+        raise ValueError(f"無法重建 {name}，詳細原因在主控台的日誌裡")
+    logger.info("rebuilt %s on %d card(s), CLI_ARGS=%r", name, len(chosen), cli_args)
+
+
 async def state(card: dict, cards: list[dict], boxes: list[dict]) -> dict:
     """What the image side of one card's row needs to say.
 
