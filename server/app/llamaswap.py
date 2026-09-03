@@ -20,11 +20,11 @@ from typing import AsyncIterator
 
 import httpx
 from httpx_sse import aconnect_sse
-from . import paths
+from . import paths, ports
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "http://127.0.0.1:8080"
+BASE_URL = f"http://127.0.0.1:{ports.LLAMA_SWAP}"
 CONFIG_PATH = str(paths.LLAMA_SWAP_CONFIG)
 
 # llama-server prints its own timings to stderr, which llama-swap forwards as

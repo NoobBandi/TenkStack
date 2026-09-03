@@ -299,7 +299,8 @@ export default function ContainerSettings({ instance, onDone }: {
               style={{ width: 110 }}
             />
             <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-              → 對外 {port === null ? '—' : 8444 + (port - 8188)}
+              → 對外 {port === config.port ? (config.public_port ?? '—')
+                : '重建後決定'}
             </Text>
           </div>
           <Text type="secondary" style={{ fontSize: 11 }}>

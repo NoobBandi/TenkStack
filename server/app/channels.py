@@ -36,7 +36,7 @@ import shutil
 import socket
 import subprocess
 from pathlib import Path
-from . import paths
+from . import paths, ports
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +52,14 @@ LOOPBACK = "127.0.0.1"
 _META = {
     "api-http": {
         "label": "API（純 HTTP）",
-        "port": 8000,
+        "port": ports.API,
         "encrypted": False,
         "note": "給不方便信任自簽憑證的用戶端，例如 Opencode。只開放 /v1，"
                 "API key 在區網上是明文傳送。",
     },
     "comfyui": {
         "label": "ComfyUI",
-        "port": 8444,
+        "port": ports.COMFYUI_PUBLIC_FIRST,
         "encrypted": True,
         "note": "圖像生成介面，經主控台登入驗證後才放行。",
     },
@@ -325,8 +325,8 @@ async def set_scopes(name: str, scopes: list[str]):
 # --------------------------------------------------------------------------
 
 COMFYUI_CHANNEL = "comfyui.caddy"
-UPSTREAM_BASE = 8188
-PUBLIC_BASE = 8444
+UPSTREAM_BASE = ports.COMFYUI_FIRST
+PUBLIC_BASE = ports.COMFYUI_PUBLIC_FIRST
 
 _SITE = re.compile(
     r"\n#[^\n]*\n(?:https://[^\n]*\n)*[^\n]*\{\n\timport comfyui-channel (\d+)\n\}\n"

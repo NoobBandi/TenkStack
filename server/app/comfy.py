@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import channels, containers, paths, vendors
+from . import channels, containers, paths, ports, vendors
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,12 @@ def _images() -> dict[str, dict]:
 
 # Where the console probes for instances, and therefore where a new one has to
 # land to be seen at all.
-PORTS = range(8188, 8192)
+PORTS = ports.COMFYUI_PORTS
+
+# What ComfyUI listens on inside the container. A property of the image rather
+# than of this machine, which is why it is not in `ports` with the rest: moving
+# it would mean a different image, not a different setup.
+_INSIDE = 8188
 
 # The prefix every instance's name carries, so the log reader and the container
 # survey find it without being told.
@@ -131,7 +136,7 @@ async def create(card: dict, cards: list[dict]) -> str:
 
     args = [
         "run", "-d", "--name", name, "--restart", "unless-stopped",
-        "-p", f"127.0.0.1:{port}:8188",
+        "-p", f"127.0.0.1:{port}:{_INSIDE}",
         *_device_flags(card, cards),
         "-v", f"{shared / 'models'}:/root/ComfyUI/models",
         "-v", f"{shared / 'hf-hub'}:/root/.cache/huggingface/hub",
@@ -273,7 +278,7 @@ async def reconfigure(name: str, chosen: list[dict], cards: list[dict],
 
     args = [
         "run", "-d", "--name", name, "--restart", "unless-stopped",
-        "-p", f"127.0.0.1:{target}:8188",
+        "-p", f"127.0.0.1:{target}:{_INSIDE}",
         *devices,
         "-e", f"CLI_ARGS={cli_args}",
         "-v", f"{shared / 'models'}:/root/ComfyUI/models",

@@ -16,7 +16,7 @@ import re
 
 import httpx
 
-from . import gpu, llamaswap
+from . import gpu, llamaswap, ports
 from . import paths
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ ONEAPI_DIR = paths.ONEAPI_DIR
 # Where ComfyUI might be, rather than where it is. One instance per card means
 # the port that answers is whichever instances are up, and asking a fixed one
 # reported every version as unknown the moment that card was switched off.
-COMFYUI_PORTS = range(8188, 8192)
+COMFYUI_PORTS = ports.COMFYUI_PORTS
 
 
 async def _run(*args: str, timeout: float = 5.0) -> str | None:

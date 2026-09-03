@@ -32,7 +32,7 @@ from . import (
     activity,
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
     blobs, gguf, gpu, gpu_history, images, llamaswap, logs as journal, paths,
-    search, settings, speed, system, users, versions,
+    search, settings, speed, system, users, versions, ports,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -52,9 +52,9 @@ logger = logging.getLogger(__name__)
 # directions: an instance listed but not running, or running but not listed. So
 # the ports are probed, and each instance self-describes -- /system_stats
 # reports the device it was launched against.
-COMFYUI_PORTS = tuple(range(8188, 8192))
+COMFYUI_PORTS = ports.COMFYUI_PORTS
 # Caddy republishes each one behind the console's login: 8188 on 8444, and so on.
-COMFYUI_PUBLIC_OFFSET = 8444 - 8188
+COMFYUI_PUBLIC_OFFSET = ports.COMFYUI_PUBLIC_FIRST - ports.COMFYUI_FIRST
 GPU_POLL_SECONDS = 2.0
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 
@@ -2207,7 +2207,7 @@ _ENDPOINTS = [
         "key": "console",
         "label": "主控台",
         "scheme": "https",
-        "port": 8443,
+        "port": ports.CONSOLE_TLS,
         "path": "/",
         "note": "瀏覽器使用。憑證由本地 CA 簽發，首次連線需接受警告。",
         "encrypted": True,
@@ -2216,7 +2216,7 @@ _ENDPOINTS = [
         "key": "api-http",
         "label": "API（純 HTTP）",
         "scheme": "http",
-        "port": 8000,
+        "port": ports.API,
         "path": "/v1",
         "note": "給不方便處理自簽憑證的用戶端，例如 Opencode。只開放 /v1，"
                 "OpenAI 與 Anthropic 兩種格式都收，API key 在區網上是明文。",
@@ -2226,7 +2226,7 @@ _ENDPOINTS = [
         "key": "api-https",
         "label": "API（加密）",
         "scheme": "https",
-        "port": 8443,
+        "port": ports.CONSOLE_TLS,
         "path": "/v1",
         "note": "同一組端點但走 TLS：/v1/chat/completions 是 OpenAI 格式，"
                 "/v1/messages 是 Anthropic 格式。用戶端需信任本地 CA。",
@@ -2236,7 +2236,7 @@ _ENDPOINTS = [
         "key": "comfyui",
         "label": "ComfyUI",
         "scheme": "https",
-        "port": 8444,
+        "port": ports.COMFYUI_PUBLIC_FIRST,
         "path": "/",
         "note": "圖像生成的原生介面，由主控台的登入保護。",
         "encrypted": True,
