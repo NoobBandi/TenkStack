@@ -61,11 +61,14 @@ const flagOf = (field: string) => field.replace(/_/g, '-');
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
 /** How many cards this entry is for. Read off the stored list when a model is
- *  opened, and set by hand when one is written. */
-type CardMode = 'auto' | 'single' | 'multi';
+ *  opened, and set by hand when one is written. An entry with no card
+ *  pinned reads as single: that is what it behaves like, and leaving the
+ *  select empty is still how "let llama-server choose" gets written --
+ *  a third segment for it was only a second spelling of the same state. */
+type CardMode = 'single' | 'multi';
 
 const modeOf = (device: string[] | undefined): CardMode =>
-  !device?.length ? 'auto' : device.length === 1 ? 'single' : 'multi';
+  (device?.length ?? 0) > 1 ? 'multi' : 'single';
 
 /** Basename first, then which repo it came from -- which is the only thing
  *  separating two files that are otherwise identically named. */
@@ -161,7 +164,7 @@ export default function Models() {
    * configured, with nobody having to remember to switch it on.
    */
   const [devices, setDevices] = useState<BackendDevice[]>([]);
-  const [cardMode, setCardMode] = useState<CardMode>('auto');
+  const [cardMode, setCardMode] = useState<CardMode>('single');
 
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
@@ -823,9 +826,7 @@ export default function Models() {
               // about directly.
               extra={cardMode === 'multi'
                 ? '模型會分攤到選到的卡上。預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但只支援部分模型架構、必須開 flash attention，和推測解碼併用也有已知問題。要試就在額外參數寫 --split-mode tensor。'
-                : cardMode === 'single'
-                  ? '整個模型放進一張卡。放不下就會失敗，不會自動溢出到另一張。'
-                  : '不指定，由 llama-server 自己決定用哪些看得到的卡。'}
+                : '整個模型放進一張卡，放不下就會失敗，不會自動溢出到另一張。不選就是不指定，由 llama-server 自己挑。'}
             >
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Segmented
@@ -836,34 +837,30 @@ export default function Models() {
                     setCardMode(next);
                     const held: string[] = form.getFieldValue('device') ?? [];
                     form.setFieldValue('device',
-                      next === 'auto' ? []
-                        : next === 'single' ? held.slice(0, 1)
-                          : held.length > 1 ? held
-                            : devices.map((d) => `${d.backend}:${d.index}`));
+                      next === 'single' ? held.slice(0, 1)
+                        : held.length > 1 ? held
+                          : devices.map((d) => `${d.backend}:${d.index}`));
                   }}
                   options={[
-                    { value: 'auto', label: '自動' },
                     { value: 'single', label: '單卡' },
                     { value: 'multi', label: `${devices.length} 張卡` },
                   ]}
                 />
-                {cardMode !== 'auto' && (
-                  <Form.Item name="device" noStyle>
-                    {/* Multiple in both modes, because the stored value is a
-                        list either way; the segment above is what stops a second
-                        chip going in. */}
-                    <Select
-                      mode="multiple"
-                      allowClear
-                      placeholder={cardMode === 'single' ? '選一張' : '選要用的卡'}
-                      maxCount={cardMode === 'single' ? 1 : undefined}
-                      options={devices.map((d) => ({
-                        value: `${d.backend}:${d.index}`,
-                        label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
-                      }))}
-                    />
-                  </Form.Item>
-                )}
+                <Form.Item name="device" noStyle>
+                  {/* Multiple in both modes, because the stored value is a
+                      list either way; the segment above is what stops a second
+                      chip going in. */}
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    placeholder={cardMode === 'single' ? '選一張' : '選要用的卡'}
+                    maxCount={cardMode === 'single' ? 1 : undefined}
+                    options={devices.map((d) => ({
+                      value: `${d.backend}:${d.index}`,
+                      label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
+                    }))}
+                  />
+                </Form.Item>
               </Space>
             </Form.Item>
           )}
