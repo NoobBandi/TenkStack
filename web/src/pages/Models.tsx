@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
-  InputNumber, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
+  InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined, PoweroffOutlined,
@@ -59,16 +59,6 @@ const SAMPLING: { field: string; hint: string; step: number }[] = [
 const flagOf = (field: string) => field.replace(/_/g, '-');
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
-
-/** How many cards this entry is for. Read off the stored list when a model is
- *  opened, and set by hand when one is written. An entry with no card
- *  pinned reads as single: that is what it behaves like, and leaving the
- *  select empty is still how "let llama-server choose" gets written --
- *  a third segment for it was only a second spelling of the same state. */
-type CardMode = 'single' | 'multi';
-
-const modeOf = (device: string[] | undefined): CardMode =>
-  (device?.length ?? 0) > 1 ? 'multi' : 'single';
 
 /** Basename first, then which repo it came from -- which is the only thing
  *  separating two files that are otherwise identically named. */
@@ -164,7 +154,6 @@ export default function Models() {
    * configured, with nobody having to remember to switch it on.
    */
   const [devices, setDevices] = useState<BackendDevice[]>([]);
-  const [cardMode, setCardMode] = useState<CardMode>('single');
 
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
@@ -236,7 +225,6 @@ export default function Models() {
     try {
       const spec = await fetchModelSpec(id);
       const device = deviceOf(spec.env);
-      setCardMode(modeOf(device));
       form.setFieldsValue({ ...spec, device });
       setEditing(id);
       setOpen(true);
@@ -372,7 +360,6 @@ export default function Models() {
             <Button size="small" type="primary" icon={<PlusOutlined />}
                     onClick={() => {
                       form.setFieldsValue(EMPTY);
-                      setCardMode(modeOf(EMPTY.device as string[]));
                       setEditing(null);
                       setOpen(true);
                     }}>
@@ -819,49 +806,23 @@ export default function Models() {
           {devices.length > 1 && (
             <Form.Item
               label="顯示卡"
-              // Two questions, and only one was being asked. A multi-select
-              // answers "which cards" and leaves "how many" to be read off how
-              // many chips ended up in it -- so a model meant for one card and a
-              // model meant for several differed by a detail nobody was asked
-              // about directly.
-              extra={cardMode === 'multi'
-                ? '模型會分攤到選到的卡上。預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但只支援部分模型架構、必須開 flash attention，和推測解碼併用也有已知問題。要試就在額外參數寫 --split-mode tensor。'
-                : '整個模型放進一張卡，放不下就會失敗，不會自動溢出到另一張。不選就是不指定，由 llama-server 自己挑。'}
+              // How many cards is not a separate question: it is however many are
+              // picked here. A segmented control asking it first was a second place
+              // for the same answer to live, and one that could disagree with the
+              // list right underneath it.
+              extra="選到的卡就是這個模型會用到的卡，不選就是不指定、由 llama-server 自己挑。選一張以上時模型會分攤過去，預設 --split-mode layer（按層切）；另一種 tensor（按張量切）在部分機器上比較快，但只支援部分模型架構、必須開 flash attention，和推測解碼併用也有已知問題，要試就在額外參數寫 --split-mode tensor。"
             >
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Segmented
-                  size="small"
-                  value={cardMode}
-                  onChange={(v: string | number) => {
-                    const next = v as CardMode;
-                    setCardMode(next);
-                    const held: string[] = form.getFieldValue('device') ?? [];
-                    form.setFieldValue('device',
-                      next === 'single' ? held.slice(0, 1)
-                        : held.length > 1 ? held
-                          : devices.map((d) => `${d.backend}:${d.index}`));
-                  }}
-                  options={[
-                    { value: 'single', label: '單卡' },
-                    { value: 'multi', label: '多張卡' },
-                  ]}
+              <Form.Item name="device" noStyle>
+                <Select
+                  mode="multiple"
+                  allowClear
+                  placeholder="選要用的卡"
+                  options={devices.map((d) => ({
+                    value: `${d.backend}:${d.index}`,
+                    label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
+                  }))}
                 />
-                <Form.Item name="device" noStyle>
-                  {/* Multiple in both modes, because the stored value is a
-                      list either way; the segment above is what stops a second
-                      chip going in. */}
-                  <Select
-                    mode="multiple"
-                    allowClear
-                    placeholder={cardMode === 'single' ? '選一張' : '選要用的卡'}
-                    maxCount={cardMode === 'single' ? 1 : undefined}
-                    options={devices.map((d) => ({
-                      value: `${d.backend}:${d.index}`,
-                      label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
-                    }))}
-                  />
-                </Form.Item>
-              </Space>
+              </Form.Item>
             </Form.Item>
           )}
           <Form.Item name="group" label="群組"
