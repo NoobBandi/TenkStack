@@ -5,7 +5,7 @@ import {
 } from 'antd';
 import { DownOutlined, ReloadOutlined } from '@ant-design/icons';
 import {
-  comfyAction, controlContainer, fetchRuntime, fetchRuntimes, runtimeAction,
+  controlContainer, fetchRuntime, fetchRuntimes, runtimeAction,
   setCardRole,
   type RuntimeAction, type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
 } from '../api';
@@ -111,27 +111,14 @@ export default function Runtime() {
 
   const orphans = survey?.containers.filter((c) => c.orphaned) ?? [];
 
-  const setRole = async (
-    row: RuntimeCoverage, capability: 'llm' | 'images', on: boolean,
-  ) => {
-    setBusy(capability === 'llm' ? row.vendor : row.pci_bdf_address);
+  // Models only. The images half of this call is the ComfyUI page's, and a
+  // card's llm role belongs to a backend rather than to the card -- which is
+  // why the busy marker is keyed on the vendor: two cards of one make can only
+  // have the runtime installed or not, together.
+  const setRole = async (row: RuntimeCoverage, on: boolean) => {
+    setBusy(row.vendor);
     try {
-      await setCardRole(row.pci_bdf_address ?? '', capability, on);
-      load();
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const onComfy = async (
-    row: RuntimeCoverage, action: 'update' | 'remove', deleteImage = false,
-  ) => {
-    if (!row.comfy.container) return;
-    setBusy(row.pci_bdf_address);
-    try {
-      await comfyAction(row.comfy.container, action, deleteImage);
+      await setCardRole(row.pci_bdf_address ?? '', 'llm', on);
       load();
     } catch (error) {
       message.error((error as Error).message);
@@ -159,12 +146,19 @@ export default function Runtime() {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {/* What each card is for.
           
-          One row per card, two switches, because that is the decision anyone
-          actually makes about a machine with more than one GPU: this one
-          serves models, that one draws images, the big one does both. Neither
-          switch is a stored preference -- both read the machine, and flipping
-          one changes the machine rather than a record of intent. */}
-      <Card title="顯示卡用途" size="small" loading={cards.length === 0}>
+          One row per card and one switch: does this card serve models. That is
+          a setup decision rather than a daily one -- turning it on is a
+          multi-gigabyte pull the first time -- and it is not a stored
+          preference: the switch reads the machine, and flipping it changes the
+          machine rather than a record of intent.
+      
+          Drawing images used to be a second switch beside it. It belongs to
+          the ComfyUI page, which decides the same thing with everything that
+          actually goes into it: which cards, which port, which arguments. */}
+      <Card title="推論執行環境" size="small" loading={cards.length === 0}
+            extra={<Text type="secondary" style={{ fontSize: 12 }}>
+              每張卡要不要能跑模型。第一次開啟會下載映像，通常只設定一次。
+            </Text>}>
         <Table<RuntimeCoverage>
           dataSource={cards}
           rowKey={(row) => row.pci_bdf_address ?? row.name ?? row.vendor}
@@ -173,10 +167,10 @@ export default function Runtime() {
           columns={[
             {
               // The one column without a width, so the spare space collects
-              // here. Everything to its right is fixed and right-aligned, so
-              // the two switches and the menu read as one group at the edge
-              // rather than as three things adrift at different distances.
-              title: '顯示卡',
+                // here. Everything to its right is fixed and right-aligned, so
+                // the switch and the menu read as one group at the edge rather
+                // than as two things adrift at different distances.
+                title: '顯示卡',
               render: (_, row) => (
                 <Space size={6}>
                   <span>{row.name ?? row.pci_bdf_address}</span>
@@ -223,7 +217,7 @@ export default function Runtime() {
                     checked={row.llm}
                     loading={busy === row.vendor}
                     disabled={!row.runtime && !row.llm}
-                    onChange={needsPull ? undefined : (on) => setRole(row, 'llm', on)}
+                    onChange={needsPull ? undefined : (on) => setRole(row, on)}
                     onClick={needsPull ? () => undefined : undefined}
                   />
                 );
@@ -247,7 +241,7 @@ export default function Runtime() {
                         </>}
                         okText="下載並啟用"
                         cancelText="取消"
-                        onConfirm={() => setRole(row, 'llm', true)}
+                        onConfirm={() => setRole(row, true)}
                       >
                         {control}
                       </Popconfirm>
@@ -257,90 +251,17 @@ export default function Runtime() {
               },
             },
             {
-              title: '跑 ComfyUI', width: 240, align: 'right' as const,
-              render: (_, row) => {
-                const job = row.comfy.job;
-                if (job && ['pulling', 'starting'].includes(job.state)) {
-                  return (
-                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {job.state === 'starting'
-                          ? (job.action === 'update' ? '重建實例…' : '建立實例…')
-                          : '下載映像…'}
-                      </Text>
-                      <Progress size="small" status="active"
-                                percent={job.layers_total
-                                  ? Math.round((job.layers_done / job.layers_total) * 100) : 0} />
-                    </Space>
-                  );
-                }
-                if (job?.state === 'error') {
-                  return (
-                    <Tooltip title={job.message}>
-                      <Tag color="error">{job.action === 'update' ? '更新失敗' : '建立失敗'}</Tag>
-                    </Tooltip>
-                  );
-                }
-                const none = row.containers.length === 0;
-                const template = row.comfy.template;
-                const control = (
-                  <Switch
-                    size="small"
-                    checked={row.images}
-                    disabled={none && !template}
-                    loading={busy === row.pci_bdf_address}
-                    onChange={none ? undefined : (on) => setRole(row, 'images', on)}
-                  />
-                );
-                return (
-                  <Space size={8}>
-                    <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO,
-                                                    whiteSpace: 'nowrap' }}>
-                      {none
-                        ? (template ? '尚未建立' : '—')
-                        : `${row.containers.map((c) => c.name).join('、')}${
-                            row.comfy.image_size ? ` · ${row.comfy.image_size}` : ''}`}
-                    </Text>
-                    {/* Nothing on this card yet, so On is a build: a new
-                        container, its own output directory, and a download in
-                        the tens of gigabytes. Asks first, and names it. */}
-                    {none && template ? (
-                      <Popconfirm
-                        title="要在這張卡上建立 ComfyUI 嗎？"
-                        description={<>
-                          {template.image}<br />
-                          會下載映像（十幾 GB）並建立 comfyui-{row.comfy.slot}，
-                          模型目錄與現有實例共用。
-                          {!template.verified && <><br />這份設定沒有在這台機器上驗證過。</>}
-                        </>}
-                        okText="建立" cancelText="取消"
-                        onConfirm={() => setRole(row, 'images', true)}
-                      >
-                        {control}
-                      </Popconfirm>
-                    ) : (
-                      <Tooltip title={none && !template ? '沒有這家廠商的 ComfyUI 映像範本' : undefined}>
-                        {control}
-                      </Tooltip>
-                    )}
-                  </Space>
-                );
-              },
-            },
-            {
               title: '', width: 96, align: 'right' as const,
               render: (_, row) => {
                 const state = row.state;
-                const comfy = row.comfy;
                 const used = state?.used_by ?? [];
                 const short = state?.image?.split('/').pop() ?? '映像';
-                const comfyShort = comfy.image?.split('/').pop() ?? '映像';
-                if (!state?.managed && !comfy.container) return null;
-                // Two groups, because a card row has two images behind it and
-                // they are nothing like the same size -- the RTX card here
-                // runs models from a 6.98 GB llama.cpp image and draws with a
-                // 16.5 GB ComfyUI one. "delete the image" without saying which
-                // is a question, not an instruction.
+                if (!state?.managed) return null;
+                // Only the inference runtime. The ComfyUI image that used to sit
+                // beside it here belongs to the ComfyUI page, which builds, updates
+                // and removes an instance with all the detail that actually decides
+                // one -- which cards, which port, which extra arguments. Two pages
+                // issuing the same command was one too many, and this was the weaker.
                 return (
                   <Dropdown
                     menu={{
@@ -365,28 +286,6 @@ export default function Runtime() {
                               label: `解除安裝並刪除 ${short}${state.image_size ? `（釋出 ${state.image_size}）` : ''}`,
                               danger: true, disabled: used.length > 0,
                               onClick: () => act(row, 'remove', { delete_image: true }),
-                            },
-                          ],
-                        }] : []),
-                        ...(comfy.container ? [{
-                          key: 'comfy', type: 'group' as const,
-                          label: `跑 ComfyUI 用的 ${comfyShort}`,
-                          children: [
-                            {
-                              key: 'comfy-update', label: '更新並重建這個實例',
-                              onClick: () => onComfy(row, 'update'),
-                            },
-                            {
-                              key: 'comfy-remove',
-                              label: `移除 ${comfy.container}（保留映像與輸出）`,
-                              danger: true,
-                              onClick: () => onComfy(row, 'remove'),
-                            },
-                            {
-                              key: 'comfy-purge',
-                              label: `移除並刪除 ${comfyShort}${comfy.image_size ? `（釋出 ${comfy.image_size}）` : ''}`,
-                              danger: true,
-                              onClick: () => onComfy(row, 'remove', true),
                             },
                           ],
                         }] : []),
@@ -436,7 +335,7 @@ export default function Runtime() {
       )}
 
       <Card
-        title="執行環境"
+        title="容器"
         size="small"
         loading={survey === null}
         extra={
