@@ -827,13 +827,21 @@ export default function Models() {
               </Form.Item>
             </Form.Item>
           )}
-          <Form.Item name="group" label="群組"
-                     extra="large 為互斥（載入時會卸載其他模型），適合佔滿顯示卡的模型；small 可與 ComfyUI 並存。">
+          {/* Labelled by what it decides, not by where it is stored.
+              The value goes into llama-swap's `groups:`, so "群組" was accurate
+              about the file and silent about the question -- and the two names
+              it offers, large and small, read as model size when what they
+              actually set is whether loading this model evicts everything else.
+              A 3B model in "large" is exclusive too. The group name stays
+              visible in each option, because that is what appears in the file
+              and on the Settings page. */}
+          <Form.Item name="group" label="載入策略"
+                     extra="寫進 llama-swap 的 groups：獨佔的群組載入時會把其他成員卸載，共存的不會。名稱和成員清單可以在設定頁的 config.yaml 裡看到。">
             <Select
               allowClear
               options={[
-                { value: 'large', label: 'large — 互斥，佔滿顯示卡' },
-                { value: 'small', label: 'small — 可與其他並存' },
+                { value: 'large', label: '獨佔 — 載入時卸載其他模型（群組 large）' },
+                { value: 'small', label: '共存 — 可與 ComfyUI 或其他模型並存（群組 small）' },
               ]}
             />
           </Form.Item>
