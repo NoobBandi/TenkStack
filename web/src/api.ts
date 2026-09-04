@@ -396,6 +396,11 @@ export interface ModelSpec {
   group: string | null;
   extra?: string;
   mmproj?: string | null;
+  /** Sampling defaults written onto the server's command line. Only the fields
+   *  that were set: absent means llama.cpp's own default, which is expressed by
+   *  not naming the flag rather than by writing the default out -- the two
+   *  differ the day llama.cpp changes one. */
+  sampling?: Record<string, number | null> | null;
   /** `backend:index` -- `SYCL:0`, `CUDA:1`. Empty means unpinned, which is the
    *  only answer on a machine with one usable card. */
   /** One or more `backend:index` choices. A list is how a model is given both

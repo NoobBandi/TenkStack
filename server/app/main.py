@@ -249,6 +249,9 @@ class ModelSpec(BaseModel):
     group: str | None = "large"
     extra: str = ""
     mmproj: str | None = None
+    # Only the fields that were set. Absent means "llama.cpp's own default",
+    # which is written by not naming the flag at all.
+    sampling: dict[str, float] | None = None
     # Which cards to run on, as `backend:index` -- `SYCL:0`, `CUDA:1` -- either
     # one or a list of them. A list is how a model gets both cards, which is
     # what --split-mode has to have to do anything at all.
@@ -589,6 +592,7 @@ async def _write_model(spec: ModelSpec):
         group=spec.group,
         extra=spec.extra,
         mmproj=spec.mmproj,
+        sampling=spec.sampling,
         env=device_env or {},
         # Only when the caller said something about the card, and only when
         # what it said resolved. An unresolvable choice used to clear the

@@ -27,8 +27,29 @@ const STATE_COLOURS: Record<string, string> = {
 const EMPTY: ModelSpec = {
   id: '', name: '', description: '', model_file: '',
   ctx_size: 16384, n_gpu_layers: 99, ttl: 900, group: 'large', extra: '', mmproj: null,
+  // Empty, not zero: an unset box writes no flag, and zero means something
+  // different (and real) for four of the six.
+  sampling: {},
   device: [] as string[],
 };
+
+/**
+ * The six sampling defaults the form owns.
+ *
+ * They were reachable only by typing them into the free-text field, which put
+ * the settings people most often want to change behind the one control that
+ * assumes you already know their names. Defaults are the program's own, printed
+ * as placeholders rather than filled in: leaving a box empty writes no flag at
+ * all, which is what keeps the entry correct the day llama.cpp moves one.
+ */
+const SAMPLING: { field: string; label: string; hint: string; step: number }[] = [
+  { field: 'temp', label: '溫度', hint: '0.80', step: 0.05 },
+  { field: 'top_k', label: 'top-k', hint: '40（0 關閉）', step: 1 },
+  { field: 'top_p', label: 'top-p', hint: '0.95（1.0 關閉）', step: 0.01 },
+  { field: 'min_p', label: 'min-p', hint: '0.05（0 關閉）', step: 0.01 },
+  { field: 'repeat_penalty', label: '重複懲罰', hint: '1.00（1.0 不罰）', step: 0.05 },
+  { field: 'presence_penalty', label: '出現懲罰', hint: '0.00（0 不罰）', step: 0.1 },
+];
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
@@ -870,8 +891,31 @@ export default function Models() {
               ]}
             />
           </Form.Item>
+          {/* The sampling defaults, as fields.
+              They were reachable only by typing them into 額外參數, which put
+              the six settings people most often want to change behind the one
+              control that assumes you already know their spelling -- and this
+              machine's own config spells them three different ways. Blank means
+              the flag is not written at all, which is not the same as writing
+              llama.cpp's current default and staying wrong when it moves. */}
+          <Form.Item label="取樣預設值"
+                     extra="留白就用 llama.cpp 自己的預設（灰字），不會寫進設定檔。這裡設的是伺服器端預設，聊天視窗送出的參數會覆蓋它。">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+              {SAMPLING.map(({ field, label, hint, step }) => (
+                <Form.Item
+                  key={field}
+                  name={['sampling', field]}
+                  label={<Text style={{ fontSize: 12 }}>{label}</Text>}
+                  style={{ flex: '1 1 30%', minWidth: 120, marginBottom: 0 }}
+                >
+                  <InputNumber min={0} step={step} placeholder={hint}
+                               style={{ width: '100%' }} />
+                </Form.Item>
+              ))}
+            </div>
+          </Form.Item>
           <Form.Item name="extra" label="額外參數"
-                     extra="一行一個。模型檔、context、GPU 層數、顯示卡由上面的欄位負責，不用寫在這裡。">
+                     extra="要細調的參數從這裡加，一行一個 —— 上面沒有的旗標都寫在這，例如 --parallel、--flash-attn、--split-mode 的細節。模型檔、context、GPU 層數、顯示卡和上面的取樣值由各自的欄位負責，不用重複寫。">
             {/* The list used to be a sentence of examples. Asked of the binary
                 instead, because llama.cpp's flags move between builds -- this
                 one's own help names five that have been removed -- and a model
@@ -881,8 +925,14 @@ export default function Models() {
               source={{ kind: 'llama-server' }}
               // Every one of these is written by the form above from a field of
               // its own; a typed copy would be the second opinion.
+              // Both spellings of the sampling flags, because llama.cpp takes
+              // either and offering one would let a second copy be typed in
+              // beside the field that already writes it.
               reserved={['--model', '--mmproj', '--ctx-size', '--n-gpu-layers',
-                         '--split-mode', '--port', '--host']}
+                         '--split-mode', '--port', '--host',
+                         ...SAMPLING.flatMap(({ field }) => [
+                           `--${field}`, `--${field.replace(/_/g, '-')}`,
+                         ]), '--temperature']}
             />
           </Form.Item>
         </Form>

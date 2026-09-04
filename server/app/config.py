@@ -276,6 +276,48 @@ def default_wrapper() -> str:
     return FALLBACK_WRAPPER
 
 
+# Sampling defaults the form owns.
+#
+# They were reachable only by typing them into the free-text field, which put
+# the six settings people most often want to change behind the one control that
+# assumes you already know their names. They are ordinary numbers with published
+# defaults; they belong in the form.
+#
+# Both spellings are matched on the way back in. llama.cpp accepts `--top_p` and
+# `--top-p` alike and this machine's own config uses the underscore for two of
+# them and the hyphen for a third -- reading only one spelling would leave the
+# other in `extra` and then write a second copy beside it.
+SAMPLING = ("temp", "top_k", "top_p", "min_p", "repeat_penalty", "presence_penalty")
+
+
+def _sampling_flag(field: str) -> str:
+    return "--temp" if field == "temp" else "--" + field.replace("_", "-")
+
+
+def _sampling_in(cmd: str) -> dict[str, float]:
+    """The sampling flags one command line carries.
+
+    The same reading `sampling_defaults` does for the chat panel, on one command
+    instead of every model -- one parser, so the form and the panel can never
+    disagree about what a config says.
+    """
+    found: dict[str, float] = {}
+    for flag, name in _SAMPLING_FLAGS.items():
+        if name not in SAMPLING and name != "temperature":
+            continue
+        pattern = flag.replace("-", "[-_]")
+        match = re.search(rf"--{pattern}\s+(-?[\d.]+)", cmd)
+        if not match:
+            continue
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            continue
+        field = "temp" if name == "temperature" else name
+        found[field] = int(value) if name in _SAMPLING_INTS else value
+    return found
+
+
 def build_cmd(
     model_file: str,
     ctx_size: int = 16384,
@@ -283,6 +325,7 @@ def build_cmd(
     extra: str = "",
     mmproj: str | None = None,
     wrapper: str | None = None,
+    sampling: dict[str, float] | None = None,
 ) -> str:
     """Assemble a llama-server command line.
 
@@ -302,6 +345,13 @@ def build_cmd(
     lines.append("--jinja")
     if mmproj:
         lines.append(f"--mmproj ${{models-dir}}/{mmproj}")
+    # Only what was set. An unset sampling field means "llama.cpp's own default",
+    # which is expressed by not naming the flag rather than by writing the
+    # default out -- the two differ the day llama.cpp changes one.
+    for field in SAMPLING:
+        value = (sampling or {}).get(field)
+        if value is not None:
+            lines.append(f"{_sampling_flag(field)} {value:g}")
     if extra.strip():
         lines.extend(line.strip() for line in extra.strip().splitlines() if line.strip())
     # A literal block scalar, not a plain str: otherwise ruamel emits the command
@@ -322,6 +372,7 @@ async def upsert_model(
     group: str | None,
     extra: str = "",
     mmproj: str | None = None,
+    sampling: dict[str, float] | None = None,
     env: dict | None = None,
     managed_env: set[str] | None = None,
     wrapper: str | None = None,
@@ -351,6 +402,7 @@ async def upsert_model(
         entry["cmd"] = build_cmd(
             model_file, ctx_size, n_gpu_layers, extra, mmproj,
             wrapper or _wrapper_in(entry.get("cmd")) or default_wrapper(),
+            sampling,
         )
         entry["ttl"] = ttl
 
@@ -870,7 +922,14 @@ _ARG_PATTERNS = {
 # Flags the editor owns. Anything else in cmd is the user's own and is handed
 # back as free text rather than silently dropped on the next save.
 _MANAGED = ("--model", "--mmproj", "--ctx-size", "--n-gpu-layers",
-            "--host", "--port", "--jinja")
+            "--host", "--port", "--jinja",
+            # Both spellings of each sampling flag. llama.cpp takes either, and
+            # this machine's own config uses `--top_p` beside `--repeat-penalty`
+            # -- matching one spelling would leave the other in `extra` and then
+            # write a second copy of it next door.
+            *(f"--{name}" for field in SAMPLING
+              for name in {field, field.replace("_", "-")}),
+            "--temperature")
 
 
 # Alias lookups, refreshed when the file changes rather than per request.
@@ -1042,5 +1101,9 @@ def read_model_spec(model_id: str) -> dict | None:
         "n_gpu_layers": int(values["n_gpu_layers"]) if values["n_gpu_layers"] else 0,
         "ttl": int(spec.get("ttl") or 0),
         "group": group,
+        # Absent rather than zero when unset: 0 is a meaningful value for four
+        # of these, and a form that showed 0 for "not configured" would write it
+        # back as a setting nobody chose.
+        "sampling": _sampling_in(cmd),
         "extra": "\n".join(extra),
     }
