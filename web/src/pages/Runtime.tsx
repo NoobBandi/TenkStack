@@ -342,9 +342,14 @@ export default function Runtime() {
           The warnings stay above both. They are conditions, not a section --
           somebody arriving because a container will not start needs to meet them
           before deciding which half to read. */}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start',
+      <div style={{ display: 'flex', gap: 16, alignItems: 'stretch',
                     flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 320px', minWidth: 0, maxWidth: 420 }}>
+        {/* Stretched, not flex-start. The two cards hold different amounts --
+            two cards of hardware against however many containers -- so left to
+            themselves they end at different heights and the pair reads as
+            ragged. Both fill the row instead; each Card takes height 100% so
+            the stretch reaches the card rather than stopping at the div. */}
+        <div style={{ flex: '1 1 320px', minWidth: 0, maxWidth: 420, display: 'flex' }}>
         {/* What each card is for.
           
             One row per card and one switch: does this card serve models. That is
@@ -361,7 +366,8 @@ export default function Runtime() {
             made this card's header taller than the one beside it, so the two
             tables started at different heights and the columns read as
             misaligned. Both headers are one line now. */}
-        <Card title="推論執行環境" size="small" loading={cards.length === 0}>
+        <Card title="推論執行環境" size="small" loading={cards.length === 0}
+                style={{ width: '100%' }}>
           <Text type="secondary"
                 style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
             每張卡要不要能跑模型。第一次開啟會下載映像，通常只設定一次。
@@ -404,10 +410,11 @@ export default function Runtime() {
           />
         </Card>
         </div>
-        <div style={{ flex: '3 1 520px', minWidth: 0 }}>
+        <div style={{ flex: '3 1 520px', minWidth: 0, display: 'flex' }}>
         <Card
           title="容器"
           size="small"
+          style={{ width: '100%' }}
           loading={survey === null}
           extra={
             <Button size="small" type="text" icon={<ReloadOutlined />} onClick={load}>
