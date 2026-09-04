@@ -42,14 +42,21 @@ const EMPTY: ModelSpec = {
  * as placeholders rather than filled in: leaving a box empty writes no flag at
  * all, which is what keeps the entry correct the day llama.cpp moves one.
  */
-const SAMPLING: { field: string; label: string; hint: string; step: number }[] = [
-  { field: 'temp', label: '溫度', hint: '0.80', step: 0.05 },
-  { field: 'top_k', label: 'top-k', hint: '40（0 關閉）', step: 1 },
-  { field: 'top_p', label: 'top-p', hint: '0.95（1.0 關閉）', step: 0.01 },
-  { field: 'min_p', label: 'min-p', hint: '0.05（0 關閉）', step: 0.01 },
-  { field: 'repeat_penalty', label: '重複懲罰', hint: '1.00（1.0 不罰）', step: 0.05 },
-  { field: 'presence_penalty', label: '出現懲罰', hint: '0.00（0 不罰）', step: 0.1 },
+const SAMPLING: { field: string; hint: string; step: number }[] = [
+  { field: 'temp', hint: '0.80', step: 0.05 },
+  { field: 'top_k', hint: '40（0 關閉）', step: 1 },
+  { field: 'top_p', hint: '0.95（1.0 關閉）', step: 0.01 },
+  { field: 'min_p', hint: '0.05（0 關閉）', step: 0.01 },
+  { field: 'repeat_penalty', hint: '1.00（1.0 不罰）', step: 0.05 },
+  { field: 'presence_penalty', hint: '0.00（0 不罰）', step: 0.1 },
 ];
+
+/** A field's label: the flag llama.cpp is given, spelled the way this form
+ *  writes it. Derived rather than listed, so a label cannot come to say
+ *  something different from the flag beside it -- and translating them was
+ *  worse than useless, because 重複懲罰 is not searchable in anybody's
+ *  documentation and `--repeat-penalty` is. */
+const flagOf = (field: string) => field.replace(/_/g, '-');
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
@@ -901,11 +908,13 @@ export default function Models() {
           <Form.Item label="取樣預設值"
                      extra="留白就用 llama.cpp 自己的預設（灰字），不會寫進設定檔。這裡設的是伺服器端預設，聊天視窗送出的參數會覆蓋它。">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-              {SAMPLING.map(({ field, label, hint, step }) => (
+              {SAMPLING.map(({ field, hint, step }) => (
                 <Form.Item
                   key={field}
                   name={['sampling', field]}
-                  label={<Text style={{ fontSize: 12 }}>{label}</Text>}
+                  label={<Text style={{ fontSize: 12, fontFamily: MONO }}>
+                    {flagOf(field)}
+                  </Text>}
                   style={{ flex: '1 1 30%', minWidth: 120, marginBottom: 0 }}
                 >
                   <InputNumber min={0} step={step} placeholder={hint}
