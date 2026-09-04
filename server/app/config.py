@@ -287,11 +287,15 @@ def default_wrapper() -> str:
 # `--top-p` alike and this machine's own config uses the underscore for two of
 # them and the hyphen for a third -- reading only one spelling would leave the
 # other in `extra` and then write a second copy beside it.
-SAMPLING = ("temp", "top_k", "top_p", "min_p", "repeat_penalty", "presence_penalty")
+SAMPLING = ("temperature", "top_k", "top_p", "min_p", "repeat_penalty",
+            "presence_penalty")
 
 
 def _sampling_flag(field: str) -> str:
-    return "--temp" if field == "temp" else "--" + field.replace("_", "-")
+    """The switch for one field. Hyphens, because that is the spelling
+    llama-server --help prints; arg.cpp replaces `_` with `-` on the way in, so
+    a config written either way still parses."""
+    return "--" + field.replace("_", "-")
 
 
 def _sampling_in(cmd: str) -> dict[str, float]:
@@ -303,7 +307,7 @@ def _sampling_in(cmd: str) -> dict[str, float]:
     """
     found: dict[str, float] = {}
     for flag, name in _SAMPLING_FLAGS.items():
-        if name not in SAMPLING and name != "temperature":
+        if name not in SAMPLING:
             continue
         pattern = flag.replace("-", "[-_]")
         match = re.search(rf"--{pattern}\s+(-?[\d.]+)", cmd)
@@ -313,8 +317,7 @@ def _sampling_in(cmd: str) -> dict[str, float]:
             value = float(match.group(1))
         except ValueError:
             continue
-        field = "temp" if name == "temperature" else name
-        found[field] = int(value) if name in _SAMPLING_INTS else value
+        found[name] = int(value) if name in _SAMPLING_INTS else value
     return found
 
 
@@ -929,7 +932,7 @@ _MANAGED = ("--model", "--mmproj", "--ctx-size", "--n-gpu-layers",
             # write a second copy of it next door.
             *(f"--{name}" for field in SAMPLING
               for name in {field, field.replace("_", "-")}),
-            "--temperature")
+            "--temp")
 
 
 # Alias lookups, refreshed when the file changes rather than per request.

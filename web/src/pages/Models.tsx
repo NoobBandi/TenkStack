@@ -43,7 +43,7 @@ const EMPTY: ModelSpec = {
  * all, which is what keeps the entry correct the day llama.cpp moves one.
  */
 const SAMPLING: { field: string; hint: string; step: number }[] = [
-  { field: 'temp', hint: '0.80', step: 0.05 },
+  { field: 'temperature', hint: '0.80', step: 0.05 },
   { field: 'top_k', hint: '40（0 關閉）', step: 1 },
   { field: 'top_p', hint: '0.95（1.0 關閉）', step: 0.01 },
   { field: 'min_p', hint: '0.05（0 關閉）', step: 0.01 },
@@ -893,7 +893,7 @@ export default function Models() {
                          '--port', '--host',
                          ...SAMPLING.flatMap(({ field }) => [
                            `--${field}`, `--${field.replace(/_/g, '-')}`,
-                         ]), '--temperature']}
+                         ]), '--temp']}
             />
           </Form.Item>
         </Form>
