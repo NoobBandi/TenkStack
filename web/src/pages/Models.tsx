@@ -852,7 +852,7 @@ export default function Models() {
               // picked here. A segmented control asking it first was a second place
               // for the same answer to live, and one that could disagree with the
               // list right underneath it.
-              extra="選到的卡就是這個模型會用到的卡，不選就是不指定、由 llama-server 自己挑。選一張以上時模型會分攤過去，預設 --split-mode layer（按層切）；另一種 tensor（按張量切）在部分機器上比較快，但只支援部分模型架構、必須開 flash attention，和推測解碼併用也有已知問題，要試就在額外參數寫 --split-mode tensor。"
+              extra="選到的卡就是這個模型會用到的卡，不選就是不指定、由 llama-server 自己挑。選一張以上時模型會分攤過去，預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但限制較多：必須開 flash attention、KV 快取不能是量化的（-ctk/-ctv 要 f16），而且部分模型架構不支援。要試就在額外參數寫 --split-mode tensor。"
             >
               <Form.Item name="device" noStyle>
                 <Select
