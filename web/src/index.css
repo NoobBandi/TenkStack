@@ -197,3 +197,13 @@ body {
 .hljs-deletion { color: #e06c75; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 600; }
+
+/* The container table on the runtime page.
+ *
+ * Its cells hold two lines each -- a name over its ports, an image over the
+ * cards it claimed, a trace over its numbers -- and antd's small table still
+ * pads as though every row were one line of text, which left a gap under each
+ * pair about as tall as the pair itself. */
+.rt-tight .ant-table-cell {
+  padding-block: 6px !important;
+}

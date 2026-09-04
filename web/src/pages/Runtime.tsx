@@ -356,10 +356,16 @@ export default function Runtime() {
             Drawing images used to be a second switch beside it. It belongs to
             the ComfyUI page, which decides the same thing with everything that
             actually goes into it: which cards, which port, which arguments. */}
-        <Card title="推論執行環境" size="small" loading={cards.length === 0}
-              extra={<Text type="secondary" style={{ fontSize: 12 }}>
-                每張卡要不要能跑模型。第一次開啟會下載映像，通常只設定一次。
-              </Text>}>
+        {/* The sentence sits in the body, not in `extra`.
+            In a column a third of a screen wide it wrapped to three lines and
+            made this card's header taller than the one beside it, so the two
+            tables started at different heights and the columns read as
+            misaligned. Both headers are one line now. */}
+        <Card title="推論執行環境" size="small" loading={cards.length === 0}>
+          <Text type="secondary"
+                style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+            每張卡要不要能跑模型。第一次開啟會下載映像，通常只設定一次。
+          </Text>
           <Table<RuntimeCoverage>
             dataSource={cards}
             rowKey={(row) => row.pci_bdf_address ?? row.name ?? row.vendor}
@@ -410,6 +416,10 @@ export default function Runtime() {
           }
         >
           <Table<RuntimeContainer>
+            // Stacked cells make tall rows, and antd's small table still pads as
+            // though every row were one line. Tightened here rather than by
+            // shrinking the content: the second line in each cell is the point.
+            className="rt-tight"
             dataSource={survey?.containers ?? []}
             rowKey="name"
             size="small"
