@@ -51,12 +51,6 @@ const SAMPLING: { field: string; hint: string; step: number }[] = [
   { field: 'presence_penalty', hint: '0.00（0 不罰）', step: 0.1 },
 ];
 
-/** A field's label: the flag llama.cpp is given, spelled the way this form
- *  writes it. Derived rather than listed, so a label cannot come to say
- *  something different from the flag beside it -- and translating them was
- *  worse than useless, because 重複懲罰 is not searchable in anybody's
- *  documentation and `--repeat-penalty` is. */
-const flagOf = (field: string) => field.replace(/_/g, '-');
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
@@ -871,7 +865,7 @@ export default function Models() {
                   key={field}
                   name={['sampling', field]}
                   label={<Text style={{ fontSize: 12, fontFamily: MONO }}>
-                    {flagOf(field)}
+                    {field}
                   </Text>}
                   style={{ flex: '1 1 30%', minWidth: 120, marginBottom: 0 }}
                 >
