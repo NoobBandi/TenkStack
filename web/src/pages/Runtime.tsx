@@ -4,8 +4,11 @@ import {
   Switch, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import { DownOutlined, ReloadOutlined } from '@ant-design/icons';
+import Sparkline from '../components/Sparkline';
+import { useStream } from '../stream';
 import {
-  controlContainer, fetchRuntime, fetchRuntimes, runtimeAction,
+  controlContainer, fetchContainerHistory, fetchRuntime, fetchRuntimes,
+  runtimeAction,
   setCardRole,
   type RuntimeAction, type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
 } from '../api';
@@ -27,6 +30,12 @@ const { Text } = Typography;
  * indistinguishable from a root shell, while restart only re-runs a
  * configuration somebody with access to this machine already chose.
  */
+
+/** Bytes as the unit a container's memory is actually discussed in. */
+const mib = (bytes: number) =>
+  (bytes >= 1024 ** 3
+    ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
+    : `${Math.round(bytes / 1024 ** 2)} MiB`);
 
 const STATE_COLOUR: Record<string, string> = {
   running: 'green', exited: 'default', created: 'default',
@@ -73,6 +82,33 @@ export default function Runtime() {
   const [survey, setSurvey] = useState<RuntimeSurvey | null>(null);
   const [cards, setCards] = useState<RuntimeCoverage[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
+  // The window before the page opened, from the server's buffer; the live feed
+  // below only carries what happens next, and an empty chart on a page somebody
+  // opened *because* something went wrong is the wrong answer.
+  const [usage, setUsage] = useState<Record<string, { t: number; memory: number; cpu: number | null }[]>>({});
+  const { containers: live } = useStream();
+
+  useEffect(() => {
+    fetchContainerHistory(900, 240)
+      .then((h) => setUsage(h.series))
+      .catch(() => undefined);
+  }, []);
+
+  // Each live sample appended to the series it belongs to, capped so a page
+  // left open overnight does not grow without bound.
+  useEffect(() => {
+    if (!live.length) return;
+    setUsage((prev) => {
+      const next = { ...prev };
+      for (const sample of live) {
+        const series = next[sample.name] ?? [];
+        if (series.length && series[series.length - 1].t === sample.t) continue;
+        next[sample.name] = [...series,
+          { t: sample.t, memory: sample.memory, cpu: sample.cpu_percent }].slice(-240);
+      }
+      return next;
+    });
+  }, [live]);
 
   const load = useCallback(() => {
     fetchRuntime().then(setSurvey)
@@ -381,6 +417,41 @@ export default function Runtime() {
                   </Space>
                 </Tooltip>
               ),
+            },
+            {
+              // Memory, not CPU. On this machine the work is on the GPU and these
+              // containers idle at a tenth of a percent, so a CPU trace would be a
+              // flat line dressed up as information. Memory is the series with a
+              // story: docker reports exit code 137 for any kill and cgroup v2
+              // routinely leaves OOMKilled false, so a container the operator
+              // stopped and one the kernel shot look identical afterwards -- and
+              // the last few minutes of this line is the difference.
+              title: '記憶體', width: 190, align: 'right' as const,
+              render: (_, row) => {
+                const points = usage[row.name] ?? [];
+                const live = points.length ? points[points.length - 1] : null;
+                if (!points.length) {
+                  return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+                }
+                const cpu = live?.cpu;
+                return (
+                  <Space size={8} align="center">
+                    <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+                      {cpu == null ? '' : `CPU ${cpu.toFixed(1)}%`}
+                    </Text>
+                    <Sparkline
+                      values={points.map((p) => p.memory)}
+                      title={`最近 15 分鐘的記憶體，最新 ${mib(live!.memory)}`}
+                      width={96}
+                      height={22}
+                    />
+                    <Text style={{ fontSize: 12, fontFamily: MONO, minWidth: 62,
+                                   display: 'inline-block', textAlign: 'right' }}>
+                      {mib(live!.memory)}
+                    </Text>
+                  </Space>
+                );
+              },
             },
             {
               title: '顯示卡', width: 220, align: 'right' as const,

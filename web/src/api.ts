@@ -487,6 +487,23 @@ export const runtimeAction = (
   options: { variant?: string; delete_image?: boolean } = {},
 ) => send<unknown>('/runtimes/action', 'POST', { vendor, action, ...options });
 
+/** One container's CPU and memory at one moment, read from cgroup. */
+export interface ContainerSample {
+  name: string;
+  t: number;
+  memory: number;
+  /** null when no limit is set, which is not the same as a limit of zero. */
+  memory_limit: number | null;
+  cpu_percent: number | null;
+}
+
+/** What each container's memory has been doing, for the window a page needs
+ *  when it opens -- the live feed only carries what happens next, and the
+ *  reason to look is usually something that already happened. */
+export const fetchContainerHistory = (seconds = 900, points = 240) =>
+  get<{ interval: number; series: Record<string, { t: number; memory: number; cpu: number | null }[]> }>(
+    `/containers/history?seconds=${seconds}&points=${points}`);
+
 export const fetchModelFiles = () => get<ModelFile[]>('/models/files');
 export const fetchConfig = () => get<{ raw: string; models: Record<string, unknown>; groups: Record<string, unknown> }>('/config');
 

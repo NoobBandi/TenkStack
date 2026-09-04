@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import {
   fetchModels, subscribe,
-  type GpuSample, type InflightRequest, type ModelInfo,
+  type ContainerSample, type GpuSample, type InflightRequest, type ModelInfo,
   type ProgressTick, type StreamEvent, type SystemSample, type Throughput,
 } from './api';
 
@@ -48,6 +48,9 @@ interface StreamState {
   /** Every installed GPU, lowest index first. */
   gpus: GpuSample[];
   system: SystemSample | null;
+  /** Every running container, by name. Sampled on the same tick as the GPU, so
+   *  the two describe one moment. */
+  containers: ContainerSample[];
   models: ModelInfo[];
   throughput: Throughput | null;
   traces: RequestTrace[];
@@ -61,6 +64,7 @@ const StreamContext = createContext<StreamState | null>(null);
 export function StreamProvider({ children }: { children: React.ReactNode }) {
   const [gpus, setGpus] = useState<GpuSample[]>([]);
   const [system, setSystem] = useState<SystemSample | null>(null);
+  const [containers, setContainers] = useState<ContainerSample[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [throughput, setThroughput] = useState<Throughput | null>(null);
   const [traces, setTraces] = useState<RequestTrace[]>([]);
@@ -82,6 +86,9 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
           break;
         case 'system':
           setSystem(event.data as SystemSample);
+          break;
+        case 'containers':
+          setContainers(event.data as ContainerSample[]);
           break;
         case 'throughput':
           setThroughput(event.data as Throughput);
@@ -177,9 +184,10 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
   }, [refreshModels]);
 
   const value = useMemo<StreamState>(() => ({
-    gpus, system, models, throughput, traces, requests, connected,
+    gpus, system, containers, models, throughput, traces, requests, connected,
     refreshModels,
-  }), [gpus, system, models, throughput, traces, requests, connected, refreshModels]);
+  }), [gpus, system, containers, models, throughput, traces, requests, connected,
+       refreshModels]);
 
   return <StreamContext.Provider value={value}>{children}</StreamContext.Provider>;
 }

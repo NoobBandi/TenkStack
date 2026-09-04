@@ -31,7 +31,8 @@ from pydantic import BaseModel, Field
 from . import (
     activity,
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
-    blobs, flags, gguf, gpu, gpu_history, images, llamaswap, logs as journal, paths,
+    blobs, container_history, flags, gguf, gpu, gpu_history, images, llamaswap,
+    logs as journal, paths,
     search, settings, speed, system, users, versions, ports,
 )
 
@@ -77,6 +78,7 @@ async def _startup() -> None:
     # Sampling starts with the process, not with the first browser: the chart
     # should show the last hour on load rather than begin at zero.
     gpu_history.start()
+    container_history.start()
     journal.start()
     if not auth.enforcement_enabled():
         logger.warning(
@@ -90,6 +92,7 @@ async def _shutdown() -> None:
     """Let go of the child processes before uvicorn waits on them."""
     await journal.stop()
     await gpu_history.stop()
+    await container_history.stop()
 
 
 @app.middleware("http")
@@ -692,6 +695,19 @@ async def load_model(model_id: str):
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"ok": resp.status_code == 200, "status": resp.status_code}
+
+
+@app.get("/api/containers/history")
+async def read_container_history(seconds: int = 900, points: int = 240):
+    """What each container's memory has been doing.
+
+    Served on open because the live feed only carries what happens next, and the
+    reason to look is almost always something that has already happened.
+    """
+    return {
+        "interval": container_history.SAMPLE_INTERVAL,
+        "series": container_history.history_all(seconds, points),
+    }
 
 
 @app.get("/api/models/files")
@@ -2122,6 +2138,10 @@ async def _merged_stream() -> AsyncIterator[str]:
             # tick means the CPU and GPU figures on screen describe one moment.
             with contextlib.suppress(Exception):
                 queue.put_nowait({"type": "system", "data": system.sample()})
+            samples = container_history.latest_all()
+            if samples:
+                with contextlib.suppress(asyncio.QueueFull):
+                    queue.put_nowait({"type": "containers", "data": samples})
             await asyncio.sleep(GPU_POLL_SECONDS)
 
     async def pump_downloads() -> None:

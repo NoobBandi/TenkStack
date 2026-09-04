@@ -317,6 +317,23 @@ async def names() -> list[str]:
     return listing.split() if listing else []
 
 
+async def running_ids() -> dict[str, str]:
+    """Name to full container id, for the ones actually running.
+
+    Full ids because that is what names the cgroup directory; the short form
+    docker prints by default does not.
+    """
+    listing = await _docker("ps", "--no-trunc", "--format", "{{.Names}} {{.ID}}")
+    if not listing:
+        return {}
+    found = {}
+    for line in listing.splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            found[parts[0]] = parts[1]
+    return found
+
+
 # The three verbs this module has, and the reason it has only these: each one
 # acts on a container that already exists, with a configuration somebody with
 # access to this machine already chose. `run` and `exec` would be
