@@ -118,10 +118,25 @@ class _Cursor:
             inner = self.u32()
             count = self.u64()
             if inner == _STRING:
-                # Consumed, not kept: this is the token vocabulary, several
-                # megabytes of it, and nothing here reads it.
+                # Consumed, not kept: this is the token vocabulary and the merge
+                # list, and nothing here reads either.
+                #
+                # Walked by moving the offset rather than by slicing each string
+                # out and dropping it. Those two arrays are about 150k entries
+                # each, and cutting a bytes object per entry was 175 ms of the
+                # 176 ms this parser spent on a 27B header -- for strings that go
+                # straight in the bin. The bounds check stays: running off the
+                # end is how a short read is detected, and the caller answers it
+                # by fetching more rather than by giving up.
+                at, blob = self.at, self.blob
+                limit = len(blob)
                 for _ in range(count):
-                    self.take(self.u64())
+                    if at + 8 > limit:
+                        raise _Short
+                    at += 8 + struct.unpack_from("<Q", blob, at)[0]
+                if at > limit:
+                    raise _Short
+                self.at = at
                 return f"<{count} strings>"
             if inner == _ARRAY:
                 return [self.value(_ARRAY) for _ in range(count)]
