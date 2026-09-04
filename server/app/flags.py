@@ -52,18 +52,39 @@ class Flag:
     takes_value: bool
 
 
-# Where the description starts. The names are padded out to this column, and a
-# wrapped description resumes at it, so it is the only reliable seam: splitting
-# on runs of spaces instead put `-c,` in the head and threw away `--ctx-size`,
-# because a short alias is followed by more padding than a long one. Twelve
-# flags were being lost that way, all of them ones with a two-letter alias.
-_HELP_COLUMN = 40
+def _help_column(lines: list[str]) -> int:
+    """Where this program starts its descriptions.
+
+    Measured rather than assumed. llama.cpp pads its names out to column 40 and
+    argparse -- which is what ComfyUI uses -- pads to 24, and a column hardcoded
+    for one silently mangles the other: 32 of ComfyUI's flags came back with an
+    empty description and one with only the tail of its second line, because the
+    split landed in the middle of the sentence and the first half went into the
+    names.
+
+    Found by looking at where a description actually begins on lines that have
+    one, and taking the column that happens most. Wrapped continuation lines are
+    indented to the same place, so they vote for it too, which is what makes the
+    answer clear rather than close.
+    """
+    votes: dict[int, int] = {}
+    for line in lines:
+        if not line.startswith((" ", "-")) or not line.strip().startswith("-"):
+            continue
+        # The gap after the names: two or more spaces, then the description.
+        match = re.search(r"\S(\s{2,})\S", line)
+        if match:
+            column = match.end() - 1
+            votes[column] = votes.get(column, 0) + 1
+    if not votes:
+        return 40
+    return max(votes.items(), key=lambda kv: kv[1])[0]
 
 
-def _split(line: str) -> tuple[str, str]:
+def _split(line: str, column: int) -> tuple[str, str]:
     """A flag line into its names and its description."""
-    if len(line) > _HELP_COLUMN and line[_HELP_COLUMN - 1] == " ":
-        return line[:_HELP_COLUMN], line[_HELP_COLUMN:].strip()
+    if len(line) > column and line[column - 1] == " ":
+        return line[:column], line[column:].strip()
     # A name list long enough to run past the column pushes its description onto
     # the next line, which arrives as a continuation.
     return line, ""
@@ -79,8 +100,10 @@ def parse(text: str) -> list[Flag]:
     out: list[Flag] = []
     group = ""
     current: Flag | None = None
+    lines = text.splitlines()
+    column = _help_column(lines)
 
-    for raw in text.splitlines():
+    for raw in lines:
         line = raw.rstrip()
         if not line.strip():
             continue
@@ -95,7 +118,7 @@ def parse(text: str) -> list[Flag]:
             line.startswith("  ") and not line.startswith("    ")
             and line.strip().startswith("-"))
         if starts_flag:
-            head, tail = _split(line)
+            head, tail = _split(line, column)
             names = _NAME.findall(head)
             if not names:
                 current = None
@@ -193,8 +216,28 @@ async def comfyui(container: str) -> list[Flag]:
     return flags
 
 
+# A flag whose whole job is to print something and stop.
+#
+# `--cache-list` shows what is in the model cache, `--list-devices` enumerates
+# GPUs, `--version` says the version. Put any of them in a model's launch
+# arguments and the server prints its line and exits instead of serving -- they
+# are actions, not configuration, and they have no business in a field whose
+# only purpose is configuring a long-running process.
+#
+# Matched on the program's own first word rather than on a list of names kept
+# here, for the same reason the flags are read from the binary at all: llama.cpp
+# has five and every one says outright that it shows, prints or lists. A sixth
+# added upstream tomorrow is caught by the same sentence.
+_ACTION = re.compile(r"^(show|print|list|display)\b", re.I)
+
+
+def is_action(flag: Flag) -> bool:
+    return bool(_ACTION.match(flag.help))
+
+
 def as_dicts(flags: list[Flag]) -> list[dict]:
-    return [asdict(f) for f in flags]
+    """For the interface: what can be configured, without what merely reports."""
+    return [asdict(f) for f in flags if not is_action(f)]
 
 
 def quote(value: str) -> str:
