@@ -12,6 +12,10 @@
  * So the backend asks the program and this shows the answer, grouped the way
  * that program groups it and described in its own words.
  *
+ * Ordered by whether the program gave the flag an abbreviation, which is its
+ * own statement about what people type often -- a better signal than a list of
+ * favourites kept here, and one that stays right when upstream changes its mind.
+ *
  * The menu inserts; the box holds. This was a tag select, where picking a flag
  * turned it into a chip -- and a chip cannot be typed into, so every flag that
  * takes a value became unusable the moment it was chosen. More than half of
@@ -24,7 +28,6 @@ import { Input, Select, Typography } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { fetchFlags, type LaunchFlag } from '../api';
 import { MONO } from '../theme';
-import { COMFY_NOTES, LLAMA_NOTES } from './flag-notes';
 
 const { Text } = Typography;
 
@@ -54,40 +57,53 @@ export default function FlagPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.kind, key]);
 
-  // Chinese for the ones worth explaining, the program's own English for the
-  // rest. The table cannot add a flag or hide one -- what exists is still
-  // whatever the binary said -- so a note nobody has written yet costs the
-  // reader the original sentence, which is never wrong.
-  const notes = source.kind === 'comfyui' ? COMFY_NOTES : LLAMA_NOTES;
-
   const options = useMemo(() => {
-    const groups = new Map<string, { value: string; label: React.ReactNode }[]>();
+    /**
+     * The ones with a short alias first.
+     *
+     * Which flags matter is a judgement, and rather than making it here it is
+     * read off what the program already decided: llama.cpp gives an
+     * abbreviation to the switches it expects people to type, and 79 of its 256
+     * have one. That ordering comes from upstream and stays right when upstream
+     * changes its mind, which a list of favourites kept here would not.
+     *
+     * Within each half the program's own printing order is left alone -- it
+     * groups related flags together, and re-sorting would scatter them.
+     */
+    const abbreviated: { value: string; label: React.ReactNode }[] = [];
+    const rest: { value: string; label: React.ReactNode }[] = [];
+
     for (const flag of flags) {
-      // The long name is what anybody reading the command later recognises; the
-      // short one is an alias for the same thing and would only crowd the list.
-      const name = flag.names.find((n) => n.startsWith('--')) ?? flag.names[0];
-      if (!name || name === '--help' || reserved.includes(name)) continue;
-      const bucket = groups.get(flag.group) ?? [];
-      bucket.push({
-        value: name,
+      const long = flag.names.find((n) => n.startsWith('--')) ?? flag.names[0];
+      if (!long || long === '--help' || reserved.includes(long)) continue;
+      const short = flag.names.find((n) => !n.startsWith('--'));
+      const option = {
+        value: long,
         label: (
           <span>
-            <Text style={{ fontFamily: MONO, fontSize: 12 }}>{name}</Text>
+            {short && (
+              <Text type="secondary" style={{ fontFamily: MONO, fontSize: 12 }}>
+                {short}{' '}
+              </Text>
+            )}
+            <Text style={{ fontFamily: MONO, fontSize: 12 }}>{long}</Text>
             {flag.takes_value && (
               <Text type="secondary" style={{ fontFamily: MONO, fontSize: 12 }}> N</Text>
             )}
-            {(notes[name] || flag.help) && (
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                　{notes[name] || flag.help}
-              </Text>
+            {flag.help && (
+              <Text type="secondary" style={{ fontSize: 11 }}>　{flag.help}</Text>
             )}
           </span>
         ),
-      });
-      groups.set(flag.group, bucket);
+      };
+      (short ? abbreviated : rest).push(option);
     }
-    return [...groups].map(([label, opts]) => ({ label: label || '其他', options: opts }));
-  }, [flags, reserved, notes]);
+
+    return [
+      { label: `有縮寫（${abbreviated.length}）`, options: abbreviated },
+      { label: `其他（${rest.length}）`, options: rest },
+    ].filter((g) => g.options.length);
+  }, [flags, reserved]);
 
   const takesValue = useMemo(
     () => new Set(flags.filter((f) => f.takes_value).flatMap((f) => f.names)),
