@@ -822,7 +822,7 @@ export default function Models() {
               // Two questions, and only one was being asked. A multi-select
               // answers "which cards" and leaves "how many" to be read off how
               // many chips ended up in it -- so a model meant for one card and a
-              // model meant for both differed by a detail nobody was asked
+              // model meant for several differed by a detail nobody was asked
               // about directly.
               extra={cardMode === 'multi'
                 ? '模型會分攤到選到的卡上。預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但只支援部分模型架構、必須開 flash attention，和推測解碼併用也有已知問題。要試就在額外參數寫 --split-mode tensor。'
@@ -843,7 +843,7 @@ export default function Models() {
                   }}
                   options={[
                     { value: 'single', label: '單卡' },
-                    { value: 'multi', label: `${devices.length} 張卡` },
+                    { value: 'multi', label: '多張卡' },
                   ]}
                 />
                 <Form.Item name="device" noStyle>
