@@ -822,7 +822,7 @@ export default function Models() {
               // model meant for both differed by a detail nobody was asked
               // about directly.
               extra={cardMode === 'multi'
-                ? '兩張卡會用 --split-mode layer 切開。layer 不是最快的——實測 tensor 單串流快 1.3%、雙串流快 7.6%——但 tensor 完全不能做推測解碼，而推測解碼值得的遠不只 7.6%。'
+                ? '模型會分攤到選到的卡上。預設是 --split-mode layer（按層切）；另一種 tensor（按張量切）在某些機器上可能比較快，但不能搭配推測解碼。要換就在額外參數寫 --split-mode tensor，並自己量一下。'
                 : cardMode === 'single'
                   ? '整個模型放進一張卡。放不下就會失敗，不會自動溢出到另一張。'
                   : '不指定，由 llama-server 自己決定用哪些看得到的卡。'}
@@ -938,7 +938,7 @@ export default function Models() {
               // either and offering one would let a second copy be typed in
               // beside the field that already writes it.
               reserved={['--model', '--mmproj', '--ctx-size', '--n-gpu-layers',
-                         '--split-mode', '--port', '--host',
+                         '--port', '--host',
                          ...SAMPLING.flatMap(({ field }) => [
                            `--${field}`, `--${field.replace(/_/g, '-')}`,
                          ]), '--temperature']}
