@@ -163,6 +163,127 @@ export default function Runtime() {
     }
   };
 
+  // The switch, with the first-time pull it may set off. Lifted out of the
+  // column it used to be, because this side of the page is a third of a
+  // screen wide now and the controls stack under the card's name.
+  const runtimeCell = (row: RuntimeCoverage) => {
+      const state = row.state;
+      const job = state?.install ?? null;
+      const working = !!job && ['pulling', 'writing'].includes(job.state);
+      if (working) {
+        return (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {job!.state === 'writing' ? '寫入設定…' : '下載映像…'}
+            </Text>
+            <Progress size="small" status="active"
+                      percent={job!.layers_total
+                        ? Math.round((job!.layers_done / job!.layers_total) * 100) : 0} />
+          </Space>
+        );
+      }
+      if (!row.runtime && !row.llm) {
+        return <Text type="secondary" style={{ fontSize: 12 }}>沒有這家廠商的範本</Text>;
+      }
+      // Turning it on for the first time is a multi-gigabyte pull, so
+      // it asks; every later flip is instant and does not.
+      const needsPull = !row.llm && !state?.managed;
+      // Short enough not to wrap in the column it lives in: the tag
+      // alone identifies these images, and the repository in front
+      // of it wrapped the cell onto two ragged lines.
+      const tagOf = (image?: string | null) => image?.split(':').pop() ?? '';
+      const why = row.llm
+        ? (state?.managed
+            ? `${tagOf(state.image)}${state.image_size ? ` · ${state.image_size}` : ''}`
+            : '原生建置')
+        : state?.managed ? '已安裝，未啟用' : `要下載 ${tagOf(row.runtime?.image)}`;
+      const control = (
+        <Switch
+          size="small"
+          checked={row.llm}
+          loading={busy === row.vendor}
+          disabled={!row.runtime && !row.llm}
+          onChange={needsPull ? undefined : (on) => setRole(row, on)}
+          onClick={needsPull ? () => undefined : undefined}
+        />
+      );
+      return (
+        <Space size={8}>
+          <Tooltip title={[
+            state?.image,
+            row.shared_switch && '這台有多張同廠商的卡，這個開關會一起影響它們',
+            !state?.managed && row.llm && '這個執行環境不是主控台安裝的',
+          ].filter(Boolean).join('　')}>
+            <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              {why}
+            </Text>
+          </Tooltip>
+          {needsPull ? (
+            <Popconfirm
+              title="要下載這個執行環境嗎？"
+              description={<>
+                {row.runtime?.image}<br />
+                {row.runtime && !row.runtime.verified && '這份設定沒有在這台機器上驗證過。'}
+              </>}
+              okText="下載並啟用"
+              cancelText="取消"
+              onConfirm={() => setRole(row, true)}
+            >
+              {control}
+            </Popconfirm>
+          ) : control}
+        </Space>
+      );
+  };
+
+  // Update or uninstall the runtime image on this card.
+  const maintenanceCell = (row: RuntimeCoverage) => {
+      const state = row.state;
+      const used = state?.used_by ?? [];
+      const short = state?.image?.split('/').pop() ?? '映像';
+      if (!state?.managed) return null;
+      // Only the inference runtime. The ComfyUI image that used to sit
+      // beside it here belongs to the ComfyUI page, which builds, updates
+      // and removes an instance with all the detail that actually decides
+      // one -- which cards, which port, which extra arguments. Two pages
+      // issuing the same command was one too many, and this was the weaker.
+      return (
+        <Dropdown
+          menu={{
+            items: [
+              ...(state?.managed ? [{
+                key: 'llm', type: 'group' as const,
+                label: `跑模型用的 ${short}`,
+                children: [
+                  { key: 'update', label: '更新這個映像',
+                    onClick: () => act(row, 'update') },
+                  // Two removals, because reclaiming disk and
+                  // changing what a card does are different
+                  // decisions, and only one takes a long download to
+                  // undo.
+                  {
+                    key: 'remove', label: '解除安裝（保留映像）', danger: true,
+                    disabled: used.length > 0,
+                    onClick: () => act(row, 'remove'),
+                  },
+                  {
+                    key: 'purge',
+                    label: `解除安裝並刪除 ${short}${state.image_size ? `（釋出 ${state.image_size}）` : ''}`,
+                    danger: true, disabled: used.length > 0,
+                    onClick: () => act(row, 'remove', { delete_image: true }),
+                  },
+                ],
+              }] : []),
+            ],
+          }}
+        >
+          <Button size="small" type="text">
+            維護 <DownOutlined />
+          </Button>
+        </Dropdown>
+      );
+  };
+
   const act = async (
     row: RuntimeCoverage, action: RuntimeAction,
     options: { variant?: string; delete_image?: boolean } = {},
@@ -180,166 +301,6 @@ export default function Runtime() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {/* What each card is for.
-          
-          One row per card and one switch: does this card serve models. That is
-          a setup decision rather than a daily one -- turning it on is a
-          multi-gigabyte pull the first time -- and it is not a stored
-          preference: the switch reads the machine, and flipping it changes the
-          machine rather than a record of intent.
-      
-          Drawing images used to be a second switch beside it. It belongs to
-          the ComfyUI page, which decides the same thing with everything that
-          actually goes into it: which cards, which port, which arguments. */}
-      <Card title="推論執行環境" size="small" loading={cards.length === 0}
-            extra={<Text type="secondary" style={{ fontSize: 12 }}>
-              每張卡要不要能跑模型。第一次開啟會下載映像，通常只設定一次。
-            </Text>}>
-        <Table<RuntimeCoverage>
-          dataSource={cards}
-          rowKey={(row) => row.pci_bdf_address ?? row.name ?? row.vendor}
-          size="small"
-          pagination={false}
-          columns={[
-            {
-              // The one column without a width, so the spare space collects
-                // here. Everything to its right is fixed and right-aligned, so
-                // the switch and the menu read as one group at the edge rather
-                // than as two things adrift at different distances.
-                title: '顯示卡',
-              render: (_, row) => (
-                <Space size={6}>
-                  <span>{row.name ?? row.pci_bdf_address}</span>
-                  <Tag color={row.vendor === 'nvidia' ? 'green' : 'blue'}>{row.vendor}</Tag>
-                </Space>
-              ),
-            },
-            {
-              title: '跑模型', width: 210, align: 'right' as const,
-              render: (_, row) => {
-                const state = row.state;
-                const job = state?.install ?? null;
-                const working = !!job && ['pulling', 'writing'].includes(job.state);
-                if (working) {
-                  return (
-                    <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {job!.state === 'writing' ? '寫入設定…' : '下載映像…'}
-                      </Text>
-                      <Progress size="small" status="active"
-                                percent={job!.layers_total
-                                  ? Math.round((job!.layers_done / job!.layers_total) * 100) : 0} />
-                    </Space>
-                  );
-                }
-                if (!row.runtime && !row.llm) {
-                  return <Text type="secondary" style={{ fontSize: 12 }}>沒有這家廠商的範本</Text>;
-                }
-                // Turning it on for the first time is a multi-gigabyte pull, so
-                // it asks; every later flip is instant and does not.
-                const needsPull = !row.llm && !state?.managed;
-                // Short enough not to wrap in the column it lives in: the tag
-                // alone identifies these images, and the repository in front
-                // of it wrapped the cell onto two ragged lines.
-                const tagOf = (image?: string | null) => image?.split(':').pop() ?? '';
-                const why = row.llm
-                  ? (state?.managed
-                      ? `${tagOf(state.image)}${state.image_size ? ` · ${state.image_size}` : ''}`
-                      : '原生建置')
-                  : state?.managed ? '已安裝，未啟用' : `要下載 ${tagOf(row.runtime?.image)}`;
-                const control = (
-                  <Switch
-                    size="small"
-                    checked={row.llm}
-                    loading={busy === row.vendor}
-                    disabled={!row.runtime && !row.llm}
-                    onChange={needsPull ? undefined : (on) => setRole(row, on)}
-                    onClick={needsPull ? () => undefined : undefined}
-                  />
-                );
-                return (
-                  <Space size={8}>
-                    <Tooltip title={[
-                      state?.image,
-                      row.shared_switch && '這台有多張同廠商的卡，這個開關會一起影響它們',
-                      !state?.managed && row.llm && '這個執行環境不是主控台安裝的',
-                    ].filter(Boolean).join('　')}>
-                      <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
-                        {why}
-                      </Text>
-                    </Tooltip>
-                    {needsPull ? (
-                      <Popconfirm
-                        title="要下載這個執行環境嗎？"
-                        description={<>
-                          {row.runtime?.image}<br />
-                          {row.runtime && !row.runtime.verified && '這份設定沒有在這台機器上驗證過。'}
-                        </>}
-                        okText="下載並啟用"
-                        cancelText="取消"
-                        onConfirm={() => setRole(row, true)}
-                      >
-                        {control}
-                      </Popconfirm>
-                    ) : control}
-                  </Space>
-                );
-              },
-            },
-            {
-              title: '', width: 96, align: 'right' as const,
-              render: (_, row) => {
-                const state = row.state;
-                const used = state?.used_by ?? [];
-                const short = state?.image?.split('/').pop() ?? '映像';
-                if (!state?.managed) return null;
-                // Only the inference runtime. The ComfyUI image that used to sit
-                // beside it here belongs to the ComfyUI page, which builds, updates
-                // and removes an instance with all the detail that actually decides
-                // one -- which cards, which port, which extra arguments. Two pages
-                // issuing the same command was one too many, and this was the weaker.
-                return (
-                  <Dropdown
-                    menu={{
-                      items: [
-                        ...(state?.managed ? [{
-                          key: 'llm', type: 'group' as const,
-                          label: `跑模型用的 ${short}`,
-                          children: [
-                            { key: 'update', label: '更新這個映像',
-                              onClick: () => act(row, 'update') },
-                            // Two removals, because reclaiming disk and
-                            // changing what a card does are different
-                            // decisions, and only one takes a long download to
-                            // undo.
-                            {
-                              key: 'remove', label: '解除安裝（保留映像）', danger: true,
-                              disabled: used.length > 0,
-                              onClick: () => act(row, 'remove'),
-                            },
-                            {
-                              key: 'purge',
-                              label: `解除安裝並刪除 ${short}${state.image_size ? `（釋出 ${state.image_size}）` : ''}`,
-                              danger: true, disabled: used.length > 0,
-                              onClick: () => act(row, 'remove', { delete_image: true }),
-                            },
-                          ],
-                        }] : []),
-                      ],
-                    }}
-                  >
-                    <Button size="small" type="text">
-                      維護 <DownOutlined />
-                    </Button>
-                  </Dropdown>
-                );
-              },
-            },
-          ]}
-        />
-      </Card>
-
-
       {orphans.length > 0 && (
         <Alert
           type="warning"
@@ -369,129 +330,203 @@ export default function Runtime() {
           }
         />
       )}
+      {/* Two columns, because the page holds two unrelated jobs.
 
-      <Card
-        title="容器"
-        size="small"
-        loading={survey === null}
-        extra={
-          <Button size="small" type="text" icon={<ReloadOutlined />} onClick={load}>
-            重新整理
-          </Button>
-        }
-      >
-        <Table<RuntimeContainer>
-          dataSource={survey?.containers ?? []}
-          rowKey="name"
+          On the left, setting the machine up: which cards can serve models,
+          which is answered once and then not thought about again. On the right,
+          watching it run: what is up, on what, since when, and what its memory
+          has been doing. Stacked, the setup table sat across the full width for
+          two rows and pushed the thing anyone actually opens this page for below
+          the fold.
+
+          The warnings stay above both. They are conditions, not a section --
+          somebody arriving because a container will not start needs to meet them
+          before deciding which half to read. */}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start',
+                    flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 320px', minWidth: 0, maxWidth: 420 }}>
+        {/* What each card is for.
+          
+            One row per card and one switch: does this card serve models. That is
+            a setup decision rather than a daily one -- turning it on is a
+            multi-gigabyte pull the first time -- and it is not a stored
+            preference: the switch reads the machine, and flipping it changes the
+            machine rather than a record of intent.
+      
+            Drawing images used to be a second switch beside it. It belongs to
+            the ComfyUI page, which decides the same thing with everything that
+            actually goes into it: which cards, which port, which arguments. */}
+        <Card title="推論執行環境" size="small" loading={cards.length === 0}
+              extra={<Text type="secondary" style={{ fontSize: 12 }}>
+                每張卡要不要能跑模型。第一次開啟會下載映像，通常只設定一次。
+              </Text>}>
+          <Table<RuntimeCoverage>
+            dataSource={cards}
+            rowKey={(row) => row.pci_bdf_address ?? row.name ?? row.vendor}
+            size="small"
+            pagination={false}
+            // One column of stacked blocks: a header saying 顯示卡 over a list
+            // of cards, directly under a card titled 推論執行環境, is a label
+            // for something already labelled twice.
+            showHeader={false}
+            columns={[
+              {
+                // The one column without a width, so the spare space collects
+                  // here. Everything to its right is fixed and right-aligned, so
+                  // the switch and the menu read as one group at the edge rather
+                  // than as two things adrift at different distances.
+                  title: '顯示卡',
+                render: (_, row) => (
+                  // Stacked rather than side by side: "Intel(R) Arc(TM) Pro B70
+                  // Graphics" is thirty-three characters and this column is a
+                  // third of a screen wide, so a name and a switch on one line
+                  // would either truncate the name or wrap it mid-word.
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <Space size={6}>
+                      <Text style={{ fontSize: 12 }}>{row.name ?? row.pci_bdf_address}</Text>
+                      <Tag color={row.vendor === 'nvidia' ? 'green' : 'blue'}
+                           style={{ marginInlineEnd: 0 }}>{row.vendor}</Tag>
+                    </Space>
+                    <Space size={8} style={{ width: '100%', justifyContent: 'space-between' }}>
+                      {runtimeCell(row)}
+                      {maintenanceCell(row)}
+                    </Space>
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </Card>
+        </div>
+        <div style={{ flex: '3 1 520px', minWidth: 0 }}>
+        <Card
+          title="容器"
           size="small"
-          pagination={false}
-          columns={[
-            {
-              title: '容器', dataIndex: 'name', width: 170,
-              render: (name: string, row) => (
-                <Space size={6}>
-                  <span style={{ fontFamily: MONO, fontSize: 12 }}>{name}</span>
-                  {row.restart_policy !== 'no' && (
-                    <Tooltip title={`重啟政策：${row.restart_policy}`}>
-                      <Tag>自動重啟</Tag>
-                    </Tooltip>
-                  )}
-                </Space>
-              ),
-            },
-            {
-              title: '映像', dataIndex: 'image',
-              render: (image: string) => (
-                <Text style={{ fontFamily: MONO, fontSize: 12 }} ellipsis>{image}</Text>
-              ),
-            },
-            {
-              title: '狀態', dataIndex: 'state', width: 160, align: 'right' as const,
-              render: (state: string, row) => (
-                <Tooltip title={row.status}>
-                  <Space size={6}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>{since(row.status)}</Text>
-                    <Tag color={STATE_COLOUR[state] ?? 'default'} style={{ marginInlineEnd: 0 }}>
-                      {STATE_LABEL[state] ?? state}
-                    </Tag>
+          loading={survey === null}
+          extra={
+            <Button size="small" type="text" icon={<ReloadOutlined />} onClick={load}>
+              重新整理
+            </Button>
+          }
+        >
+          <Table<RuntimeContainer>
+            dataSource={survey?.containers ?? []}
+            rowKey="name"
+            size="small"
+            pagination={false}
+            columns={[
+              {
+                // The name with the ports under it. They were separate columns
+                // at opposite ends of the row, and together they answer one
+                // question: this is the thing, and this is where you reach it.
+                title: '容器', dataIndex: 'name',
+                render: (name: string, row) => (
+                  <Space direction="vertical" size={0}>
+                    <Space size={6}>
+                      <span style={{ fontFamily: MONO, fontSize: 12 }}>{name}</span>
+                      {row.restart_policy !== 'no' && (
+                        <Tooltip title={`重啟政策：${row.restart_policy}`}>
+                          <Tag style={{ marginInlineEnd: 0 }}>自動重啟</Tag>
+                        </Tooltip>
+                      )}
+                    </Space>
+                    {row.ports && (
+                      <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
+                        {row.ports}
+                      </Text>
+                    )}
                   </Space>
-                </Tooltip>
-              ),
-            },
-            {
-              // Memory, not CPU. On this machine the work is on the GPU and these
-              // containers idle at a tenth of a percent, so a CPU trace would be a
-              // flat line dressed up as information. Memory is the series with a
-              // story: docker reports exit code 137 for any kill and cgroup v2
-              // routinely leaves OOMKilled false, so a container the operator
-              // stopped and one the kernel shot look identical afterwards -- and
-              // the last few minutes of this line is the difference.
-              title: '記憶體', width: 190, align: 'right' as const,
-              render: (_, row) => {
-                const points = usage[row.name] ?? [];
-                const live = points.length ? points[points.length - 1] : null;
-                if (!points.length) {
-                  return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-                }
-                const cpu = live?.cpu;
-                return (
-                  <Space size={8} align="center">
-                    <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-                      {cpu == null ? '' : `CPU ${cpu.toFixed(1)}%`}
-                    </Text>
-                    <Sparkline
-                      values={points.map((p) => p.memory)}
-                      title={`最近 15 分鐘的記憶體，最新 ${mib(live!.memory)}`}
-                      width={96}
-                      height={22}
-                    />
-                    <Text style={{ fontSize: 12, fontFamily: MONO, minWidth: 62,
-                                   display: 'inline-block', textAlign: 'right' }}>
-                      {mib(live!.memory)}
-                    </Text>
-                  </Space>
-                );
+                ),
               },
-            },
-            {
-              title: '顯示卡', width: 220, align: 'right' as const,
-              render: (_, row) => {
-                if (!row.wants_gpu) return <Text type="secondary">—</Text>;
-                if (row.orphaned) return <Tag color="warning">找不到指定的卡</Tag>;
-                return (
-                  <Space size={4} wrap>
-                    {row.cards.map((card) => (
-                      <Tooltip key={card.pci_bdf_address} title={card.pci_bdf_address}>
-                        <Tag color={card.vendor === 'nvidia' ? 'green' : 'blue'}>
-                          {card.name ?? card.pci_bdf_address}
-                        </Tag>
-                      </Tooltip>
-                    ))}
+              {
+                // The image with the cards it claimed under it -- also one
+                // question rather than two: what is running, and on what.
+                title: '映像', dataIndex: 'image',
+                render: (image: string, row) => (
+                  <Space direction="vertical" size={2} style={{ minWidth: 0 }}>
+                    <Text style={{ fontFamily: MONO, fontSize: 12 }} ellipsis>{image}</Text>
+                    {row.wants_gpu && (
+                      row.orphaned
+                        ? <Tag color="warning" style={{ marginInlineEnd: 0 }}>找不到指定的卡</Tag>
+                        : (
+                          <Space size={4} wrap>
+                            {row.cards.map((card) => (
+                              <Tooltip key={card.pci_bdf_address} title={card.pci_bdf_address}>
+                                <Tag color={card.vendor === 'nvidia' ? 'green' : 'blue'}
+                                     style={{ marginInlineEnd: 0 }}>
+                                  {card.name ?? card.pci_bdf_address}
+                                </Tag>
+                              </Tooltip>
+                            ))}
+                          </Space>
+                        )
+                    )}
                   </Space>
-                );
+                ),
               },
-            },
-            {
-              title: '連接埠', dataIndex: 'ports', width: 190, align: 'right' as const,
-              render: (ports: string) => (
-                <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
-                  {ports || '—'}
-                </Text>
-              ),
-            },
-            {
-              title: '', width: 104, align: 'right' as const,
-              render: (_, row) => (
-                <Button size="small" icon={<ReloadOutlined />}
-                        loading={busy === row.name}
-                        onClick={() => onRestart(row)}>
-                  重啟
-                </Button>
-              ),
-            },
-          ]}
-        />
-      </Card>
+              {
+                title: '狀態', dataIndex: 'state', width: 160, align: 'right' as const,
+                render: (state: string, row) => (
+                  <Tooltip title={row.status}>
+                    <Space size={6}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>{since(row.status)}</Text>
+                      <Tag color={STATE_COLOUR[state] ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                        {STATE_LABEL[state] ?? state}
+                      </Tag>
+                    </Space>
+                  </Tooltip>
+                ),
+              },
+              {
+                // Memory, not CPU. On this machine the work is on the GPU and these
+                // containers idle at a tenth of a percent, so a CPU trace would be a
+                // flat line dressed up as information. Memory is the series with a
+                // story: docker reports exit code 137 for any kill and cgroup v2
+                // routinely leaves OOMKilled false, so a container the operator
+                // stopped and one the kernel shot look identical afterwards -- and
+                // the last few minutes of this line is the difference.
+                title: '記憶體', width: 190, align: 'right' as const,
+                render: (_, row) => {
+                  const points = usage[row.name] ?? [];
+                  const live = points.length ? points[points.length - 1] : null;
+                  if (!points.length) {
+                    return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+                  }
+                  const cpu = live?.cpu;
+                  return (
+                    <Space size={8} align="center">
+                      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+                        {cpu == null ? '' : `CPU ${cpu.toFixed(1)}%`}
+                      </Text>
+                      <Sparkline
+                        values={points.map((p) => p.memory)}
+                        title={`最近 15 分鐘的記憶體，最新 ${mib(live!.memory)}`}
+                        width={96}
+                        height={22}
+                      />
+                      <Text style={{ fontSize: 12, fontFamily: MONO, minWidth: 62,
+                                     display: 'inline-block', textAlign: 'right' }}>
+                        {mib(live!.memory)}
+                      </Text>
+                    </Space>
+                  );
+                },
+              },
+              {
+                title: '', width: 104, align: 'right' as const,
+                render: (_, row) => (
+                  <Button size="small" icon={<ReloadOutlined />}
+                          loading={busy === row.name}
+                          onClick={() => onRestart(row)}>
+                    重啟
+                  </Button>
+                ),
+              },
+            ]}
+          />
+        </Card>
+        </div>
+      </div>
     </Space>
   );
 }
