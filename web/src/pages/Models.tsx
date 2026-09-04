@@ -822,7 +822,7 @@ export default function Models() {
               // model meant for both differed by a detail nobody was asked
               // about directly.
               extra={cardMode === 'multi'
-                ? '模型會分攤到選到的卡上。預設是 --split-mode layer（按層切）；另一種 tensor（按張量切）在某些機器上可能比較快，但不能搭配推測解碼。要換就在額外參數寫 --split-mode tensor，並自己量一下。'
+                ? '模型會分攤到選到的卡上。預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但只支援部分模型架構、必須開 flash attention，和推測解碼併用也有已知問題。要試就在額外參數寫 --split-mode tensor。'
                 : cardMode === 'single'
                   ? '整個模型放進一張卡。放不下就會失敗，不會自動溢出到另一張。'
                   : '不指定，由 llama-server 自己決定用哪些看得到的卡。'}
