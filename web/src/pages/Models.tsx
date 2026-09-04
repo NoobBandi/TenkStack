@@ -453,34 +453,42 @@ export default function Models() {
               render: (ttl: number | null | undefined) => (ttl ? `${Math.round(ttl / 60)} 分` : '—'),
             },
             {
-              // Every one of these says what it does. Three of the four were an
-              // icon alone, and a power symbol beside a play symbol is two
-              // guesses in a column where one of the guesses frees 30 GiB of
-              // video memory out from under whoever is using the model.
-              title: '操作', width: 310,
+              // Every one of these says what it does. They were icons alone,
+              // and a power symbol beside a play symbol is two guesses in a
+              // column where one of the guesses frees 30 GiB of video memory
+              // out from under whoever is using the model.
+              title: '操作', width: 240,
               render: (_, row) => (
                 <Space size={6}>
-                  <Tooltip title="送一個極小的請求把模型載入顯存">
-                    <Button size="small" icon={<PlayCircleOutlined />}
-                            loading={busy === row.id} disabled={row.running}
-                            onClick={() => onLoad(row.id)}>
-                      載入
-                    </Button>
-                  </Tooltip>
-                  {/* Filled, and the only filled button here. Unloading is the
-                      one action in this row that takes something away from
-                      whoever is using the model right now, and it should not
-                      look like the two beside it that merely open a dialog.
-                      Amber rather than red: it is reversible, and red belongs
-                      to the button in this row that is not. */}
-                  <Tooltip title="卸載，釋放顯存">
-                    <Button size="small" color="orange" variant="filled"
-                            icon={<PoweroffOutlined />}
-                            loading={busy === row.id} disabled={!row.running}
-                            onClick={() => onUnload(row.id)}>
-                      卸載
-                    </Button>
-                  </Tooltip>
+                  {/* One button, because it is one question: is this model in memory
+                      or not. Two buttons meant one of them was always disabled, and a
+                      greyed-out control says nothing about which state the row is in --
+                      the 狀態 column had to be read to find out. Now the button itself
+                      is the answer.
+
+                      The two states do not look alike. Unloading is the one action in
+                      this row that takes something away from whoever is using the
+                      model right now, so it is filled and amber; loading is a plain
+                      button. Amber rather than red: red belongs to 移除, which is the
+                      one thing here that cannot be undone. */}
+                  {row.running ? (
+                    <Tooltip title="卸載，釋放顯存">
+                      <Button size="small" color="orange" variant="filled"
+                              icon={<PoweroffOutlined />}
+                              loading={busy === row.id}
+                              onClick={() => onUnload(row.id)}>
+                        卸載
+                      </Button>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="送一個極小的請求把模型載入顯存">
+                      <Button size="small" icon={<PlayCircleOutlined />}
+                              loading={busy === row.id}
+                              onClick={() => onLoad(row.id)}>
+                        載入
+                      </Button>
+                    </Tooltip>
+                  )}
                   <Tooltip title="修改設定">
                     <Button size="small" icon={<EditOutlined />}
                             onClick={() => openEdit(row.id)}>
