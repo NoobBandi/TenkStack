@@ -1310,30 +1310,6 @@ async def comfyui_restart(port: int = COMFYUI_PORTS[0]):
     return {"ok": True}
 
 
-@app.get("/api/comfyui/history")
-async def comfyui_history(port: int = COMFYUI_PORTS[0], limit: int = 12):
-    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=5) as client:
-        try:
-            resp = await client.get("/history", params={"max_items": limit})
-            resp.raise_for_status()
-        except httpx.HTTPError:
-            return []
-
-    items = []
-    for prompt_id, record in list(resp.json().items())[-limit:]:
-        images = [
-            img
-            for output in (record.get("outputs") or {}).values()
-            for img in (output.get("images") or [])
-        ]
-        items.append({
-            "prompt_id": prompt_id,
-            "images": images,
-            "status": (record.get("status") or {}).get("status_str"),
-        })
-    return list(reversed(items))
-
-
 @app.post("/api/comfyui/interrupt")
 async def comfyui_interrupt(port: int = COMFYUI_PORTS[0]):
     async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=5) as client:
@@ -1342,26 +1318,6 @@ async def comfyui_interrupt(port: int = COMFYUI_PORTS[0]):
             return {"ok": resp.status_code in (200, 204)}
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-
-
-@app.get("/api/comfyui/image")
-async def comfyui_image(
-    filename: str, subfolder: str = "", type: str = "output",
-    port: int = COMFYUI_PORTS[0],
-):
-    """Proxy a generated image so the UI stays on one origin."""
-    async with httpx.AsyncClient(base_url=_comfyui_base(port), timeout=15) as client:
-        try:
-            resp = await client.get(
-                "/view", params={"filename": filename, "subfolder": subfolder, "type": type}
-            )
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return StreamingResponse(
-        iter([resp.content]),
-        media_type=resp.headers.get("content-type", "image/png"),
-    )
 
 
 # --------------------------------------------------------------------------

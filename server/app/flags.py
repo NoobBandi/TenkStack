@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import shlex
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
@@ -239,7 +238,3 @@ def as_dicts(flags: list[Flag]) -> list[dict]:
     """For the interface: what can be configured, without what merely reports."""
     return [asdict(f) for f in flags if not is_action(f)]
 
-
-def quote(value: str) -> str:
-    """A value as it would be written on a command line."""
-    return shlex.quote(value)

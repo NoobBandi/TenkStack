@@ -61,7 +61,3 @@ COMFYUI_PORTS = tuple(range(COMFYUI_FIRST, COMFYUI_FIRST + COMFYUI_COUNT))
 # its address.
 COMFYUI_PUBLIC_FIRST = _port("CONSOLE_COMFYUI_PUBLIC_PORT", 8444)
 
-
-def comfyui_public(upstream: int) -> int:
-    """The port Caddy serves one instance on, from the port it publishes."""
-    return COMFYUI_PUBLIC_FIRST + (upstream - COMFYUI_FIRST)

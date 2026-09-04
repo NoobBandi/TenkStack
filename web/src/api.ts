@@ -152,21 +152,6 @@ export interface InflightRequest {
   updated_at: number;
 }
 
-export interface LogLine {
-  text: string;
-  source: 'proxy' | 'upstream';
-  level: 'info' | 'warn' | 'error';
-}
-
-/** llama-server prefixes with a single letter (I/W/E); llama-swap's own lines
- *  use bracketed words. Both are matched so colour means the same thing
- *  regardless of which process emitted the line. */
-export function logLevel(text: string): LogLine['level'] {
-  if (/\[ERROR\]|\bE \w|error|failed|panic/i.test(text)) return 'error';
-  if (/\[WARN\]|\bW \w|warn/i.test(text)) return 'warn';
-  return 'info';
-}
-
 /**
  * The dev server proxies /api to the backend (see vite.config.ts), and in
  * production the UI is served from the same origin, so a relative base works in
@@ -212,7 +197,6 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const fetchGpu = () => get<GpuSample[]>('/gpu');
 
 // ---------------------------------------------------------------------------
 // Web search
@@ -671,12 +655,6 @@ export const fetchDownloads = () => get<DownloadStatus[]>('/catalog/downloads');
 // ComfyUI
 // ---------------------------------------------------------------------------
 
-export interface ComfyHistoryItem {
-  prompt_id: string;
-  status: string | null;
-  images: { filename: string; subfolder: string; type: string }[];
-}
-
 /** One instance's container, as something editable. The cards it holds are a
  *  `docker run` argument and nothing reads them back out of ComfyUI, so this is
  *  the only place the current answer exists. */
@@ -708,8 +686,6 @@ export const saveComfyConfig = (
   { name, addresses, cli_args, port });
 
 export const fetchComfyInstances = () => get<ComfyInstance[]>('/comfyui/instances');
-export const fetchComfyHistory = (port: number) =>
-  get<ComfyHistoryItem[]>(`/comfyui/history?port=${port}&limit=12`);
 export const interruptComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/interrupt?port=${port}`, 'POST');
 
@@ -724,15 +700,6 @@ export const updateComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/update?port=${port}`, 'POST');
 export const restartComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/restart?port=${port}`, 'POST');
-// Proxied through the console so the images stay on one origin -- and so the
-// port travels with them, because with more than one instance the filename
-// alone no longer says which machine-side queue produced it.
-export const comfyImageUrl = (
-  port: number,
-  img: { filename: string; subfolder: string; type: string },
-) =>
-  `${BASE}/comfyui/image?port=${port}&filename=${encodeURIComponent(img.filename)}` +
-  `&subfolder=${encodeURIComponent(img.subfolder)}&type=${encodeURIComponent(img.type)}`;
 
 // ---------------------------------------------------------------------------
 // Users and API keys
@@ -1148,7 +1115,6 @@ export interface SystemSample {
   uptime_seconds: number | null;
 }
 
-export const fetchSystem = () => get<SystemSample>('/system');
 
 // ---------------------------------------------------------------------------
 // GPU history and devices

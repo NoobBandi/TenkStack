@@ -53,13 +53,6 @@ def indices() -> list[int]:
     return sorted(_latest)
 
 
-def latest(index: int | None = None) -> dict | None:
-    """The newest sample for one device, or the lowest-numbered one."""
-    if index is None:
-        return next((_latest[i] for i in sorted(_latest)), None)
-    return _latest.get(index)
-
-
 def latest_all() -> list[dict]:
     """The newest sample for every device, lowest index first."""
     return [_latest[i] for i in sorted(_latest)]
