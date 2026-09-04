@@ -29,10 +29,22 @@ export default function Sparkline({
     return <span style={{ display: 'inline-block', width, height }} />;
   }
 
-  const top = Math.max(max ?? 0, ...values) || 1;
-  const step = width / (values.length - 1);
+  // At most one point per two pixels. 240 samples drawn into 96 pixels is two
+  // and a half points per pixel: the extra ones cannot be seen, they just
+  // thicken the line into a smear and make a steady series look noisy.
+  const budget = Math.max(2, Math.floor(width / 2));
+  const points = values.length > budget
+    ? Array.from({ length: budget },
+                 (_, i) => values[Math.round(i * (values.length - 1) / (budget - 1))])
+    : values;
+
+  // A tenth of headroom above the highest point. Without it a steady series --
+  // which is what a healthy container's memory is -- draws hard against the top
+  // edge and reads as pegged at a maximum rather than as flat.
+  const top = (Math.max(max ?? 0, ...points) || 1) * 1.1;
+  const step = width / (points.length - 1);
   const y = (v: number) => height - 1 - (v / top) * (height - 2);
-  const line = values.map((v, i) => `${i * step},${y(v)}`).join(' ');
+  const line = points.map((v, i) => `${i * step},${y(v)}`).join(' ');
   // Closed back along the baseline so the area reads as a quantity rather than
   // as a thread. Fill is the same hue at low alpha, which keeps the stroke the
   // thing the eye follows.
@@ -45,7 +57,7 @@ export default function Sparkline({
       <polygon points={area} fill={colour} fillOpacity={0.14} />
       <polyline points={line} fill="none" stroke={colour} strokeWidth={1.5}
                 strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={width} cy={y(values[values.length - 1])} r={2} fill={colour} />
+      <circle cx={width} cy={y(points[points.length - 1])} r={2} fill={colour} />
     </svg>
   );
 }

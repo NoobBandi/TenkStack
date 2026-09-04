@@ -485,32 +485,35 @@ export default function Runtime() {
                 // routinely leaves OOMKilled false, so a container the operator
                 // stopped and one the kernel shot look identical afterwards -- and
                 // the last few minutes of this line is the difference.
-                title: '記憶體', width: 190, align: 'right' as const,
-                render: (_, row) => {
-                  const points = usage[row.name] ?? [];
-                  const live = points.length ? points[points.length - 1] : null;
-                  if (!points.length) {
-                    return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-                  }
-                  const cpu = live?.cpu;
-                  return (
-                    <Space size={8} align="center">
-                      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-                        {cpu == null ? '' : `CPU ${cpu.toFixed(1)}%`}
-                      </Text>
-                      <Sparkline
-                        values={points.map((p) => p.memory)}
-                        title={`最近 15 分鐘的記憶體，最新 ${mib(live!.memory)}`}
-                        width={96}
-                        height={22}
-                      />
-                      <Text style={{ fontSize: 12, fontFamily: MONO, minWidth: 62,
-                                     display: 'inline-block', textAlign: 'right' }}>
-                        {mib(live!.memory)}
-                      </Text>
-                    </Space>
-                  );
-                },
+              title: '記憶體', width: 170, align: 'right' as const,
+              render: (_, row) => {
+                const points = usage[row.name] ?? [];
+                const live = points.length ? points[points.length - 1] : null;
+                if (!live) {
+                  return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+                }
+                // Stacked, because side by side it was not a chart. Three things
+                // shared 190 pixels -- a CPU figure, the trace and the current
+                // value -- which left the trace about ninety, and a steady
+                // series squeezed into ninety pixels is a horizontal line
+                // whether or not anything happened. The numbers read fine as one
+                // line underneath; the shape is what needs the width.
+                return (
+                  <Space direction="vertical" size={2} align="end"
+                         style={{ width: '100%' }}>
+                    <Sparkline
+                      values={points.map((p) => p.memory)}
+                      title={`最近 15 分鐘的記憶體，最新 ${mib(live.memory)}`}
+                      width={150}
+                      height={26}
+                    />
+                    <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+                      {mib(live.memory)}
+                      {live.cpu == null ? '' : `　CPU ${live.cpu.toFixed(1)}%`}
+                    </Text>
+                  </Space>
+                );
+              },
               },
               {
                 title: '', width: 104, align: 'right' as const,
