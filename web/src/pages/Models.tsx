@@ -867,10 +867,6 @@ export default function Models() {
               </Space>
             </Form.Item>
           )}
-          <Form.Item name="n_gpu_layers" label="GPU 層數"
-                     extra="0 表示不指定，讓 llama.cpp 自行決定。放不進顯存的模型必須用 0，否則 llama.cpp 會拒絕自動調整而直接失敗。">
-            <InputNumber min={0} max={999} style={{ width: '100%' }} />
-          </Form.Item>
           <Form.Item name="group" label="群組"
                      extra="large 為互斥（載入時會卸載其他模型），適合佔滿顯示卡的模型；small 可與 ComfyUI 並存。">
             <Select
@@ -898,6 +894,10 @@ export default function Models() {
               <InputNumber min={0} step={60} style={{ width: '100%' }} />
             </Form.Item>
           </div>
+          <Form.Item name="n_gpu_layers" label="GPU 層數"
+                     extra="0 表示不指定，讓 llama.cpp 自行決定。放不進顯存的模型必須用 0，否則 llama.cpp 會拒絕自動調整而直接失敗。">
+            <InputNumber min={0} max={999} style={{ width: '100%' }} />
+          </Form.Item>
           {/* The sampling defaults, as fields.
               They were reachable only by typing them into 額外參數, which put
               the six settings people most often want to change behind the one
