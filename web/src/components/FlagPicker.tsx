@@ -128,11 +128,17 @@ export default function FlagPicker({
 
   return (
     <div>
-      <Select<string>
+      <Select<string | null>
         showSearch
-        // Never holds a selection: it is a way in, not a place things live.
-        value={undefined}
-        onSelect={(name) => insert(name)}
+        // Explicitly empty, every render.
+        //
+        // `undefined` here made it uncontrolled, so antd kept whatever was
+        // picked and printed it in the box -- a menu that is only a way in
+        // looked like a field holding a value, beside the field that actually
+        // holds them. `null` is antd's way of saying "nothing is selected",
+        // which is the truth about this control at all times.
+        value={null}
+        onSelect={(name: string | null) => { if (name) insert(name); }}
         options={options}
         optionFilterProp="value"
         placeholder={flags.length
