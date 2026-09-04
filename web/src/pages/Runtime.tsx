@@ -37,6 +37,14 @@ const mib = (bytes: number) =>
     ? `${(bytes / 1024 ** 3).toFixed(2)} GiB`
     : `${Math.round(bytes / 1024 ** 2)} MiB`);
 
+/** Bytes per second, in the unit the number is actually read in. */
+const rate = (bytes: number) =>
+  (bytes >= 1024 ** 2
+    ? `${(bytes / 1024 ** 2).toFixed(1)} MB/s`
+    : bytes >= 1024
+      ? `${Math.round(bytes / 1024)} kB/s`
+      : `${Math.round(bytes)} B/s`);
+
 const STATE_COLOUR: Record<string, string> = {
   running: 'green', exited: 'default', created: 'default',
   restarting: 'orange', paused: 'orange', dead: 'red',
@@ -85,7 +93,9 @@ export default function Runtime() {
   // The window before the page opened, from the server's buffer; the live feed
   // below only carries what happens next, and an empty chart on a page somebody
   // opened *because* something went wrong is the wrong answer.
-  const [usage, setUsage] = useState<Record<string, { t: number; memory: number; cpu: number | null }[]>>({});
+  type Point = { t: number; memory: number; cpu: number | null;
+                 rx: number | null; tx: number | null };
+  const [usage, setUsage] = useState<Record<string, Point[]>>({});
   const { containers: live } = useStream();
 
   useEffect(() => {
@@ -103,8 +113,10 @@ export default function Runtime() {
       for (const sample of live) {
         const series = next[sample.name] ?? [];
         if (series.length && series[series.length - 1].t === sample.t) continue;
-        next[sample.name] = [...series,
-          { t: sample.t, memory: sample.memory, cpu: sample.cpu_percent }].slice(-240);
+        next[sample.name] = [...series, {
+          t: sample.t, memory: sample.memory, cpu: sample.cpu_percent,
+          rx: sample.net_rx, tx: sample.net_tx,
+        }].slice(-240);
       }
       return next;
     });
@@ -166,6 +178,31 @@ export default function Runtime() {
   // The switch, with the first-time pull it may set off. Lifted out of the
   // column it used to be, because this side of the page is a third of a
   // screen wide now and the controls stack under the card's name.
+  /** One metric of one container: its shape over the window, and its value now.
+   *  Stacked, because a chart and its number side by side in a table column
+   *  leaves the chart too narrow to have a shape at all. */
+  const trace = (
+    points: Point[] | undefined,
+    pick: (p: Point) => number | null,
+    format: (v: number) => string,
+    colour: string,
+  ) => {
+    const series = (points ?? []).map(pick);
+    const live = series.length ? series[series.length - 1] : null;
+    if (live == null) {
+      return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+    }
+    return (
+      <Space direction="vertical" size={2} align="end" style={{ width: '100%' }}>
+        <Sparkline values={series.map((v) => v ?? 0)} width={110} height={26}
+                   colour={colour} title={`最近 15 分鐘，目前 ${format(live)}`} />
+        <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+          {format(live)}
+        </Text>
+      </Space>
+    );
+  };
+
   const runtimeCell = (row: RuntimeCoverage) => {
       const state = row.state;
       const job = state?.install ?? null;
@@ -495,43 +532,56 @@ export default function Runtime() {
                 ),
               },
               {
-                // Memory, not CPU. On this machine the work is on the GPU and these
-                // containers idle at a tenth of a percent, so a CPU trace would be a
-                // flat line dressed up as information. Memory is the series with a
-                // story: docker reports exit code 137 for any kill and cgroup v2
-                // routinely leaves OOMKilled false, so a container the operator
-                // stopped and one the kernel shot look identical afterwards -- and
-                // the last few minutes of this line is the difference.
-              title: '記憶體', width: 170, align: 'right' as const,
+              // Three columns rather than three charts in one cell: they are
+              // three different questions -- is it working, is it growing, is it
+              // talking -- and a reader compares one metric down the rows, not
+              // three metrics across a row.
+              //
+              // Each one scales from zero to its own window maximum. A CPU axis
+              // fixed at 100% would draw every one of these containers as a flat
+              // line on the floor, which is true and useless; what the reader
+              // wants to see is whether this container is doing more than it was
+              // a minute ago.
+              title: 'CPU', width: 130, align: 'right' as const,
+              render: (_, row) => trace(usage[row.name], (p) => p.cpu,
+                                        (v) => `${v.toFixed(1)}%`, '#6ea8d8'),
+            },
+            {
+              title: '記憶體', width: 130, align: 'right' as const,
+              render: (_, row) => trace(usage[row.name], (p) => p.memory,
+                                        mib, '#7fb069'),
+            },
+            {
+              title: '網路', width: 150, align: 'right' as const,
               render: (_, row) => {
                 const points = usage[row.name] ?? [];
                 const live = points.length ? points[points.length - 1] : null;
-                if (!live) {
+                if (!live || live.rx == null) {
                   return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
                 }
-                // Stacked, because side by side it was not a chart. Three things
-                // shared 190 pixels -- a CPU figure, the trace and the current
-                // value -- which left the trace about ninety, and a steady
-                // series squeezed into ninety pixels is a horizontal line
-                // whether or not anything happened. The numbers read fine as one
-                // line underneath; the shape is what needs the width.
+                // In and out on one pair of axes, because they are the same
+                // quantity measured in two directions and the interesting
+                // moments -- a model coming down, an image going out -- are
+                // exactly when one of them is not like the other.
                 return (
                   <Space direction="vertical" size={2} align="end"
                          style={{ width: '100%' }}>
                     <Sparkline
-                      values={points.map((p) => p.memory)}
-                      title={`最近 15 分鐘的記憶體，最新 ${mib(live.memory)}`}
-                      width={150}
+                      values={points.map((p) => p.rx ?? 0)}
+                      second={points.map((p) => p.tx ?? 0)}
+                      title={`最近 15 分鐘的網路：下載 ${rate(live.rx)}，上傳 ${rate(live.tx ?? 0)}`}
+                      width={130}
                       height={26}
+                      colour="#c98f4b"
+                      secondColour="#a8709e"
                     />
                     <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-                      {mib(live.memory)}
-                      {live.cpu == null ? '' : `　CPU ${live.cpu.toFixed(1)}%`}
+                      ↓{rate(live.rx)}　↑{rate(live.tx ?? 0)}
                     </Text>
                   </Space>
                 );
               },
-              },
+            },
               {
                 title: '', width: 104, align: 'right' as const,
                 render: (_, row) => (

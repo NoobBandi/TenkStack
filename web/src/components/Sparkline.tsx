@@ -14,6 +14,12 @@
 interface Props {
   /** Oldest first. Empty renders nothing rather than a misleading flat line. */
   values: number[];
+  /** A second series on the same axes, for a quantity measured in two
+   *  directions -- bytes in against bytes out. Scaled together with the first,
+   *  because drawing them on separate scales would make a trickle look like a
+   *  flood whenever it happened to be the larger of the two. */
+  second?: number[];
+  secondColour?: string;
   width?: number;
   height?: number;
   /** The top of the scale. Defaults to the largest value seen. */
@@ -23,7 +29,8 @@ interface Props {
 }
 
 export default function Sparkline({
-  values, width = 120, height = 24, max, colour = '#4d9fd6', title,
+  values, second, width = 120, height = 24, max, colour = '#4d9fd6',
+  secondColour = '#a8709e', title,
 }: Props) {
   if (values.length < 2) {
     return <span style={{ display: 'inline-block', width, height }} />;
@@ -41,7 +48,13 @@ export default function Sparkline({
   // A tenth of headroom above the highest point. Without it a steady series --
   // which is what a healthy container's memory is -- draws hard against the top
   // edge and reads as pegged at a maximum rather than as flat.
-  const top = (Math.max(max ?? 0, ...points) || 1) * 1.1;
+  const other = second && second.length === values.length
+    ? (second.length > budget
+      ? Array.from({ length: budget },
+                   (_, i) => second[Math.round(i * (second.length - 1) / (budget - 1))])
+      : second)
+    : null;
+  const top = (Math.max(max ?? 0, ...points, ...(other ?? [])) || 1) * 1.1;
   const step = width / (points.length - 1);
   const y = (v: number) => height - 1 - (v / top) * (height - 2);
   const line = points.map((v, i) => `${i * step},${y(v)}`).join(' ');
@@ -57,6 +70,11 @@ export default function Sparkline({
       <polygon points={area} fill={colour} fillOpacity={0.14} />
       <polyline points={line} fill="none" stroke={colour} strokeWidth={1.5}
                 strokeLinejoin="round" strokeLinecap="round" />
+      {other && (
+        <polyline points={other.map((v, i) => `${i * step},${y(v)}`).join(' ')}
+                  fill="none" stroke={secondColour} strokeWidth={1.5}
+                  strokeLinejoin="round" strokeLinecap="round" />
+      )}
       <circle cx={width} cy={y(points[points.length - 1])} r={2} fill={colour} />
     </svg>
   );

@@ -16,9 +16,12 @@ microseconds:
 
 At two seconds per sample the second figure is free and the first is not.
 
-CPU is kept as a number but not charted anywhere: on this machine the work is on
-the GPU and the containers around it idle at a tenth of a percent. Memory is the
-series with a story in it.
+Three series per container: CPU, memory and network. Memory is the one that
+explains a death; CPU says whether anything is happening at all; network is what
+shows a model download or an image being pushed out. All three come from files:
+CPU and memory from cgroup, network from `/proc/<pid>/net/dev`, which is the
+container's own namespace and therefore its own counters -- 170 microseconds for
+two containers.
 """
 
 from __future__ import annotations
@@ -46,7 +49,9 @@ CGROUP = Path("/sys/fs/cgroup")
 
 _history: dict[str, deque[dict]] = {}
 _latest: dict[str, dict] = {}
-_previous: dict[str, tuple[float, int]] = {}     # name -> (wall time, cpu usec)
+# name -> (wall time, cpu usec, bytes in, bytes out). All four are totals since
+# the container started, so a rate needs the previous reading beside the new one.
+_previous: dict[str, tuple[float, int, int, int]] = {}
 _task: asyncio.Task | None = None
 
 
@@ -62,6 +67,34 @@ def _scope(container_id: str) -> Path | None:
         if path.is_dir():
             return path
     return None
+
+
+def _network(pid: int) -> tuple[int, int] | None:
+    """Bytes in and out, summed over the container's interfaces.
+
+    Read from inside its network namespace by way of its pid, which is where the
+    only counters that mean anything live -- the host's interfaces carry every
+    container's traffic together. Loopback is excluded: a service talking to
+    itself is not traffic anybody is asking about.
+    """
+    try:
+        text = Path(f"/proc/{pid}/net/dev").read_text()
+    except OSError:
+        return None
+    received = sent = 0
+    for line in text.splitlines()[2:]:
+        face, _, rest = line.partition(":")
+        if face.strip() == "lo":
+            continue
+        fields = rest.split()
+        if len(fields) < 9:
+            continue
+        try:
+            received += int(fields[0])
+            sent += int(fields[8])
+        except ValueError:
+            continue
+    return received, sent
 
 
 def _read(scope: Path) -> dict | None:
@@ -115,27 +148,34 @@ def history_all(seconds: int | None = None,
     return {name: history(name, seconds, max_points) for name in sorted(_history)}
 
 
-async def _sample_once(known: dict[str, str]) -> None:
+async def _sample_once(known: dict[str, tuple[str, int]]) -> None:
     now = time.time()
-    for name, container_id in known.items():
+    for name, (container_id, pid) in known.items():
         scope = _scope(container_id)
         if scope is None:
             continue
         reading = _read(scope)
         if reading is None:
             continue
+        traffic = _network(pid) or (0, 0)
 
-        # CPU as a percentage of one core, from the difference between two
-        # readings -- the file holds a total since start, which on its own says
+        # Rates, from the difference between two readings. Every one of these
+        # files holds a total since the container started, which on its own says
         # nothing about now.
         previous = _previous.get(name)
-        _previous[name] = (now, reading["usage_usec"])
-        percent = None
+        _previous[name] = (now, reading["usage_usec"], traffic[0], traffic[1])
+        percent = rx = tx = None
         if previous:
             elapsed = now - previous[0]
             if elapsed > 0:
                 percent = round(
                     (reading["usage_usec"] - previous[1]) / 1e4 / elapsed, 2)
+                # A counter that went backwards means the container restarted;
+                # reporting the total as a one-second burst would put a spike on
+                # the chart that never happened.
+                rx = max(0, traffic[0] - previous[2]) / elapsed
+                tx = max(0, traffic[1] - previous[3]) / elapsed
+                rx, tx = round(rx), round(tx)
 
         sample = {
             "name": name,
@@ -143,14 +183,17 @@ async def _sample_once(known: dict[str, str]) -> None:
             "memory": reading["memory"],
             "memory_limit": reading["memory_limit"],
             "cpu_percent": percent,
+            "net_rx": rx,
+            "net_tx": tx,
         }
         _latest[name] = sample
         _history.setdefault(name, deque(maxlen=CAPACITY)).append(
-            {"t": now, "memory": reading["memory"], "cpu": percent})
+            {"t": now, "memory": reading["memory"], "cpu": percent,
+             "rx": rx, "tx": tx})
 
 
 async def _poll() -> None:
-    known: dict[str, str] = {}
+    known: dict[str, tuple[str, int]] = {}
     discovered_at = 0.0
 
     while True:

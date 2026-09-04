@@ -495,13 +495,23 @@ export interface ContainerSample {
   /** null when no limit is set, which is not the same as a limit of zero. */
   memory_limit: number | null;
   cpu_percent: number | null;
+  /** Bytes per second in and out, over the container's own interfaces --
+   *  loopback excluded, because a service talking to itself is not traffic. */
+  net_rx: number | null;
+  net_tx: number | null;
 }
 
 /** What each container's memory has been doing, for the window a page needs
  *  when it opens -- the live feed only carries what happens next, and the
  *  reason to look is usually something that already happened. */
 export const fetchContainerHistory = (seconds = 900, points = 240) =>
-  get<{ interval: number; series: Record<string, { t: number; memory: number; cpu: number | null }[]> }>(
+  get<{
+    interval: number;
+    series: Record<string, {
+      t: number; memory: number; cpu: number | null;
+      rx: number | null; tx: number | null;
+    }[]>;
+  }>(
     `/containers/history?seconds=${seconds}&points=${points}`);
 
 export const fetchModelFiles = () => get<ModelFile[]>('/models/files');

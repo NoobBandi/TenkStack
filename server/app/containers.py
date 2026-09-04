@@ -317,20 +317,31 @@ async def names() -> list[str]:
     return listing.split() if listing else []
 
 
-async def running_ids() -> dict[str, str]:
-    """Name to full container id, for the ones actually running.
+async def running_ids() -> dict[str, tuple[str, int]]:
+    """Name to (full container id, host pid), for the ones actually running.
 
-    Full ids because that is what names the cgroup directory; the short form
-    docker prints by default does not.
+    The id names the cgroup directory -- the short form docker prints by default
+    does not -- and the pid is the way into the container's network namespace,
+    where its interface counters live. Neither is in `docker ps` output, so this
+    is one `ps` for the names and one `inspect` for the rest.
     """
-    listing = await _docker("ps", "--no-trunc", "--format", "{{.Names}} {{.ID}}")
-    if not listing:
+    listing = await _docker("ps", "--format", "{{.Names}}")
+    names = listing.split() if listing else []
+    if not names:
         return {}
-    found = {}
-    for line in listing.splitlines():
+    detail = await _docker(
+        "inspect", "-f", "{{.Name}} {{.Id}} {{.State.Pid}}", *names)
+    found: dict[str, tuple[str, int]] = {}
+    for line in (detail or "").splitlines():
         parts = line.split()
-        if len(parts) == 2:
-            found[parts[0]] = parts[1]
+        if len(parts) != 3:
+            continue
+        # docker prefixes the name with a slash in inspect output but not in ps.
+        name = parts[0].lstrip("/")
+        try:
+            found[name] = (parts[1], int(parts[2]))
+        except ValueError:
+            continue
     return found
 
 
