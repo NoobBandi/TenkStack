@@ -832,16 +832,16 @@ export default function Models() {
               about the file and silent about the question -- and the two names
               it offers, large and small, read as model size when what they
               actually set is whether loading this model evicts everything else.
-              A 3B model in "large" is exclusive too. The group name stays
-              visible in each option, because that is what appears in the file
-              and on the Settings page. */}
+              A 3B model in "large" is exclusive too. Neither the word nor the
+              names belong on the control; the help line underneath is where
+              somebody who is looking at config.yaml can map the two. */}
           <Form.Item name="group" label="載入策略"
-                     extra="寫進 llama-swap 的 groups：獨佔的群組載入時會把其他成員卸載，共存的不會。名稱和成員清單可以在設定頁的 config.yaml 裡看到。">
+                     extra="獨佔在載入時會把其他模型卸下來，共存不會。設定檔裡對應的名字是 large 和 small，在設定頁看得到。">
             <Select
               allowClear
               options={[
-                { value: 'large', label: '獨佔 — 載入時卸載其他模型（群組 large）' },
-                { value: 'small', label: '共存 — 可與 ComfyUI 或其他模型並存（群組 small）' },
+                { value: 'large', label: '獨佔 — 載入時卸載其他模型' },
+                { value: 'small', label: '共存 — 可與 ComfyUI 或其他模型並存' },
               ]}
             />
           </Form.Item>
