@@ -8,6 +8,7 @@ import {
 import type { ModelCapabilities, ModelInfo } from '../api';
 import ComposerInput, { type ComposerHandle } from './ComposerInput';
 import { ACCENT, LINE, MONO } from '../theme';
+import { EXTRACTABLE, UNSUPPORTED, extract } from './extract';
 
 const { Text } = Typography;
 
@@ -21,11 +22,17 @@ const TEXT_EXTENSIONS = new Set([
   'xml', 'svg', 'diff', 'patch', 'env',
 ]);
 
-/** Formats that hold text but need parsing before a model can read them. */
-const NEEDS_EXTRACTION = new Set(['pdf', 'docx', 'doc', 'pptx', 'xlsx', 'odt', 'epub']);
+// PDF and .docx are parsed here now; the rest still hold text nobody here can
+// reach, and each says what to do about it. See extract.ts for why spreadsheets
+// are on the second list rather than the first.
 
 const MAX_IMAGE_BYTES = 8 << 20;
 const MAX_TEXT_BYTES = 512 << 10;
+// A document is compressed, so its size on disk says little about how much text
+// comes out; the byte cap is a guard against a parse that would take minutes,
+// and the character cap below is what actually protects the context window.
+const MAX_DOCUMENT_BYTES = 32 << 20;
+const MAX_TEXT_CHARS = 200_000;
 
 /**
  * Message composer.
@@ -118,11 +125,33 @@ export default function Composer({
         continue;
       }
 
-      if (NEEDS_EXTRACTION.has(extension)) {
+      if (UNSUPPORTED[extension]) {
         // Said plainly rather than silently attaching bytes the model cannot
-        // read: a PDF sent as text is noise, and a quiet failure looks like
-        // the model ignoring the document.
-        toast.warning(`${file.name}：${extension.toUpperCase()} 需要先轉成文字，目前不支援直接讀取`);
+        // read: those bytes are noise, and a model handed noise answers
+        // politely anyway, which looks like it read the document.
+        toast.warning(`${file.name}：${UNSUPPORTED[extension]}`);
+        continue;
+      }
+
+      if (EXTRACTABLE.has(extension)) {
+        if (file.size > MAX_DOCUMENT_BYTES) {
+          toast.warning(`${file.name} 超過 ${MAX_DOCUMENT_BYTES >> 20} MiB`);
+          continue;
+        }
+        // The parser is a megabyte and arrives with the first file that needs
+        // it, so this is the one attachment that can take a moment.
+        const note = toast.loading(`正在讀取 ${file.name}…`, 0);
+        try {
+          const body = await extract(file, extension);
+          const trimmed = body.length > MAX_TEXT_CHARS
+            ? `${body.slice(0, MAX_TEXT_CHARS)}\n…（已截斷，原文共 ${body.length} 字）`
+            : body;
+          insertAtCaret(`\n\`\`\`\n// ${file.name}\n${trimmed}\n\`\`\`\n`);
+        } catch (error) {
+          toast.warning(`${file.name}：${(error as Error).message}`);
+        } finally {
+          note();
+        }
         continue;
       }
 
@@ -189,8 +218,8 @@ export default function Composer({
           paddingInline: 2, paddingBottom: 1,
         }}>
           <Tooltip title={capabilities?.vision
-            ? '附加檔案或圖片，圖片也可直接貼上'
-            : '附加文字或程式碼檔。這個模型沒有載入視覺投影檔，無法讀圖'}>
+            ? '附加檔案或圖片：文字、程式碼、PDF、Word，圖片也可直接貼上'
+            : '附加文字、程式碼、PDF 或 Word。這個模型沒有載入視覺投影檔，無法讀圖'}>
             <Button type="text" className="composer-btn"
                     icon={capabilities?.vision ? <PaperClipOutlined /> : <FileTextOutlined />}
                     onClick={() => filePicker.current?.click()} />
