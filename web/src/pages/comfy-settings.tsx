@@ -253,8 +253,7 @@ export default function ContainerSettings({ instance, onDone }: {
             />
           </div>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            清單是問這個容器裡的 ComfyUI 拿到的，所以跟你裝的那顆映像一致。
-            選哪張卡不用寫在這裡，主控台會自己加。
+            一行一個。顯示卡由上面的清單決定，不用寫在這裡。
           </Text>
         </div>
 
