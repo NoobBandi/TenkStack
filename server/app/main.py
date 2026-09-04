@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from . import (
     activity,
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
-    blobs, gguf, gpu, gpu_history, images, llamaswap, logs as journal, paths,
+    blobs, flags, gguf, gpu, gpu_history, images, llamaswap, logs as journal, paths,
     search, settings, speed, system, users, versions, ports,
 )
 
@@ -197,6 +197,27 @@ async def read_version():
     to answer a question that is a constant. The sidebar wants the constant.
     """
     return {"version": versions.console_version()}
+
+
+@app.get("/api/flags/llama-server")
+async def read_llama_flags(_: dict = Depends(auth.require_owner)):
+    """What the installed llama-server takes, asked of the binary.
+
+    Not a list kept here. llama.cpp's flags move between builds -- this one's
+    own help names five that have been removed -- and somebody running a
+    different version or a different backend would be offered switches their
+    server does not have, refuse to start, and get no hint why.
+    """
+    return {"flags": flags.as_dicts(await flags.llama_server())}
+
+
+@app.get("/api/flags/comfyui")
+async def read_comfy_flags(container: str,
+                           _: dict = Depends(auth.require_owner)):
+    """The same, for one ComfyUI container's image."""
+    if not container.startswith(f"{comfy.PREFIX}-"):
+        raise HTTPException(status_code=400, detail="不是 ComfyUI 容器")
+    return {"flags": flags.as_dicts(await flags.comfyui(container))}
 
 
 @app.get("/api/versions")

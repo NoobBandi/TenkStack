@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, InputNumber, Popconfirm, Segmented, Select,
+  Alert, App as AntApp, Button, Card, InputNumber, Popconfirm, Segmented,
   Space, Tag, Typography,
 } from 'antd';
 import {
@@ -21,6 +21,7 @@ import {
   type ComfyConfig, type ComfyInstance,
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
+import FlagPicker from '../components/FlagPicker';
 
 const { Text } = Typography;
 
@@ -56,83 +57,6 @@ export function joinArgs(device: number, extra: string, cardCount: number): stri
   // Newlines are how a long argument list stays readable in the box; the
   // container wants one line.
   return [generated, extra.replace(/\s+/g, ' ').trim()].filter(Boolean).join(' ');
-}
-
-/**
- * The arguments worth offering, taken from `main.py --help` in the image that
- * is actually running rather than from memory: it lists ninety-nine, and these
- * are the ones that decide anything on a machine sharing its cards with an LLM.
- *
- * A tag select rather than a plain list, so a flag that takes a value can be
- * edited after it is picked and a flag nobody thought to list can still be
- * typed. `--default-device` is deliberately absent and filtered out if typed:
- * the console writes that one from the card list, and two of them would fight.
- */
-const ARGUMENT_GROUPS = [
-  {
-    label: '顯存',
-    options: [
-      { value: '--lowvram', label: '--lowvram　模型分段搬進顯存，省顯存但較慢' },
-      { value: '--novram', label: '--novram　lowvram 還不夠時用' },
-      { value: '--highvram', label: '--highvram　模型用完留在顯存裡，較快但佔著' },
-      { value: '--gpu-only', label: '--gpu-only　連文字編碼器都留在顯存' },
-      { value: '--reserve-vram 2', label: '--reserve-vram N　留 N GB 給別人，數字可改' },
-      { value: '--disable-smart-memory', label: '--disable-smart-memory　用完就放掉，不留快取' },
-      { value: '--cache-none', label: '--cache-none　不快取節點結果，最省記憶體' },
-    ],
-  },
-  {
-    label: '精度',
-    options: [
-      { value: '--bf16-unet', label: '--bf16-unet　擴散模型用 bf16' },
-      { value: '--fp16-vae', label: '--fp16-vae　VAE 用 fp16，可能出現全黑的圖' },
-      { value: '--fp32-vae', label: '--fp32-vae　VAE 用完整精度' },
-      { value: '--cpu-vae', label: '--cpu-vae　VAE 放 CPU 跑，換顯存' },
-      { value: '--force-fp16', label: '--force-fp16　強制 fp16' },
-      { value: '--force-fp32', label: '--force-fp32　強制 fp32' },
-    ],
-  },
-  {
-    label: '速度',
-    options: [
-      { value: '--fast', label: '--fast　開啟未充分測試的加速，可能影響畫質' },
-      { value: '--async-offload', label: '--async-offload　非同步搬運權重' },
-      { value: '--use-pytorch-cross-attention', label: '--use-pytorch-cross-attention' },
-      { value: '--use-sage-attention', label: '--use-sage-attention' },
-      { value: '--disable-mmap', label: '--disable-mmap　載入 safetensors 不用 mmap' },
-    ],
-  },
-  {
-    label: '其他',
-    options: [
-      { value: '--preview-method none', label: '--preview-method none　關掉取樣預覽' },
-      { value: '--disable-all-custom-nodes', label: '--disable-all-custom-nodes　只載本體，排錯用' },
-      { value: '--disable-api-nodes', label: '--disable-api-nodes　關掉需要外部 API 的節點' },
-    ],
-  },
-];
-
-/**
- * Words to tags, keeping a flag and its value together.
- *
- * A flag followed by a word that does not itself start a flag is that flag's
- * value. That covers the listed ones and the ninety or so that are not listed:
- * split into separate chips, deleting the flag would leave its value behind as
- * a bare word the container would then choke on.
- */
-function toTags(extra: string): string[] {
-  const words = extra.split(/\s+/).filter(Boolean);
-  const tags: string[] = [];
-  for (let i = 0; i < words.length; i += 1) {
-    const next = words[i + 1];
-    if (words[i].startsWith('-') && next && !next.startsWith('-')) {
-      tags.push(`${words[i]} ${next}`);
-      i += 1;
-    } else {
-      tags.push(words[i]);
-    }
-  }
-  return tags;
 }
 
 export default function ContainerSettings({ instance, onDone }: {
@@ -318,21 +242,18 @@ export default function ContainerSettings({ instance, onDone }: {
 
         <div>
           <Text style={{ fontSize: 13 }}>額外參數</Text>
-          <Select
-            mode="tags"
-            value={toTags(extra)}
-            onChange={(tags: string[]) => setExtra(
-              // The console writes this one from the card list; a typed copy
+          <div style={{ marginTop: 8 }}>
+            <FlagPicker
+              source={{ kind: 'comfyui', container: config.name }}
+              value={extra}
+              onChange={setExtra}
+              // Written by the console from the card list above; a typed copy
               // would fight it.
-              tags.filter((t) => !t.startsWith('--default-device')).join(' '))}
-            options={ARGUMENT_GROUPS}
-            placeholder="從清單挑，或直接打字"
-            style={{ width: '100%', marginTop: 8 }}
-            optionFilterProp="label"
-            tokenSeparators={[',']}
-          />
+              reserved={['--default-device']}
+            />
+          </div>
           <Text type="secondary" style={{ fontSize: 11 }}>
-            清單是這顆映像 --help 列出來的；沒列到的直接打進去也會照送。
+            清單是問這個容器裡的 ComfyUI 拿到的，所以跟你裝的那顆映像一致。
             選哪張卡不用寫在這裡，主控台會自己加。
           </Text>
         </div>

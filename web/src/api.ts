@@ -1276,6 +1276,24 @@ export interface VersionReport {
   system: { label: string; value: string }[];
 }
 
+/** One launch flag, as the program that has it describes itself. Read from the
+ *  binary rather than listed here: llama.cpp moves its flags between builds and
+ *  a list in the source would offer somebody a switch their build refuses. */
+export interface LaunchFlag {
+  names: string[];
+  group: string;
+  help: string;
+  takes_value: boolean;
+}
+
+export const fetchFlags = (
+  source: { kind: 'llama-server' } | { kind: 'comfyui'; container: string },
+) => get<{ flags: LaunchFlag[] }>(
+  source.kind === 'comfyui'
+    ? `/flags/comfyui?container=${encodeURIComponent(source.container)}`
+    : '/flags/llama-server',
+).then((d) => d.flags);
+
 export const fetchVersions = () => get<VersionReport>('/versions');
 
 /** Just this project's version. Separate from the report above, which probes

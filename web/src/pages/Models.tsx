@@ -16,6 +16,7 @@ import {
   type ModelSpec, type ModelWeight, type PartialFile,
 } from '../api';
 import { MONO } from '../theme';
+import FlagPicker from '../components/FlagPicker';
 
 const { Text, Paragraph } = Typography;
 
@@ -870,8 +871,19 @@ export default function Models() {
             />
           </Form.Item>
           <Form.Item name="extra" label="額外參數"
-                     extra="每行一個，例如 --n-cpu-moe 20（把 MoE 專家層放到記憶體）">
-            <Input.TextArea rows={3} placeholder="--flash-attn on" />
+                     extra="清單是問這台裝的 llama-server 拿到的，所以跟你的 build 一致——別的版本或別的後端旗標不一樣。挑得到的挑，挑不到的直接打。">
+            {/* The list used to be a sentence of examples. Asked of the binary
+                instead, because llama.cpp's flags move between builds -- this
+                one's own help names five that have been removed -- and a model
+                launched with a switch its server does not have simply refuses
+                to start. */}
+            <FlagPicker
+              source={{ kind: 'llama-server' }}
+              // Every one of these is written by the form above from a field of
+              // its own; a typed copy would be the second opinion.
+              reserved={['--model', '--mmproj', '--ctx-size', '--n-gpu-layers',
+                         '--split-mode', '--port', '--host']}
+            />
           </Form.Item>
         </Form>
       </Drawer>
