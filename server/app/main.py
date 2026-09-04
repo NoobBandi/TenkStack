@@ -699,6 +699,26 @@ async def read_model_files():
     return config.list_gguf_files()
 
 
+@app.get("/api/models/recommended")
+async def read_recommended_sampling(file: str):
+    """What one GGUF says its publisher recommends.
+
+    Read on demand rather than listed with every file: it costs a walk of the
+    header, and the form asks for exactly one file at a time.
+    """
+    try:
+        # Resolved and checked, because the name arrives from a request. A
+        # relative path is the interface between this and the config, and
+        # `../` in one would otherwise read any file on the machine.
+        target = (paths.MODELS_DIR / file).resolve()
+        target.relative_to(paths.MODELS_DIR.resolve())
+    except (ValueError, OSError):
+        raise HTTPException(status_code=400, detail="路徑不在模型目錄裡")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="找不到這個檔案")
+    return {"sampling": await asyncio.to_thread(gguf.sampling, target)}
+
+
 @app.get("/api/config")
 async def read_config():
     return {"raw": config.raw(), **config.read()}

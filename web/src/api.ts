@@ -1348,6 +1348,11 @@ export const fetchMachine = () =>
 
 export const fetchModelSpec = (id: string) =>
   get<ModelSpec>(`/models/${encodeURIComponent(id)}/spec`);
+/** What one GGUF says its publisher recommends, read from the file's own
+ *  header. Empty for a model converted without a generation_config.json. */
+export const fetchRecommendedSampling = (file: string) =>
+  get<{ sampling: Record<string, number> }>(
+    `/models/recommended?file=${encodeURIComponent(file)}`);
 export const unloadModel = (id: string) =>
   send<{ ok: boolean }>(`/models/${encodeURIComponent(id)}/unload`, 'POST');
 

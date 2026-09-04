@@ -4,13 +4,14 @@ import {
   InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
-  DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined, PoweroffOutlined,
-  ReloadOutlined,
+  DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
+  PoweroffOutlined, ReloadOutlined,
 } from '@ant-design/icons';
 import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
-  fetchModelSpec, fetchPartials, loadModel, modelFileRefs, saveModel, unloadAll,
+  fetchModelSpec, fetchPartials, fetchRecommendedSampling, loadModel,
+  modelFileRefs, saveModel, unloadAll,
   unloadModel,
   type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo,
   type ModelSpec, type ModelWeight, type PartialFile,
@@ -136,6 +137,7 @@ export default function Models() {
   // changing it would create a second entry rather than rename the first.
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
   const [form] = Form.useForm<ModelSpec>();
   /**
    * The cards a llama-server here can actually drive.
@@ -212,6 +214,44 @@ export default function Models() {
       window.setTimeout(refresh, 2500);
     } catch (error) {
       message.error((error as Error).message);
+    }
+  };
+
+  /**
+   * The values the model file itself carries.
+   *
+   * Every publisher states them: they start as `generation_config.json` in the
+   * HuggingFace repo, and llama.cpp's converter writes them into the GGUF as
+   * `general.sampling.*`. Nothing in llama.cpp reads them back -- the keys are
+   * defined and never fetched -- so they sit in the file unused, and the usual
+   * way to find them is to copy them off a model card. This reads them out of
+   * the header of the file that was picked.
+   */
+  const importRecommended = async () => {
+    const file: string | undefined = form.getFieldValue('model_file');
+    if (!file) {
+      message.info('先選模型檔');
+      return;
+    }
+    setImporting(true);
+    try {
+      const { sampling } = await fetchRecommendedSampling(file);
+      const names = Object.keys(sampling);
+      if (!names.length) {
+        // Not a failure. A model converted without a generation_config.json
+        // carries no such keys, and saying so beats an empty success.
+        message.info('這個模型檔沒有內建建議值');
+        return;
+      }
+      // Merged, not replaced: a field the file says nothing about keeps
+      // whatever was already typed there.
+      form.setFieldValue('sampling',
+        { ...(form.getFieldValue('sampling') ?? {}), ...sampling });
+      message.success(`已帶入 ${names.join('、')}`);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -874,8 +914,19 @@ export default function Models() {
               machine's own config spells them three different ways. Blank means
               the flag is not written at all, which is not the same as writing
               llama.cpp's current default and staying wrong when it moves. */}
-          <Form.Item label="取樣預設值"
-                     extra="留白就用 llama.cpp 自己的預設（灰字），不會寫進設定檔。這裡設的是伺服器端預設，聊天視窗送出的參數會覆蓋它。">
+          <Form.Item
+            label={(
+              <Space size={8}>
+                取樣預設值
+                <Button type="link" size="small" icon={<ImportOutlined />}
+                        loading={importing} onClick={importRecommended}
+                        style={{ padding: 0, height: 'auto', fontSize: 12 }}>
+                  帶入模型建議值
+                </Button>
+              </Space>
+            )}
+            extra="留白就用 llama.cpp 自己的預設（灰字），不會寫進設定檔。「帶入模型建議值」讀的是模型檔自己帶的那份，llama-server 不會自動套用。這裡設的是伺服器端預設，聊天視窗送出的參數會覆蓋它。"
+          >
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
               {SAMPLING.map(({ field, hint, step }) => (
                 <Form.Item

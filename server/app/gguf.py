@@ -140,13 +140,8 @@ def _tensor_bytes(kind: int, elements: int) -> int | None:
     return elements // per_block * block_bytes
 
 
-def parse(blob: bytes) -> dict:
-    """One GGUF file's header, as far as it describes itself.
-
-    Raises `_Short` when the blob stops mid-header, which the caller answers by
-    reading further rather than by giving up.
-    """
-    cursor = _Cursor(blob)
+def _metadata(cursor: _Cursor) -> tuple[int, int, dict[str, object]]:
+    """The key/value block, leaving the cursor on the tensor directory."""
     if cursor.take(4) != b"GGUF":
         raise ValueError("not a GGUF file")
     version = cursor.u32()
@@ -157,6 +152,17 @@ def parse(blob: bytes) -> dict:
     for _ in range(kv_count):
         key = cursor.text()
         meta[key] = cursor.value(cursor.u32())
+    return version, tensor_count, meta
+
+
+def parse(blob: bytes) -> dict:
+    """One GGUF file's header, as far as it describes itself.
+
+    Raises `_Short` when the blob stops mid-header, which the caller answers by
+    reading further rather than by giving up.
+    """
+    cursor = _Cursor(blob)
+    version, tensor_count, meta = _metadata(cursor)
 
     # Expert tensors are the ones the router picks among, and they are named for
     # it: `blk.0.ffn_gate_exps.weight`. A shared expert -- always active, so it
@@ -314,3 +320,61 @@ async def describe(repo_id: str, parts: list[str]) -> dict | None:
     }
     _seen[key] = described
     return described
+
+
+# What the publisher recommends, under the names this console uses.
+#
+# These start as `generation_config.json` in the HuggingFace repo, and
+# llama.cpp's converter copies them in: `gguf-py/gguf/metadata.py` reads that
+# file and writes `general.sampling.*` into the GGUF.
+#
+# Nothing in llama.cpp reads them back. The keys are defined in llama-arch.cpp,
+# every one is commented out in llama-model-saver.cpp with a `???`, and no
+# `get_key` in src/, common/ or tools/ asks for one -- checked against the build
+# on this machine. So the numbers sit in the file and the server ignores them,
+# which is why they get copied off a model card by hand.
+#
+# GGUF spells temperature `temp` and the repetition penalty `penalty_repeat`;
+# the console follows llama-server's own request schema, which says
+# `temperature` and `repeat_penalty`. There is no key for presence_penalty:
+# generation_config.json has no equivalent, so that field stays empty.
+_SAMPLING = {
+    "general.sampling.temp": "temperature",
+    "general.sampling.top_k": "top_k",
+    "general.sampling.top_p": "top_p",
+    "general.sampling.min_p": "min_p",
+    "general.sampling.penalty_repeat": "repeat_penalty",
+}
+_SAMPLING_INTS = {"top_k"}
+
+
+def sampling(path) -> dict[str, float]:
+    """The sampling defaults one local file carries, or an empty dict.
+
+    Empty is a real answer and a common one: a model converted without a
+    generation_config.json has no such keys -- the draft model on this machine
+    is one -- and that is not an error.
+
+    Only the metadata block is read. It sits at the front of the file, so this
+    costs a few megabytes of a model that may be sixty gigabytes, and the tensor
+    directory below it is never walked.
+    """
+    for size in (FIRST_READ, WIDER_READ):
+        try:
+            with open(path, "rb") as handle:
+                blob = handle.read(size)
+            _, _, meta = _metadata(_Cursor(blob))
+        except _Short:
+            continue          # the vocabulary ran past the read; take more
+        except (OSError, ValueError, struct.error) as error:
+            logger.info("could not read %s: %s", path, error)
+            return {}
+
+        found: dict[str, float] = {}
+        for key, field in _SAMPLING.items():
+            value = meta.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                found[field] = (int(value) if field in _SAMPLING_INTS
+                                else round(float(value), 4))
+        return found
+    return {}
