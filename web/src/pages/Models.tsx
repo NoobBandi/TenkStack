@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
-  InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  InputNumber, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, PlayCircleOutlined, PlusOutlined, PoweroffOutlined,
@@ -30,6 +30,13 @@ const EMPTY: ModelSpec = {
 };
 
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+
+/** How many cards this entry is for. Read off the stored list when a model is
+ *  opened, and set by hand when one is written. */
+type CardMode = 'auto' | 'single' | 'multi';
+
+const modeOf = (device: string[] | undefined): CardMode =>
+  !device?.length ? 'auto' : device.length === 1 ? 'single' : 'multi';
 
 /** Basename first, then which repo it came from -- which is the only thing
  *  separating two files that are otherwise identically named. */
@@ -125,6 +132,7 @@ export default function Models() {
    * configured, with nobody having to remember to switch it on.
    */
   const [devices, setDevices] = useState<BackendDevice[]>([]);
+  const [cardMode, setCardMode] = useState<CardMode>('auto');
 
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
@@ -195,7 +203,9 @@ export default function Models() {
   const openEdit = async (id: string) => {
     try {
       const spec = await fetchModelSpec(id);
-      form.setFieldsValue({ ...spec, device: deviceOf(spec.env) });
+      const device = deviceOf(spec.env);
+      setCardMode(modeOf(device));
+      form.setFieldsValue({ ...spec, device });
       setEditing(id);
       setOpen(true);
     } catch (error) {
@@ -328,7 +338,12 @@ export default function Models() {
               全部卸載
             </Button>
             <Button size="small" type="primary" icon={<PlusOutlined />}
-                    onClick={() => { form.setFieldsValue(EMPTY); setEditing(null); setOpen(true); }}>
+                    onClick={() => {
+                      form.setFieldsValue(EMPTY);
+                      setCardMode(modeOf(EMPTY.device as string[]));
+                      setEditing(null);
+                      setOpen(true);
+                    }}>
               新增模型
             </Button>
           </Space>
@@ -769,38 +784,77 @@ export default function Models() {
               }))}
             />
           </Form.Item>
-          {/* Only when there is a choice. One usable card means one option,
-              and a select with one option is a question that should not have
-              been asked -- the same rule as the log page's per-instance row
-              and the paginator's size list. */}
           {devices.length > 1 && (
-            <Form.Item name="device" label="顯示卡"
-                       extra="只列出這台的 llama-server 真的看得到的卡。留空表示不指定；選兩張以上要搭配 --split-mode。">
-              {/* Multiple, because one llama-server can hold more than one
-                  card and splitting a model across them is the reason to own
-                  a second. A single-value select could not represent that, so
-                  it showed nothing for a two-card model and then saved the
-                  nothing it showed. */}
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="不指定"
-                options={devices.map((d) => ({
-                  value: `${d.backend}:${d.index}`,
-                  label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
-                }))}
-              />
+            <Form.Item
+              label="顯示卡"
+              // Two questions, and only one was being asked. A multi-select
+              // answers "which cards" and leaves "how many" to be read off how
+              // many chips ended up in it -- so a model meant for one card and a
+              // model meant for both differed by a detail nobody was asked
+              // about directly.
+              extra={cardMode === 'multi'
+                ? '兩張卡會用 --split-mode layer 切開。layer 不是最快的——實測 tensor 單串流快 1.3%、雙串流快 7.6%——但 tensor 完全不能做推測解碼，而推測解碼值得的遠不只 7.6%。'
+                : cardMode === 'single'
+                  ? '整個模型放進一張卡。放不下就會失敗，不會自動溢出到另一張。'
+                  : '不指定，由 llama-server 自己決定用哪些看得到的卡。'}
+            >
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Segmented
+                  size="small"
+                  value={cardMode}
+                  onChange={(v: string | number) => {
+                    const next = v as CardMode;
+                    setCardMode(next);
+                    const held: string[] = form.getFieldValue('device') ?? [];
+                    form.setFieldValue('device',
+                      next === 'auto' ? []
+                        : next === 'single' ? held.slice(0, 1)
+                          : held.length > 1 ? held
+                            : devices.map((d) => `${d.backend}:${d.index}`));
+                  }}
+                  options={[
+                    { value: 'auto', label: '自動' },
+                    { value: 'single', label: '單卡' },
+                    { value: 'multi', label: `${devices.length} 張卡` },
+                  ]}
+                />
+                {cardMode !== 'auto' && (
+                  <Form.Item name="device" noStyle>
+                    {/* Multiple in both modes, because the stored value is a
+                        list either way; the segment above is what stops a second
+                        chip going in. */}
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      placeholder={cardMode === 'single' ? '選一張' : '選要用的卡'}
+                      maxCount={cardMode === 'single' ? 1 : undefined}
+                      options={devices.map((d) => ({
+                        value: `${d.backend}:${d.index}`,
+                        label: `${d.name}（${d.backend}${d.index}，${Math.round(d.total_mib / 1024)} GiB）`,
+                      }))}
+                    />
+                  </Form.Item>
+                )}
+              </Space>
             </Form.Item>
           )}
-          <Space size={16} style={{ display: 'flex' }}>
-            <Form.Item name="ctx_size" label="Context 長度" style={{ flex: 1 }}>
+          {/* A plain flex row, not Space.
+              Space wraps every child in an item of its own, so the `flex: 1`
+              sitting on the Form.Item inside never reached the box that decides
+              the width -- the two fields sized to their contents and came out
+              different. And both carry an `extra` now: one line of help under
+              one field and none under the other left the pair with different
+              heights and no bottom edge to share. */}
+          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+            <Form.Item name="ctx_size" label="Context 長度" style={{ flex: 1 }}
+                       extra="每個 slot 分到的是這個數字除以 --parallel">
               <InputNumber min={512} max={1048576} step={1024} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="ttl" label="閒置卸載（秒）" style={{ flex: 1 }}
                        extra="0 表示不自動卸載">
               <InputNumber min={0} step={60} style={{ width: '100%' }} />
             </Form.Item>
-          </Space>
+          </div>
           <Form.Item name="n_gpu_layers" label="GPU 層數"
                      extra="0 表示不指定，讓 llama.cpp 自行決定。放不進顯存的模型必須用 0，否則 llama.cpp 會拒絕自動調整而直接失敗。">
             <InputNumber min={0} max={999} style={{ width: '100%' }} />
