@@ -832,16 +832,17 @@ export default function Models() {
               about the file and silent about the question -- and the two names
               it offers, large and small, read as model size when what they
               actually set is whether loading this model evicts everything else.
-              A 3B model in "large" is exclusive too. Neither the word nor the
-              names belong on the control; the help line underneath is where
-              somebody who is looking at config.yaml can map the two. */}
+              A 3B model in "large" is exclusive too. So the name leads and the
+              behaviour follows it: whoever is reading config.yaml sees the
+              value they will find in the file, and whoever is not reads past
+              it to the part that answers the question. */}
           <Form.Item name="group" label="載入策略"
-                     extra="獨佔在載入時會把其他模型卸下來，共存不會。設定檔裡對應的名字是 large 和 small，在設定頁看得到。">
+                     extra="獨佔在載入時會把其他模型卸下來，共存不會。前面的名字就是寫進設定檔的值，在設定頁看得到。">
             <Select
               allowClear
               options={[
-                { value: 'large', label: '獨佔 — 載入時卸載其他模型' },
-                { value: 'small', label: '共存 — 可與 ComfyUI 或其他模型並存' },
+                { value: 'large', label: 'large 獨佔 — 載入時卸載其他模型' },
+                { value: 'small', label: 'small 共存 — 可與 ComfyUI 或其他模型並存' },
               ]}
             />
           </Form.Item>
