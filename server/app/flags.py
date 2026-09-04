@@ -52,6 +52,23 @@ class Flag:
     takes_value: bool
 
 
+# Where the description starts. The names are padded out to this column, and a
+# wrapped description resumes at it, so it is the only reliable seam: splitting
+# on runs of spaces instead put `-c,` in the head and threw away `--ctx-size`,
+# because a short alias is followed by more padding than a long one. Twelve
+# flags were being lost that way, all of them ones with a two-letter alias.
+_HELP_COLUMN = 40
+
+
+def _split(line: str) -> tuple[str, str]:
+    """A flag line into its names and its description."""
+    if len(line) > _HELP_COLUMN and line[_HELP_COLUMN - 1] == " ":
+        return line[:_HELP_COLUMN], line[_HELP_COLUMN:].strip()
+    # A name list long enough to run past the column pushes its description onto
+    # the next line, which arrives as a continuation.
+    return line, ""
+
+
 def parse(text: str) -> list[Flag]:
     """`--help` output to flags.
 
@@ -78,7 +95,7 @@ def parse(text: str) -> list[Flag]:
             line.startswith("  ") and not line.startswith("    ")
             and line.strip().startswith("-"))
         if starts_flag:
-            head, _, tail = line.partition("   ")
+            head, tail = _split(line)
             names = _NAME.findall(head)
             if not names:
                 current = None

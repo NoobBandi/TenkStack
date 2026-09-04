@@ -24,6 +24,7 @@ import { Input, Select, Typography } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { fetchFlags, type LaunchFlag } from '../api';
 import { MONO } from '../theme';
+import { COMFY_NOTES, LLAMA_NOTES } from './flag-notes';
 
 const { Text } = Typography;
 
@@ -53,6 +54,12 @@ export default function FlagPicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.kind, key]);
 
+  // Chinese for the ones worth explaining, the program's own English for the
+  // rest. The table cannot add a flag or hide one -- what exists is still
+  // whatever the binary said -- so a note nobody has written yet costs the
+  // reader the original sentence, which is never wrong.
+  const notes = source.kind === 'comfyui' ? COMFY_NOTES : LLAMA_NOTES;
+
   const options = useMemo(() => {
     const groups = new Map<string, { value: string; label: React.ReactNode }[]>();
     for (const flag of flags) {
@@ -69,8 +76,10 @@ export default function FlagPicker({
             {flag.takes_value && (
               <Text type="secondary" style={{ fontFamily: MONO, fontSize: 12 }}> N</Text>
             )}
-            {flag.help && (
-              <Text type="secondary" style={{ fontSize: 11 }}>　{flag.help}</Text>
+            {(notes[name] || flag.help) && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                　{notes[name] || flag.help}
+              </Text>
             )}
           </span>
         ),
@@ -78,7 +87,7 @@ export default function FlagPicker({
       groups.set(flag.group, bucket);
     }
     return [...groups].map(([label, opts]) => ({ label: label || '其他', options: opts }));
-  }, [flags, reserved]);
+  }, [flags, reserved, notes]);
 
   const takesValue = useMemo(
     () => new Set(flags.filter((f) => f.takes_value).flatMap((f) => f.names)),
