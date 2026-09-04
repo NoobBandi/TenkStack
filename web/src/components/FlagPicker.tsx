@@ -79,6 +79,11 @@ export default function FlagPicker({
       const short = flag.names.find((n) => !n.startsWith('--'));
       const option = {
         value: long,
+        // Everything this flag can be found by. The value is the long name
+        // because that is what gets written, but somebody typing `-cl` or
+        // `-ngl` is typing the name the program printed first and should not
+        // have to know the spelled-out one to find it.
+        search: `${flag.names.join(' ')} ${flag.help}`.toLowerCase(),
         label: (
           <span>
             {short && (
@@ -140,7 +145,11 @@ export default function FlagPicker({
         value={null}
         onSelect={(name: string | null) => { if (name) insert(name); }}
         options={options}
-        optionFilterProp="value"
+        // Names and description, not just the value. Searching the description
+        // is what makes "vram" or "moe" find the four flags about them without
+        // knowing any of their names.
+        filterOption={(input, option) =>
+          !!option?.search?.includes(input.trim().toLowerCase())}
         placeholder={flags.length
           ? `加入旗標…（這個 build 有 ${flags.length} 個）`
           : '讀不到旗標清單，直接在下面打字'}
