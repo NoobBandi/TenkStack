@@ -32,7 +32,7 @@ from . import (
     activity,
     auth, backends, catalog, channels, chats, comfy, config, containers, files,
     blobs, container_history, flags, gguf, gpu, gpu_history, images, llamaswap,
-    logs as journal, paths,
+    logs as journal, paths, vision_cache,
     search, settings, speed, system, users, versions, ports,
 )
 
@@ -74,6 +74,7 @@ app.add_middleware(
 async def _startup() -> None:
     users.init()
     settings.init()
+    vision_cache.init()
     chats.init()
     # Sampling starts with the process, not with the first browser: the chart
     # should show the last hour on load rather than begin at zero.
@@ -2507,6 +2508,23 @@ async def openai_proxy(path: str, request: Request):
     # rejected upstream; see app.images. Content-Length is already dropped from
     # the forwarded headers, so a body that changes length is safe.
     body = images.transcode(body)
+
+    # An image the conversation has moved past becomes the description the model
+    # already gave of it. The newest one is always left alone. See
+    # app.vision_cache for why: a picture in the request drops this machine's
+    # drafter from 67% acceptance to 1%, and it never recovers while the image
+    # is still being sent.
+    if request.method == "POST" and path.endswith("chat/completions") and body:
+        if settings.get("vision_cache"):
+            try:
+                payload = json.loads(body)
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                payload, replaced = vision_cache.rewrite(payload)
+                if replaced:
+                    body = json.dumps(payload).encode()
+                    logger.info("vision cache: %d image(s) served as description", replaced)
 
     # Only requests that name a model can cause one to be loaded; /v1/models and
     # the like are just reads and must not stall behind an eviction.

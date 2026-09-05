@@ -57,6 +57,15 @@ SPEC: dict[str, dict] = {
         "default": 1, "minimum": 0, "maximum": 16, "unit": "GiB",
         "group": "vram",
     },
+    "vision_cache": {
+        "label": "圖片描述快取",
+        "note": "對話裡較舊的圖片改送模型自己給過的描述，只有最新一張維持原圖。"
+                "帶圖的請求會讓草稿模型失效——本機實測接受率從 67% 掉到 1%、"
+                "生成從 34.7 掉到 12.6 tok/s，而且只要圖還在對話裡就不會恢復"
+                "（上游 llama.cpp#27408）。代價是模型之後看不到原圖。",
+        "default": 0, "minimum": 0, "maximum": 1, "unit": "",
+        "group": "chat",
+    },
     "log_lines": {
         "label": "日誌保留行數",
         "note": "伺服器端環形緩衝的大小。日誌頁往回捲的距離就到這裡為止。",
