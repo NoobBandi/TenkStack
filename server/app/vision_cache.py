@@ -25,10 +25,18 @@ agent run costs every turn after it.
 WHAT IS DONE ABOUT IT
 
 Nothing that requires a different model, and nothing that gives up vision. The
-image is sent to the model exactly once, in the turn that introduces it; the
-model's own description of it is kept, and in later turns the image is replaced
-by that description. The turn that looks at the picture is a vision turn. Every
-turn after it is text, and text is what the drafter is good at.
+image is sent to the model exactly once, in the turn that introduces it. After
+the model has answered about it, later turns carry a placeholder in its place --
+because the answer is still in the transcript, and that is what the model needs
+to keep working from the picture it saw. The turn that looks at the picture is a
+vision turn; every turn after it is text, and text is what the drafter is good
+at.
+
+A fuller description can be generated and cached as well, and is used when it
+exists. It is an improvement rather than a requirement, and deliberately so: the
+request that produces one carries the image, so it hits the same bug -- on this
+machine it failed with `failed to find a memory slot` while an agent session
+held the cache. Nothing that fixes a problem should depend on the problem.
 
 Measured, same machine, same image:
 
@@ -248,14 +256,30 @@ def rewrite(body: dict) -> tuple[dict, int]:
         images = _images_in(message)
         if not images:
             continue
+        # The model's own reply is the description.
+        #
+        # It is already in the transcript, one message down: whatever it said
+        # about the picture when it could still see it. Measured, that reply
+        # alone is enough -- an image swapped for a placeholder, with the reply
+        # left where it was, took acceptance from 1% back to 43%. Which is why
+        # a separate description is an improvement here and never a requirement:
+        # asking for one means another request carrying the image, and that is
+        # the request that fails when the draft cache is already full of the
+        # cells the last image churned.
+        answered = any(
+            isinstance(later, dict) and later.get("role") == "assistant"
+            for later in messages[index + 1:boundary + 1]
+        )
+        if not answered:
+            continue      # the model never spoke about it; it still needs to see it
+
         content = list(message.get("content") or [])
         for part_index, url in images:
             text = lookup(digest_of(url))
-            if text is None:
-                continue          # not described yet; leave the image alone
             content[part_index] = {
                 "type": "text",
-                "text": f"［圖片，已由模型描述過］\n{text}",
+                "text": (f"［這張圖模型稍早看過，以下是它的描述］\n{text}" if text
+                         else "［圖片已省略——模型稍早看過它，它的說明在下一則訊息］"),
             }
             replaced += 1
         out[index] = {**message, "content": content}
