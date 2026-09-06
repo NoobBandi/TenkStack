@@ -166,11 +166,16 @@ export default function ClientSnippets({ endpoints, hostname, tab, onTab }: Prop
   // mid-token, while one that hits its own ceiling stops cleanly and can be
   // continued.
   const output = Math.min(16384, Math.floor(ctx / 4));
-  // Summarise at three quarters. Leaves a whole quarter for the summarising
-  // request itself plus the reply after it, which is what makes the compaction
-  // land before the wall rather than against it.
-  const compactAt = Math.floor(ctx * 0.75);
-  const reserved = Math.floor(ctx / 8);
+  // Summarise at 85%. The remaining seventh holds the summarising request itself
+  // plus the reply after it, which is what makes the compaction land before the
+  // wall rather than against it.
+  //
+  // One number for every client on this page. Each of them spells the same idea
+  // differently -- Codex names the threshold, Claude Code and Pi name the
+  // headroom left above it -- so they are all derived from this rather than
+  // written out separately, and a reader comparing two tabs sees one policy.
+  const compactAt = Math.floor(ctx * 0.85);
+  const reserved = ctx - compactAt;
   const keepRecent = Math.floor(ctx / 6);
 
   const win = os === 'windows';
@@ -400,7 +405,7 @@ auto_compact_threshold_percent = 75`,
                   {
                     id: modelId,
                     name: modelName,
-                    reasoning: false,
+                    reasoning: true,
                     input: vision ? ['text', 'image'] : ['text'],
                     contextWindow: ctx,
                     maxTokens: output,
@@ -410,7 +415,9 @@ auto_compact_threshold_percent = 75`,
               },
             },
           }, null, 2),
-          note: 'compat 那兩個是重點：Pi 對支援推理的模型會送 developer 角色和 reasoning_effort，'
+          note: 'reasoning 開著、compat 兩個關著不衝突：前者說這個模型會思考，'
+              + '後者說別用 OpenAI 那套參數去要求它。'
+              + 'compat 那兩個是重點：Pi 對支援推理的模型會送 developer 角色和 reasoning_effort，'
               + '而 llama-server 這類 OpenAI 相容伺服器不認得，官方文件點名 Ollama／vLLM／SGLang 都要關。'
               + `contextWindow 填每個 slot 的實際視窗（目前 ${ctx.toLocaleString()}），`
               + 'cost 全填 0，本機沒有計費但欄位要在。'
@@ -418,6 +425,25 @@ auto_compact_threshold_percent = 75`,
               + 'apiKey 這裡直接寫字面值；它也吃 "$環境變數" 和 "!指令"（取 stdout），'
               + `例如 "!cat ${keyPath}" 或 macOS 的 "!security find-generic-password -ws tenks"，`
               + '那樣金鑰就不在這個檔案裡。也可以在 pi 裡下 /login 存起來。',
+        },
+        {
+          title: '⑤ 另一個檔案：什麼時候壓縮上下文',
+          lang: 'json',
+          body: `// ~/.pi/agent/settings.json\n${JSON.stringify({
+            compaction: {
+              enabled: true,
+              reserveTokens: reserved,
+              keepRecentTokens: keepRecent,
+            },
+          }, null, 2)}`,
+          note: '壓縮設定不在 models.json —— 那個檔案描述模型是什麼，這個檔案描述 agent 怎麼行為。'
+              + 'Pi 的判斷式是 contextTokens > contextWindow − reserveTokens，'
+              + `所以填 ${reserved.toLocaleString()} 就是在 ${compactAt.toLocaleString()}（視窗的 85%）動手，`
+              + '剩下的空間留給摘要請求本身和它之後的回覆。'
+              + '自動壓縮預設就是開的，這三個值也都有內建預設（16384／20000），'
+              + '所以你的檔案裡多半根本沒有 compaction 這一區——要改就得自己加上整區。'
+              + `keepRecentTokens 是保留不摘要的最近對話，這裡取視窗的六分之一（${keepRecent.toLocaleString()}）。`
+              + '不想自動壓縮就把 enabled 設成 false，改用 /compact 手動觸發。',
         },
       ],
     },
