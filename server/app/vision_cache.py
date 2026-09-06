@@ -73,7 +73,7 @@ import time
 
 import httpx
 
-from . import llamaswap, paths
+from . import config, llamaswap, paths
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,40 @@ def store(digest: str, model: str, description: str, size: int) -> None:
             " (digest, model, description, bytes, created_at) VALUES (?, ?, ?, ?, ?)",
             (digest, model, description, size, time.time()),
         )
+
+
+# Which models this is worth doing for, by the drafter they run.
+#
+# Only a separate draft *model* has the one-dimensional recurrent cache an image
+# breaks. MTP's head lives in the target and uses an ordinary attention cache, so
+# a picture costs it nothing -- measured on this machine, image present 27.9
+# tok/s at 48% accepted against 26.6 at 45% for plain text. Rewriting there is
+# not neutral either: it invalidates the prompt prefix and takes away what the
+# model was told, and it measured 21.7 at 35%. So this asks first.
+# Keyed on when the config was last written, because changing a model's drafter
+# is exactly the edit that makes a cached answer here wrong.
+_HAS_DRAFT_MODEL: dict[tuple[str, float], bool] = {}
+
+
+def _uses_draft_model(model_id: str) -> bool:
+    try:
+        stamp = paths.LLAMA_SWAP_CONFIG.stat().st_mtime
+    except OSError:
+        stamp = 0.0
+    key = (model_id, stamp)
+    if key in _HAS_DRAFT_MODEL:
+        return _HAS_DRAFT_MODEL[key]
+    try:
+        spec = config.read_model_spec(model_id)
+        cmd = " ".join(str(spec.get("extra") or "").splitlines())
+        found = "--spec-draft-model" in cmd
+    except Exception:
+        # Unknown is treated as "not worth touching": leaving a request alone is
+        # always safe, and rewriting one that did not need it is not.
+        found = False
+    _HAS_DRAFT_MODEL.clear()      # one config, one generation of answers
+    _HAS_DRAFT_MODEL[key] = found
+    return found
 
 
 def _images_in(message: dict) -> list[tuple[int, str]]:
@@ -225,6 +259,8 @@ def rewrite(body: dict) -> tuple[dict, int]:
     if not isinstance(messages, list) or len(messages) < 2:
         return body, 0
     model = str(body.get("model") or "")
+    if not _uses_draft_model(model):
+        return body, 0
 
     # The boundary is the turn being answered, not the last image.
     #
