@@ -382,7 +382,7 @@ auto_compact_threshold_percent = 75`,
              + '這個檔案每次打開 /model 都會重讀，改完不用重開。',
       steps: [
         {
-          title: '③ 開啟設定檔',
+          title: '③ 開啟模型設定檔',
           lang: sh,
           body: openCommand(os, '~/.pi/agent/models.json',
             '$env:USERPROFILE\\.pi\\agent\\models.json'),
@@ -427,15 +427,21 @@ auto_compact_threshold_percent = 75`,
               + '那樣金鑰就不在這個檔案裡。也可以在 pi 裡下 /login 存起來。',
         },
         {
-          title: '⑤ 另一個檔案：什麼時候壓縮上下文',
+          title: '⑤ 開啟 agent 設定檔',
+          lang: sh,
+          body: openCommand(os, '~/.pi/agent/settings.json',
+            '$env:USERPROFILE\\.pi\\agent\\settings.json'),
+        },
+        {
+          title: '⑥ 貼進去：什麼時候壓縮上下文',
           lang: 'json',
-          body: `// ~/.pi/agent/settings.json\n${JSON.stringify({
+          body: JSON.stringify({
             compaction: {
               enabled: true,
               reserveTokens: reserved,
               keepRecentTokens: keepRecent,
             },
-          }, null, 2)}`,
+          }, null, 2),
           note: '壓縮設定不在 models.json —— 那個檔案描述模型是什麼，這個檔案描述 agent 怎麼行為。'
               + 'Pi 的判斷式是 contextTokens > contextWindow − reserveTokens，'
               + `所以填 ${reserved.toLocaleString()} 就是在 ${compactAt.toLocaleString()}（視窗的 85%）動手，`
