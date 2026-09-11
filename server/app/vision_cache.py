@@ -140,15 +140,45 @@ def store(digest: str, model: str, description: str, size: int) -> None:
 
 # Which models this is worth doing for, by the drafter they run.
 #
-# Only a separate draft *model* has the one-dimensional recurrent cache an image
-# breaks. MTP's head lives in the target and uses an ordinary attention cache, so
-# a picture costs it nothing -- measured on this machine, image present 27.9
-# tok/s at 48% accepted against 26.6 at 45% for plain text. Rewriting there is
-# not neutral either: it invalidates the prompt prefix and takes away what the
-# model was told, and it measured 21.7 at 35%. So this asks first.
+# What an image breaks is a drafter that keeps its own one-dimensional recurrent
+# cache and has to be fed every position in order -- DFlash and its relatives.
+# MTP does not have one: its head predicts from the target's hidden state and
+# uses an ordinary attention cache, so a picture costs it nothing. That holds
+# whether the head ships inside the target (Qwen 3.8, a `nextn` layer) or as a
+# separate file (Gemma 4, `--model-draft`); measured on this machine, Gemma with
+# an image in the transcript drafted at 30-78% accepted, the same as plain text.
+#
+# So the question is the *type* of drafter, not whether a second file is loaded.
+# Asking "is there a --spec-draft-model" was the wrong proxy: it said no for
+# Gemma's `--model-draft` spelling and would have said yes for an MTP head shipped
+# as a file, and rewriting where it is not needed is not neutral -- it throws
+# away the prompt prefix and what the model was told, and measured 27.9 -> 21.7
+# tok/s on Qwen MTP and 26.0 -> 20.2 on Gemma.
+#
 # Keyed on when the config was last written, because changing a model's drafter
 # is exactly the edit that makes a cached answer here wrong.
 _HAS_DRAFT_MODEL: dict[tuple[str, float], bool] = {}
+
+
+# The `--spec-type` values that carry a recurrent draft cache. `draft-mtp` and
+# the `ngram-*` family are deliberately absent: neither keeps per-position draft
+# state that an image can leave holes in.
+_FRAGILE_DRAFTERS = ("draft-dflash", "draft-eagle3", "draft-dspark", "draft-simple")
+
+
+def _has_fragile_drafter(cmd: str) -> bool:
+    """Whether this launch line names a drafter that images break."""
+    tokens = cmd.split()
+    for i, tok in enumerate(tokens):
+        if tok == "--spec-type" and i + 1 < len(tokens):
+            kinds = tokens[i + 1].split(",")
+        elif tok.startswith("--spec-type="):
+            kinds = tok.split("=", 1)[1].split(",")
+        else:
+            continue
+        if any(k in _FRAGILE_DRAFTERS for k in kinds):
+            return True
+    return False
 
 
 def _uses_draft_model(model_id: str) -> bool:
@@ -162,7 +192,7 @@ def _uses_draft_model(model_id: str) -> bool:
     try:
         spec = config.read_model_spec(model_id)
         cmd = " ".join(str(spec.get("extra") or "").splitlines())
-        found = "--spec-draft-model" in cmd
+        found = _has_fragile_drafter(cmd)
     except Exception:
         # Unknown is treated as "not worth touching": leaving a request alone is
         # always safe, and rewriting one that did not need it is not.
