@@ -273,3 +273,7 @@ llama-swap's `config.yaml`, and the ComfyUI and SearXNG launch scripts all
 contain host-specific addresses. The session signing key and the SQLite database holding
 password hashes and API keys are excluded by `.gitignore` and must never be
 committed.
+
+## License
+
+[Apache License 2.0](LICENSE). Contributions are accepted under the same terms (Apache-2.0 §5), so no separate contributor agreement is needed.

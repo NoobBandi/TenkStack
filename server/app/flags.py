@@ -168,10 +168,25 @@ async def llama_server() -> list[Flag]:
     oneAPI's runtime on its library path and will not start without it -- asking
     the binary directly gets a linker error rather than a help page.
     """
-    binary = paths.LLAMA_SWAP_DIR / "llama-server-sycl.sh"
-    if not binary.exists():
-        binary = paths.LLAMA_CPP_DIR / "builds" / "current" / "bin" / "llama-server"
-    if not binary.exists():
+    # Whatever the config actually launches models with, in the order the
+    # config names them. This used to look for one wrapper by its name on the
+    # machine it was written on -- `llama-server-sycl.sh` -- and on every other
+    # machine returned nothing: the console writes `llama-server-<vendor>.sh`
+    # when it installs a runtime, so the picker was empty on every fresh
+    # install. The launchers are the config's business, and asking it is the
+    # only way that stays right when a second one appears.
+    from . import backends
+    binary: Path | None = None
+    for launcher in backends._launchers():
+        candidate = Path(launcher)
+        if candidate.is_file():
+            binary = candidate
+            break
+    if binary is None:
+        candidate = paths.LLAMA_CPP_DIR / "builds" / "current" / "bin" / "llama-server"
+        if candidate.is_file():
+            binary = candidate
+    if binary is None:
         return []
 
     try:

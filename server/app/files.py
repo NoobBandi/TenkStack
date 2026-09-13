@@ -371,7 +371,7 @@ def locate(raw: str) -> dict:
 
     target = Path(text).expanduser()
     if not target.is_absolute():
-        raise BadPath("要絕對路徑，例如 /home/tenk/ai")
+        raise BadPath("要絕對路徑，例如 ~/tenkstack")
     try:
         final = target.resolve()
     except OSError as exc:
