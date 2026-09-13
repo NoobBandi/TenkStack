@@ -36,16 +36,25 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NoobBandi/TenkStack/main/ins
 
 Use `bash <(...)` as written, not `curl | bash` — piped, the script cannot ask
 you anything. It shows its plan and waits for a yes before changing the
-machine, runs as your user (`sudo` only for packages, groups and the NVIDIA
-driver), and never reboots on its own. When it finishes the console is at
-`http://127.0.0.1:8070`; the first visit registers the owner account.
+machine, runs as your user (`sudo` only for packages, groups, the NVIDIA
+driver, and the TLS step if you pick one), and never reboots on its own. When
+it finishes the console is at `http://<host>:8443`; the first visit registers
+the owner account.
 
-Flags: `--dir PATH` (default `~/tenkstack`), `--yes`, `--dry-run`, `--help`.
+How it is reached from other machines is one flag:
+
+| | |
+|---|---|
+| *(none)* | Plain HTTP on `:8443`. Right when something in front already terminates TLS — Cloudflare Tunnel, Tailscale Serve, an ingress — or on a network you trust. |
+| `--tls internal` | HTTPS with Caddy's own CA. For an isolated LAN; each device imports one root certificate. |
+| `--tls CERT,KEY` | HTTPS with a certificate you already have. |
+| `--domain NAME` | HTTPS with Let's Encrypt, obtained and renewed by Caddy. Needs `:80`/`:443` reachable from the internet. |
+
+Other flags: `--dir PATH` (default `~/tenkstack`), `--yes`, `--dry-run`,
+`--help`.
 
 Tested on Ubuntu 24.04. NVIDIA drivers are installed when missing; Intel and
-AMD cards need the vendor's compute stack already present. Caddy is
-downloaded but not yet configured, so the console is reachable on loopback
-only until you set it up.
+AMD cards need the vendor's compute stack already present.
 
 ## What it does
 

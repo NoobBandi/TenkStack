@@ -15,8 +15,10 @@
 #
 #   * It does not run as root. The console is a systemd *user* service, and a
 #     thing that serves a web interface has no business owning the machine.
-#     `sudo` is used for exactly three jobs, each announced before it runs:
-#     installing packages, adding your user to a group, and the NVIDIA driver.
+#     `sudo` is used for a few named jobs, each announced before it runs:
+#     installing packages, adding your user to a group, the NVIDIA driver, and
+#     -- only with --tls internal or --domain -- trusting Caddy's CA or letting
+#     it bind :443.
 #   * It does not `apt upgrade`. Refreshing the index is safe; upgrading every
 #     package on somebody else's machine is not. In particular it would replace
 #     `linux-firmware`, and a GuC firmware change is one of the ways an Intel
@@ -58,6 +60,27 @@ WANT_SEARXNG=""
 WANT_COMFYUI=""
 ASSUME_YES=false
 DRY_RUN=false
+
+# How the console is reached from outside the machine. Caddy is the only
+# thing that listens beyond loopback, and this decides what it does with TLS:
+#
+#   ""         plain HTTP on :8443. The default, because it works in every
+#              environment including the ones where something else already
+#              terminates TLS in front (Cloudflare Tunnel, Tailscale Serve, a
+#              company ingress) and a second certificate would only fight it.
+#   internal   Caddy mints its own CA. Right for an isolated LAN with no
+#              domain. Every device that connects has to trust that CA once.
+#   cert       A certificate and key from elsewhere -- a company CA, or one
+#              obtained by hand.
+#   domain     A public name: Caddy obtains a Let's Encrypt certificate on
+#              its own and renews it. Needs :80 and :443 reachable from the
+#              internet, which is the one thing this script cannot check.
+TLS_MODE=""
+TLS_CERT=""
+TLS_KEY=""
+DOMAIN=""
+CONSOLE_TLS_PORT="${CONSOLE_TLS_PORT:-8443}"
+API_PORT="${CONSOLE_API_PORT:-8000}"
 
 # Findings, filled in by the survey.
 OS_ID=""; OS_VER=""; OS_PRETTY=""
@@ -160,6 +183,10 @@ TenkStack installer
 
   --dir PATH          安裝目錄（預設 $ROOT_DEFAULT）
   --code PATH         程式碼 checkout（預設 $CODE_DEFAULT）
+  --tls internal      Caddy 自簽 CA 做 HTTPS（隔離區網用；每台裝置要信任一次）
+  --tls CERT,KEY      用你自己的憑證檔做 HTTPS
+  --domain NAME       用公開網域，Let's Encrypt 自動簽（需要 80/443 對外可達）
+                      三個都不給 = 純 HTTP :$CONSOLE_TLS_PORT，外面已有反向代理時選這個
   --searxng           裝 SearXNG（Docker，讓模型能上網搜尋）
   --no-searxng        不裝
   --comfyui           裝 ComfyUI（Docker，畫圖；映像很大）
@@ -168,7 +195,7 @@ TenkStack installer
   --dry-run           印出會做什麼，不執行任何動作
   --help
 
-環境變數：TENKSTACK_REPO、TENKSTACK_REF、CONSOLE_PORT
+環境變數：TENKSTACK_REPO、TENKSTACK_REF、CONSOLE_PORT、CONSOLE_TLS_PORT、CONSOLE_API_PORT
 EOF
 }
 
@@ -180,6 +207,14 @@ while [[ $# -gt 0 ]]; do
     --no-searxng)  WANT_SEARXNG=n; shift ;;
     --comfyui)     WANT_COMFYUI=y; shift ;;
     --no-comfyui)  WANT_COMFYUI=n; shift ;;
+    --tls)
+      case "${2:?--tls 需要 internal 或 CERT,KEY}" in
+        internal) TLS_MODE=internal ;;
+        *,*)      TLS_MODE=cert; TLS_CERT=${2%%,*}; TLS_KEY=${2#*,} ;;
+        *)        die "不認得的 --tls 值：$2" "用 internal，或 憑證檔,金鑰檔。" ;;
+      esac
+      shift 2 ;;
+    --domain)      DOMAIN=${2:?--domain 需要一個網域名稱}; TLS_MODE=domain; shift 2 ;;
     --yes|-y)      ASSUME_YES=true; shift ;;
     --dry-run)     DRY_RUN=true; shift ;;
     --help|-h)     usage; exit 0 ;;
@@ -305,8 +340,24 @@ survey_deps() {
     warn "家目錄只剩 ${free}G，模型權重通常要幾十 G。"
   fi
 
+  case $TLS_MODE in
+    cert)
+      [[ -r $TLS_CERT ]] || die "讀不到憑證檔 $TLS_CERT" "--tls 要的是 憑證檔,金鑰檔。"
+      [[ -r $TLS_KEY  ]] || die "讀不到金鑰檔 $TLS_KEY"  "--tls 要的是 憑證檔,金鑰檔。"
+      ok "憑證 $TLS_CERT" ;;
+    domain)
+      # Binding :80 and :443 without root needs a capability on the binary,
+      # and that needs setcap. Everything else Caddy does runs unprivileged.
+      command -v setcap >/dev/null || MISSING_PKGS+=("libcap2-bin")
+      ok "網域 $DOMAIN（Let's Encrypt；80/443 要能從外面連到這台）" ;;
+    internal) ok "HTTPS，Caddy 自簽 CA" ;;
+    "")       ok "純 HTTP（外層若有反向代理，由它負責 TLS）" ;;
+  esac
+
   local listening; listening=$(ss -ltn 2>/dev/null || true)
-  for p in "$CONSOLE_PORT" "$LLAMA_SWAP_PORT"; do
+  local want_ports=("$CONSOLE_PORT" "$LLAMA_SWAP_PORT" "$CONSOLE_TLS_PORT" "$API_PORT")
+  if [[ $TLS_MODE == domain ]]; then want_ports+=(80 443); fi
+  for p in "${want_ports[@]}"; do
     if grep -q ":$p " <<<"$listening"; then
       # A survey finding, not a failure, while nothing is being changed --
       # --dry-run on a machine that already runs this stack would otherwise
@@ -331,8 +382,15 @@ show_plan() {
   say "  顯示卡        ${VENDORS[*]:-（無）}"
   say "  SearXNG       $WANT_SEARXNG"
   say "  ComfyUI       $WANT_COMFYUI"
+  case $TLS_MODE in
+    "")       say "  對外          http://<這台>:$CONSOLE_TLS_PORT（無 TLS）" ;;
+    internal) say "  對外          https://<這台>:$CONSOLE_TLS_PORT（自簽 CA，會跑 caddy trust）" ;;
+    cert)     say "  對外          https://<這台>:$CONSOLE_TLS_PORT（$TLS_CERT）" ;;
+    domain)   say "  對外          https://$DOMAIN（Let's Encrypt，會 setcap caddy）" ;;
+  esac
   if [[ ${#MISSING_PKGS[@]}   -gt 0 ]]; then say "  會安裝        ${MISSING_PKGS[*]}"; fi
   if [[ ${#MISSING_GROUPS[@]} -gt 0 ]]; then say "  會加入群組    ${MISSING_GROUPS[*]}"; fi
+  if [[ $TLS_MODE == internal || $TLS_MODE == domain ]]; then SUDO_NEEDED=true; fi
   if $NEEDS_REBOOT; then
     say ""
     warn "這次安裝結束後需要重新開機一次：$REBOOT_WHY"
@@ -501,6 +559,140 @@ YAML"
   fi
 }
 
+# The gateway. Everything else binds loopback; this is the one process that
+# listens where other machines can reach it, and the console's channel
+# switches edit the files under caddy/channels/ and ask this unit to reload.
+# What is written here has to match what `server/app/channels.py` expects:
+# the unit is called `caddy`, the admin API is a unix socket so `caddy reload`
+# works, channel files live in channels/ (on) or channels/disabled/ (off), and
+# each channel imports a bind file the console generates.
+write_caddy() {
+  local dir="$ROOT/caddy"
+  run mkdir -p "$dir/channels/binds" "$dir/channels/disabled"
+
+  if [[ -e $dir/Caddyfile ]]; then
+    skip "Caddyfile 已存在，沒有覆蓋（$dir/Caddyfile）"
+    return
+  fi
+
+  # The names this machine answers to. Used for the site addresses in every
+  # mode but `domain` -- with `tls internal` Caddy issues a certificate for
+  # exactly the names listed, so a name missing here is a browser warning.
+  # Resolved now rather than templated: the console re-resolves LAN and
+  # Tailscale addresses itself whenever it rewrites a bind file.
+  local host lan ts names
+  host=$(hostname -f 2>/dev/null || hostname)
+  lan=$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || true)
+  ts=$(ip -4 -o addr show 2>/dev/null | awk '$2 ~ /^tailscale/ {print $4}' | cut -d/ -f1 | head -1 || true)
+  names="localhost 127.0.0.1 $host"
+  [[ -n $lan && $lan != 127.* ]] && names="$names $lan"
+  [[ -n $ts ]] && names="$names $ts"
+
+  local scheme=https site_tls="" site_addr site_note=""
+  case $TLS_MODE in
+    "")       scheme=http; site_note=" 純 HTTP：TLS 由外層代理負責，或這個環境不需要。" ;;
+    internal) site_tls="	tls internal" ;;
+    cert)     site_tls="	tls $TLS_CERT $TLS_KEY" ;;
+  esac
+  if [[ $TLS_MODE == domain ]]; then
+    site_addr="https://$DOMAIN"
+  else
+    site_addr=$(for n in $names; do printf '%s://%s:%s, ' "$scheme" "$n" "$CONSOLE_TLS_PORT"; done)
+    site_addr=${site_addr%, }
+  fi
+
+  run bash -c "cat > '$dir/Caddyfile' <<CADDY
+# 由 TenkStack 安裝腳本產生。主控台自己的站台在這裡；可開關的入口在 channels/。
+{
+	# Unix socket rather than :2019, so caddy reload works and the console can
+	# apply a channel change without dropping open connections.
+	admin unix/{env.XDG_RUNTIME_DIR}/caddy-admin.sock
+	skip_install_trust
+	grace_period 3s
+	# Each site says its own tls; the api-http channel handles its own redirect.
+	auto_https disable_redirects
+}
+
+# The console.$site_note
+$site_addr {
+$site_tls
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:$CONSOLE_PORT {
+		flush_interval -1
+	}
+}
+
+import channels/*.caddy
+CADDY"
+
+  # Plain-HTTP /v1 for clients that cannot trust a private CA. On by default:
+  # it is the port the connection examples in the console point CLI tools at.
+  # Everything but /v1 is sent to the console's own site.
+  run bash -c "cat > '$dir/channels/api-http.caddy' <<CADDY
+http://:$API_PORT {
+	import binds/api-http.bind
+	handle /v1* {
+		reverse_proxy 127.0.0.1:$CONSOLE_PORT {
+			flush_interval -1
+		}
+	}
+	handle {
+		redir $( [[ $TLS_MODE == domain ]] && printf 'https://%s' "$DOMAIN" || printf '%s://{host}:%s' "$scheme" "$CONSOLE_TLS_PORT" ){uri} permanent
+	}
+}
+CADDY"
+
+  # ComfyUI has no authentication of its own, so its channel is a snippet the
+  # console instantiates once per instance it publishes: each site block
+  # forward_auths against the console and only then proxies. The console
+  # appends those blocks below this snippet; the file must exist for that.
+  # \`tls internal\` here regardless of mode: ComfyUI is published under this
+  # machine's own names, which no public CA would sign.
+  run bash -c "cat > '$dir/channels/comfyui.caddy' <<CADDY
+(comfyui-channel) {
+	import binds/comfyui.bind
+	tls internal
+	forward_auth 127.0.0.1:$CONSOLE_PORT {
+		uri /api/auth/me
+		copy_headers Cookie Authorization X-Api-Key
+		header_up -Connection
+		header_up -Upgrade
+	}
+	reverse_proxy 127.0.0.1:{args[0]} {
+		flush_interval -1
+	}
+}
+CADDY"
+
+  # Empty bind files: no \`bind\` directive means listen everywhere, which is
+  # what a fresh install needs to be reachable at all. The console's
+  # connections page narrows them to LAN or Tailscale.
+  run touch "$dir/channels/binds/api-http.bind" "$dir/channels/binds/comfyui.bind"
+
+  if ! $DRY_RUN; then
+    "$HOME/.local/bin/caddy" validate --config "$dir/Caddyfile" --adapter caddyfile >/dev/null 2>&1 \
+      || die "產生的 Caddyfile 沒有通過 caddy validate。" "看 $HOME/.local/bin/caddy validate --config $dir/Caddyfile"
+  fi
+  ok "Caddy 設定（${TLS_MODE:-http}）"
+}
+
+# What the TLS mode needs from root, done here so the plan could announce it.
+trust_caddy() {
+  case $TLS_MODE in
+    internal)
+      # Installs Caddy's local root into the system trust store, so browsers
+      # and curl on this machine accept the certificate. Other devices import
+      # the same file by hand; finish() prints where it is.
+      as_root "$HOME/.local/bin/caddy" trust
+      ok "caddy trust（這台機器信任自簽 CA）" ;;
+    domain)
+      # A user service cannot open :80/:443. Granting the binary the one
+      # capability it needs is narrower than running it as root.
+      as_root setcap cap_net_bind_service=+ep "$HOME/.local/bin/caddy"
+      ok "setcap（讓 caddy 以一般帳號綁 80/443）" ;;
+  esac
+}
+
 write_units() {
   local dir="$HOME/.config/systemd/user"
   run mkdir -p "$dir"
@@ -546,6 +738,25 @@ TimeoutStopSec=30
 [Install]
 WantedBy=default.target
 UNIT"
+  # Named `caddy`, not `tenkstack-caddy`: that is the unit the console's
+  # channel code reloads. Type=notify because Caddy reports readiness itself.
+  run bash -c "cat > '$dir/caddy.service' <<UNIT
+[Unit]
+Description=Caddy - single entry point for TenkStack
+After=network-online.target tenkstack-console.service
+Wants=network-online.target
+
+[Service]
+Type=notify
+WorkingDirectory=$ROOT/caddy
+ExecStart=$HOME/.local/bin/caddy run --config $ROOT/caddy/Caddyfile
+ExecReload=$HOME/.local/bin/caddy reload --config $ROOT/caddy/Caddyfile --force --address unix/%t/caddy-admin.sock
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT"
   ok "寫好 systemd unit"
 }
 
@@ -554,7 +765,7 @@ UNIT"
 # running, and this script never has to be resumed.
 enable_units() {
   run systemctl --user daemon-reload
-  run systemctl --user enable --quiet tenkstack-console.service tenkstack-llama-swap.service
+  run systemctl --user enable --quiet tenkstack-console.service tenkstack-llama-swap.service caddy.service
   ok "已註冊為開機啟動"
   if [[ $(loginctl show-user "$USER" -p Linger --value 2>/dev/null) != yes ]]; then
     as_root loginctl enable-linger "$USER"
@@ -566,7 +777,7 @@ enable_units() {
 
 start_and_verify() {
   if $NEEDS_REBOOT; then skip "需要重開機，服務等開機後自己啟動"; return; fi
-  run systemctl --user start tenkstack-llama-swap.service tenkstack-console.service
+  run systemctl --user start tenkstack-llama-swap.service tenkstack-console.service caddy.service
 
   if $DRY_RUN; then return; fi
   local n=0
@@ -578,10 +789,35 @@ start_and_verify() {
     sleep 1
   done
   ok "主控台回應了"
+
+  # Through the gateway too, so "installed" means reachable and not merely
+  # running. In domain mode the name resolves elsewhere and the certificate
+  # is not issued until the first real request from the internet, so that one
+  # is checked only as far as the unit being up.
+  if [[ $TLS_MODE == domain ]]; then
+    systemctl --user is-active --quiet caddy || die "Caddy 起不來。" "看 journalctl --user -u caddy -n 50。"
+    ok "Caddy 在跑（憑證會在第一次從外面連到 $DOMAIN 時申請）"
+    return
+  fi
+  local scheme=https; [[ -z $TLS_MODE ]] && scheme=http
+  n=0
+  until curl -skfo /dev/null "$scheme://127.0.0.1:$CONSOLE_TLS_PORT/api/health"; do
+    n=$((n + 1))
+    if [[ $n -gt 15 ]]; then
+      die "Caddy 沒有把主控台放出來。" "看 journalctl --user -u caddy -n 50，或 $HOME/.local/bin/caddy validate --config $ROOT/caddy/Caddyfile"
+    fi
+    sleep 1
+  done
+  ok "經 Caddy 也回應了"
 }
 
 finish() {
-  local host; host=$(hostname -f 2>/dev/null || hostname)
+  local host url; host=$(hostname -f 2>/dev/null || hostname)
+  case $TLS_MODE in
+    domain) url="https://$DOMAIN" ;;
+    "")     url="http://$host:$CONSOLE_TLS_PORT" ;;
+    *)      url="https://$host:$CONSOLE_TLS_PORT" ;;
+  esac
   step "完成"
   if $NEEDS_REBOOT; then
     say "  還差一次重新開機：$REBOOT_WHY"
@@ -589,18 +825,20 @@ finish() {
     say ""
     say "  ${C_B}sudo reboot${C_OFF}"
     say ""
-    say "  回來之後：http://127.0.0.1:$CONSOLE_PORT"
+    say "  回來之後：$url"
   else
-    say "  http://127.0.0.1:$CONSOLE_PORT"
+    say "  $url"
     say "  ${C_DIM}（第一次進去是註冊畫面。第一個帳號建立之後才會開始要求登入。）${C_OFF}"
   fi
-  # The console binds loopback on purpose -- nothing on the network reaches it
-  # without going through Caddy, and this script does not set Caddy up yet. So
-  # the honest address is the loopback one; from another machine that means an
-  # SSH tunnel until the gateway exists. Printing https://host:8443 here, as an
-  # earlier version did, named a door that had not been built.
-  say "  ${C_DIM}（主控台只聽 loopback。從別台機器要看，先 ssh -L $CONSOLE_PORT:127.0.0.1:$CONSOLE_PORT $USER@$host；"
-  say "    對外的 TLS 入口是 Caddy，這個腳本還沒幫你設定它。）${C_OFF}"
+  case $TLS_MODE in
+    internal)
+      say "  ${C_DIM}（自簽 CA。這台已經信任了；別台裝置要匯入這個檔案："
+      say "    $HOME/.local/share/caddy/pki/authorities/local/root.crt）${C_OFF}" ;;
+    "")
+      say "  ${C_DIM}（純 HTTP：密碼和 API key 在網路上是明文。若這台會被區網以外連到，"
+      say "    重跑並加 --tls internal 或 --domain，或在前面放一個負責 TLS 的代理。）${C_OFF}" ;;
+  esac
+  say "  ${C_DIM}純 /v1 的 HTTP 入口在 :$API_PORT，給不信任私有 CA 的 CLI 工具用；連線頁可以關掉它。${C_OFF}"
   say ""
   say "  接下來在主控台裡："
   say "    ・「執行環境」開啟每張卡要不要跑模型"
@@ -627,6 +865,7 @@ main() {
   step "③ 安裝相依"
   install_deps
   install_groups
+  trust_caddy
 
   step "④ 取得程式碼"
   fetch_code
@@ -634,6 +873,7 @@ main() {
 
   step "⑤ 建立目錄與設定"
   make_skeleton
+  write_caddy
 
   step "⑥ 註冊服務"
   write_units

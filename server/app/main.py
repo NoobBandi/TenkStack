@@ -119,18 +119,26 @@ async def require_auth(request: Request, call_next):
 # --------------------------------------------------------------------------
 
 @app.post("/api/auth/login")
-async def login(response: Response, payload: dict = Body(...)):
+async def login(request: Request, response: Response, payload: dict = Body(...)):
     user = users.verify_password(payload.get("username", ""), payload.get("password", ""))
     if user is None:
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+    # `secure` follows how the request actually arrived. The console itself
+    # only ever speaks HTTP on loopback; whether the user's browser spoke TLS
+    # is known only to the gateway in front, and Caddy says so in
+    # X-Forwarded-Proto. A cookie issued over TLS and not marked secure would
+    # be sent again over plain HTTP if the same host were ever reached that
+    # way; one marked secure over plain HTTP would never be sent at all, and
+    # the login would appear to succeed and then not stick. So neither value
+    # is right as a constant.
+    forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     response.set_cookie(
         auth.COOKIE_NAME,
         auth.issue_session(user),
         max_age=auth.SESSION_TTL,
         httponly=True,
         samesite="lax",
-        # Not `secure`: this is served over plain HTTP on the LAN today. It
-        # becomes secure once Caddy terminates TLS in front.
+        secure=(forwarded == "https"),
     )
     return user
 
