@@ -589,11 +589,18 @@ finish() {
     say ""
     say "  ${C_B}sudo reboot${C_OFF}"
     say ""
-    say "  回來之後：https://$host:8443"
+    say "  回來之後：http://127.0.0.1:$CONSOLE_PORT"
   else
-    say "  https://$host:8443"
+    say "  http://127.0.0.1:$CONSOLE_PORT"
     say "  ${C_DIM}（第一次進去是註冊畫面。第一個帳號建立之後才會開始要求登入。）${C_OFF}"
   fi
+  # The console binds loopback on purpose -- nothing on the network reaches it
+  # without going through Caddy, and this script does not set Caddy up yet. So
+  # the honest address is the loopback one; from another machine that means an
+  # SSH tunnel until the gateway exists. Printing https://host:8443 here, as an
+  # earlier version did, named a door that had not been built.
+  say "  ${C_DIM}（主控台只聽 loopback。從別台機器要看，先 ssh -L $CONSOLE_PORT:127.0.0.1:$CONSOLE_PORT $USER@$host；"
+  say "    對外的 TLS 入口是 Caddy，這個腳本還沒幫你設定它。）${C_OFF}"
   say ""
   say "  接下來在主控台裡："
   say "    ・「執行環境」開啟每張卡要不要跑模型"

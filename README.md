@@ -5,17 +5,79 @@
 
 # TenkStack
 
-A self-hosted control panel for a home AI box. Built around an **Intel Arc Pro
-B70** (Battlemage, 32 GB) on Linux with the `xe` driver, where the usual
-CUDA-shaped tooling does not apply. A second card went in later — an NVIDIA RTX
-3060 — and each card is now told what it is for: models, images, both, or
-nothing. Every surface reports per card rather than per machine, and the
-console installs whatever a card needs to do the job it was given.
+A self-hosted control panel for a machine with one or more GPUs that runs
+language models and generates images. It sits on top of
+[llama.cpp](https://github.com/ggml-org/llama.cpp) (through
+[llama-swap](https://github.com/mostlygeek/llama-swap)) and
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI), and adds what neither has:
+a dashboard that reads every card, a chat with an agent that can run code and
+search, a model catalogue that downloads from Hugging Face, accounts and API
+keys, and an OpenAI- and Anthropic-compatible endpoint that Claude Code, Codex
+and anything else can point at.
 
-It replaced a GPUStack deployment. GPUStack is built for multi-node clusters,
-and on one machine every one of its sharp edges — worker registration, the VRAM
-estimator, the embedded gateway — was the cost of an architecture this box does
-not have.
+Each card is told what it is for — models, images, both, or nothing — and every
+surface reports per card rather than per machine. Intel, NVIDIA and AMD are
+three files in `server/app/vendors/`; a machine with one vendor or three needs
+nothing edited.
+
+It began on an **Intel Arc Pro B70** (Battlemage, 32 GB, the `xe` driver), where
+the usual CUDA-shaped tooling does not apply, and that is why the Intel path is
+the most thoroughly measured one. An RTX 3060 went in beside it later, which is
+when the console learned to keep two vendors apart. It replaced a GPUStack
+deployment: GPUStack is built for multi-node clusters, and on one machine every
+one of its sharp edges — worker registration, the VRAM estimator, the embedded
+gateway — was the cost of an architecture this box does not have.
+
+## Install
+
+On a machine with systemd, Docker, and an apt-based distribution (Ubuntu 24.04
+is what it is tested on):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/NoobBandi/TenkStack/main/install.sh)
+```
+
+`bash <(...)`, not `curl | bash`. A pipe puts the script on stdin, so every
+question inside it would hit EOF and silently take its default; process
+substitution keeps stdin as the terminal so the questions can be answered.
+
+The script surveys the machine first and changes nothing until it has shown
+its plan and you have confirmed it. It then installs `git`, `curl`, `docker`,
+`uv`, `node` and `caddy` where missing, checks out this repository, builds the
+frontend, writes a skeleton `llama-swap` config, registers two systemd *user*
+units (`tenkstack-console`, `tenkstack-llama-swap`), enables linger so they
+survive logout, and starts them. When it finishes the console answers at
+`http://127.0.0.1:8070`; the first visit is the registration screen.
+
+What it does not do, deliberately:
+
+- **It does not run as root.** The console is a user service. `sudo` is used
+  for three things, each announced before it runs: installing packages, adding
+  you to the `docker` and `render` groups, and the NVIDIA driver.
+- **It does not `apt upgrade`.** Refreshing the index is safe; replacing every
+  package on someone else's machine is not — in particular that swaps
+  `linux-firmware`, and a changed GuC firmware is one of the ways an Intel card
+  stops working.
+- **It does not download models.** Tens of gigabytes and a choice; make it from
+  the catalogue page once the console is up.
+- **It does not reboot you halfway.** If a reboot is needed at all (only after
+  installing an NVIDIA driver; never for Intel or AMD) it is the last line,
+  after every service is enabled, so the machine comes back finished.
+
+Flags: `--dir PATH` (install root, default `~/tenkstack`), `--code PATH` (the
+checkout, default `~/dev/tenkstack`), `--yes` (take every default without
+asking), `--dry-run` (print every step, do nothing). `TENKSTACK_REPO` and
+`TENKSTACK_REF` point it at a fork or branch.
+
+Two honest limits of the installer as it stands. It installs the NVIDIA
+driver and container toolkit when they are missing, but for Intel and AMD it
+only checks that the kernel driver (`xe`, `amdgpu`) is loaded — it does not
+install Intel's compute runtime or ROCm, so on those cards the SYCL or HIP
+llama.cpp image will not start until the vendor's user-space stack is on the
+host. And it downloads Caddy but does not yet write a `Caddyfile` or a unit for
+it: the console runs on loopback without Caddy, and Caddy is what puts TLS and
+a single authenticated entry point in front of it for the rest of the network
+(see Architecture). Both are next on the list.
 
 ## What it does
 
@@ -213,7 +275,10 @@ that is the thing the user actually waits for.
   the chat.
 - Python 3.12+ and Node 24+
 
-## Running it
+## Running from a checkout
+
+Without the installer — for development, or a layout the installer does not
+describe:
 
 ```bash
 # Backend
@@ -232,13 +297,19 @@ npm run dev        # or a dev server on :5173, proxying /api to :8070
 
 Every path the backend touches is an environment variable with a default, all
 gathered in `server/app/paths.py`. The defaults describe one arrangement —
-llama-swap, the models, llama.cpp, ComfyUI and Caddy side by side under `~/ai`
-— and expand against whoever is running, so an unmodified checkout works for
-any user with that layout.
+llama-swap, the models, llama.cpp, ComfyUI and Caddy side by side under one
+root — and expand against whoever is running, so an unmodified checkout works
+for any user with that layout.
+
+The installer sets that root to `~/tenkstack` and writes it into the unit as
+`CONSOLE_AI_DIR`, explicitly rather than by relying on the default, so an
+installation that is already running cannot move because a default changed
+later. A bare checkout with nothing set uses `~/ai`, the layout of the machine
+this was first built on.
 
 | Variable | Default | What it is |
 |---|---|---|
-| `CONSOLE_AI_DIR` | `~/ai` | Everything below is derived from this |
+| `CONSOLE_AI_DIR` | `~/ai` (installer: `~/tenkstack`) | Everything below is derived from this |
 | `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | Session key and SQLite; the only thing the console writes |
 | `CONSOLE_MODELS_DIR` | `$CONSOLE_AI_DIR/models` | GGUF weights |
 | `CONSOLE_LLAMA_SWAP_DIR` | `$CONSOLE_AI_DIR/llama-swap` | |
@@ -268,11 +339,16 @@ in.
 
 ## Not included
 
-Operational configuration lives outside this repository: the `Caddyfile`,
-llama-swap's `config.yaml`, and the ComfyUI and SearXNG launch scripts all
-contain host-specific addresses. The session signing key and the SQLite database holding
-password hashes and API keys are excluded by `.gitignore` and must never be
-committed.
+Operational configuration lives outside this repository, under the install
+root: the `Caddyfile`, llama-swap's `config.yaml`, and the ComfyUI and SearXNG
+launch scripts all carry host-specific addresses and flags. The installer
+creates that tree with a skeleton config; the console then edits the config in
+place. One such tree, the machine this was built on, is versioned separately
+as [TenkStack-Host](https://github.com/NoobBandi/TenkStack-Host) — useful as a
+worked example of what a tuned config looks like, not as something to copy.
+
+The session signing key and the SQLite database holding password hashes and
+API keys are excluded by `.gitignore` and must never be committed.
 
 ## License
 
