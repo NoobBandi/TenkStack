@@ -30,54 +30,22 @@ gateway — was the cost of an architecture this box does not have.
 
 ## Install
 
-On a machine with systemd, Docker, and an apt-based distribution (Ubuntu 24.04
-is what it is tested on):
-
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/NoobBandi/TenkStack/main/install.sh)
 ```
 
-`bash <(...)`, not `curl | bash`. A pipe puts the script on stdin, so every
-question inside it would hit EOF and silently take its default; process
-substitution keeps stdin as the terminal so the questions can be answered.
+Use `bash <(...)` as written, not `curl | bash` — piped, the script cannot ask
+you anything. It shows its plan and waits for a yes before changing the
+machine, runs as your user (`sudo` only for packages, groups and the NVIDIA
+driver), and never reboots on its own. When it finishes the console is at
+`http://127.0.0.1:8070`; the first visit registers the owner account.
 
-The script surveys the machine first and changes nothing until it has shown
-its plan and you have confirmed it. It then installs `git`, `curl`, `docker`,
-`uv`, `node` and `caddy` where missing, checks out this repository, builds the
-frontend, writes a skeleton `llama-swap` config, registers two systemd *user*
-units (`tenkstack-console`, `tenkstack-llama-swap`), enables linger so they
-survive logout, and starts them. When it finishes the console answers at
-`http://127.0.0.1:8070`; the first visit is the registration screen.
+Flags: `--dir PATH` (default `~/tenkstack`), `--yes`, `--dry-run`, `--help`.
 
-What it does not do, deliberately:
-
-- **It does not run as root.** The console is a user service. `sudo` is used
-  for three things, each announced before it runs: installing packages, adding
-  you to the `docker` and `render` groups, and the NVIDIA driver.
-- **It does not `apt upgrade`.** Refreshing the index is safe; replacing every
-  package on someone else's machine is not — in particular that swaps
-  `linux-firmware`, and a changed GuC firmware is one of the ways an Intel card
-  stops working.
-- **It does not download models.** Tens of gigabytes and a choice; make it from
-  the catalogue page once the console is up.
-- **It does not reboot you halfway.** If a reboot is needed at all (only after
-  installing an NVIDIA driver; never for Intel or AMD) it is the last line,
-  after every service is enabled, so the machine comes back finished.
-
-Flags: `--dir PATH` (install root, default `~/tenkstack`), `--code PATH` (the
-checkout, default `~/dev/tenkstack`), `--yes` (take every default without
-asking), `--dry-run` (print every step, do nothing). `TENKSTACK_REPO` and
-`TENKSTACK_REF` point it at a fork or branch.
-
-Two honest limits of the installer as it stands. It installs the NVIDIA
-driver and container toolkit when they are missing, but for Intel and AMD it
-only checks that the kernel driver (`xe`, `amdgpu`) is loaded — it does not
-install Intel's compute runtime or ROCm, so on those cards the SYCL or HIP
-llama.cpp image will not start until the vendor's user-space stack is on the
-host. And it downloads Caddy but does not yet write a `Caddyfile` or a unit for
-it: the console runs on loopback without Caddy, and Caddy is what puts TLS and
-a single authenticated entry point in front of it for the rest of the network
-(see Architecture). Both are next on the list.
+Tested on Ubuntu 24.04. NVIDIA drivers are installed when missing; Intel and
+AMD cards need the vendor's compute stack already present. Caddy is
+downloaded but not yet configured, so the console is reachable on loopback
+only until you set it up.
 
 ## What it does
 
@@ -275,25 +243,7 @@ that is the thing the user actually waits for.
   the chat.
 - Python 3.12+ and Node 24+
 
-## Running from a checkout
-
-Without the installer — for development, or a layout the installer does not
-describe:
-
-```bash
-# Backend
-cd server
-uv sync
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8070
-
-# Frontend
-cd web
-npm install
-npm run build      # served by the backend from web/dist
-npm run dev        # or a dev server on :5173, proxying /api to :8070
-```
-
-### Where things live
+## Where things live
 
 Every path the backend touches is an environment variable with a default, all
 gathered in `server/app/paths.py`. The defaults describe one arrangement —
@@ -352,4 +302,4 @@ API keys are excluded by `.gitignore` and must never be committed.
 
 ## License
 
-[Apache License 2.0](LICENSE). Contributions are accepted under the same terms (Apache-2.0 §5), so no separate contributor agreement is needed.
+[Apache License 2.0](LICENSE). Contributions are accepted under the same terms (Apache-2.0 §5), so no separate contributor agreement is needed — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to run it from a checkout and what a pull request should carry.
