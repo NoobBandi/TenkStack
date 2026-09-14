@@ -6,7 +6,7 @@ set -u
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
 S=$(mktemp -d); trap 'rm -rf "$S"' EXIT
 BIN=$S/tenkstack
-(cd "$REPO/server-go" && go build -o "$BIN" ./cmd/tenkstack) || exit 1
+(cd "$REPO/server-go" && go build -ldflags "-X main.version=$(sed -n 's/^version = "\(.*\)"/\1/p' ../server/pyproject.toml)" -o "$BIN" ./cmd/tenkstack) || exit 1
 mkdir -p "$S/state"; export CONSOLE_STATE_DIR=$S/state
 ( cd "$REPO/server" && exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8072 --log-level warning ) > "$S/py.log" 2>&1 &
 PY=$!

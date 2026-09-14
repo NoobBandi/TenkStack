@@ -17,6 +17,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
+	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
@@ -101,6 +102,9 @@ func main() {
 		Docker:     docker,
 		Flags:      flags.NewCache(),
 		Layout:     layout,
+		Ports:      portTable,
+		Channels: &channels.Channels{Dir: layout.CaddyDir, CaddyBin: layout.CaddyBin, APIPort: portTable.API,
+			ComfyBase: portTable.ComfyFirst, PublicBase: portTable.ComfyPublicFirst},
 		Version:    version,
 		WebDist:    *webDist,
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},

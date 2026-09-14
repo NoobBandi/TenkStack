@@ -108,6 +108,29 @@ func isExecutable(p string) bool {
 	return err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0
 }
 
+// Launcher is one macro that names an executable.
+type Launcher struct {
+	Name string
+	Path string
+}
+
+// LauncherList is LauncherMacros in the config's own order.
+func (s *Store) LauncherList() []Launcher {
+	c, err := s.Load()
+	if err != nil {
+		return nil
+	}
+	var out []Launcher
+	if m := c.Root().Map("macros"); m != nil {
+		for _, key := range m.Keys() {
+			if p := expandHome(Scalar(m.Get(key))); isExecutable(p) {
+				out = append(out, Launcher{key, p})
+			}
+		}
+	}
+	return out
+}
+
 // WrapperFor is ${macro} for a launcher path, or "" if no macro names it.
 func (s *Store) WrapperFor(launcher string) string {
 	if launcher == "" {

@@ -26,14 +26,22 @@ for i in $(seq 1 60); do curl -sf http://127.0.0.1:8072/api/health >/dev/null &&
 # one request per server; the status goes to a file so the body stays a pipe
 call() { local port=$1 m=$2 p=$3; shift 3
   curl -s -o "$S/body" -w '%{http_code}' -X "$m" "http://127.0.0.1:$port$p" "$@"; echo
-  python3 -c 'import sys,json
+  python3 -c 'import sys,json,os
 def norm(v):  # 1.0 and 1 are the same number to every reader of this JSON
     if isinstance(v,float) and v.is_integer(): return int(v)
     if isinstance(v,list): return [norm(x) for x in v]
     if isinstance(v,dict): return {k:norm(x) for k,x in v.items()}
     return v
+def strip(v):  # STRIP=key drops a top-level or per-row key that is a clock
+    k=os.environ.get("STRIP")
+    if not k: return v
+    if isinstance(v,dict): v.pop(k,None)
+    if isinstance(v,list):
+        for x in v:
+            if isinstance(x,dict): x.pop(k,None)
+    return v
 d=open(sys.argv[1]).read()
-try: print(json.dumps(norm(json.loads(d)),sort_keys=True,ensure_ascii=False))
+try: print(json.dumps(strip(norm(json.loads(d))),sort_keys=True,ensure_ascii=False))
 except Exception: print(d[:200])' "$S/body"; }
 FAILS=0
 same() { local name=$1 a=$2 b=$3
@@ -128,7 +136,7 @@ for i in 1 2 3 4 5; do sleep 1; curl -s -o /dev/null http://127.0.0.1:8080/runni
 wait $C1 $C2 2>/dev/null
 same stream-types "$(types < $S/py.stream)" "$(types < $S/go.stream)"
 echo "## models (reads only; writes touch the live config)"
-cmp models GET /api/models -b $S/py.jar
+STRIP=created cmp models GET /api/models -b $S/py.jar   # llama-swap stamps `created` with the call time
 MID=$(curl -s -b $S/py.jar http://127.0.0.1:8072/api/models | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
 cmp model-spec GET "/api/models/$MID/spec" -b $S/py.jar
 cmp model-spec-404 GET /api/models/nope/spec -b $S/py.jar
@@ -157,6 +165,15 @@ cmp flags-comfy-bad GET '/api/flags/comfyui?container=nope' -b $S/py.jar
 cmp config GET /api/config -b $S/py.jar
 same config-put-bad-yaml "$(call 8072 PUT /api/config -b $S/py.jar $J "$JT" -d '{"raw":"a: [b"}' | sed -n 1p)" "$(call 8071 PUT /api/config -b $S/py.jar $J "$JT" -d '{"raw":"a: [b"}' | sed -n 1p)"
 cmp config-put-not-string PUT /api/config -b $S/py.jar $J "$JT" -d '{"raw":5}'
+echo "## network: channels, endpoints, network, machine, versions"
+cmp channels GET /api/channels -b $S/py.jar
+cmp channel-404 POST /api/channels/nope -b $S/py.jar $J "$JT" -d '{"enabled":true}'
+cmp channel-scopes-400 POST /api/channels/api-http/scopes -b $S/py.jar $J "$JT" -d '{"scopes":"lan"}'
+cmp channel-scopes-404 POST /api/channels/nope/scopes -b $S/py.jar $J "$JT" -d '{"scopes":["lan"]}'
+cmp endpoints GET /api/endpoints -b $S/py.jar
+cmp network GET /api/network -b $S/py.jar
+cmp machine GET /api/machine -b $S/py.jar
+cmp versions GET /api/versions -b $S/py.jar
 echo "## settings and system"
 cmp settings GET /api/settings -b $S/py.jar
 cmp settings-set PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":12,"gpu_history_hours":3}'

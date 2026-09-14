@@ -14,6 +14,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
+	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
@@ -22,6 +23,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
+	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
@@ -44,6 +46,8 @@ type Server struct {
 	Docker     *containers.Docker
 	Flags      *flags.Cache
 	Layout     paths.Layout
+	Ports      ports.Ports
+	Channels   *channels.Channels
 	Version    string
 	WebDist    string
 	// DevOrigins get CORS headers with credentials, for the Vite dev server.
@@ -102,6 +106,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/flags/comfyui", s.readComfyFlags)
 	mux.HandleFunc("GET /api/config", s.readConfig)
 	mux.HandleFunc("PUT /api/config", s.writeConfig)
+
+	mux.HandleFunc("GET /api/channels", s.readChannels)
+	mux.HandleFunc("POST /api/channels/{name}", s.writeChannel)
+	mux.HandleFunc("POST /api/channels/{name}/scopes", s.writeChannelScopes)
+	mux.HandleFunc("GET /api/endpoints", s.readEndpoints)
+	mux.HandleFunc("GET /api/network", s.readNetwork)
+	mux.HandleFunc("GET /api/machine", s.readMachine)
+	mux.HandleFunc("GET /api/versions", s.readVersions)
 
 	mux.HandleFunc("GET /api/settings", s.readSettings)
 	mux.HandleFunc("PUT /api/settings", s.writeSettings)
