@@ -108,7 +108,7 @@ func quote(s string) string {
 		return "''"
 	}
 	for _, r := range s {
-		safe := r == '@' || r == '%' || r == '+' || r == '=' || r == ':' || r == ',' || r == '.' || r == '/' || r == '-' ||
+		safe := r == '_' || r == '@' || r == '%' || r == '+' || r == '=' || r == ':' || r == ',' || r == '.' || r == '/' || r == '-' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 		if !safe {
 			return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
