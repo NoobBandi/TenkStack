@@ -47,6 +47,19 @@ lines=sys.stdin.read().split("\n",1)
 try: print(lines[0]); print(json.dumps(norm(json.loads(lines[1])),sort_keys=True,ensure_ascii=False))
 except Exception: print("\n".join(lines))'; }
 cmpshape() { local name=$1; shift; same "$name" "$(call 8072 "$@" | shape)" "$(call 8071 "$@" | shape)"; }
+# Strings differ too (log text, timestamps as text): compare types only.
+keys() { python3 -c 'import sys,json
+def norm(v):
+    if isinstance(v,bool) or v is None: return v
+    if isinstance(v,(int,float)): return 0
+    if isinstance(v,str): return "s"
+    if isinstance(v,list): return [norm(v[0])] if v and isinstance(v[0],dict) else [norm(x) for x in v]
+    if isinstance(v,dict): return {k:norm(x) for k,x in v.items()}
+    return v
+lines=sys.stdin.read().split("\n",1)
+try: print(lines[0]); print(json.dumps(norm(json.loads(lines[1])),sort_keys=True))
+except Exception: print("\n".join(lines))'; }
+cmpkeys() { local name=$1; shift; same "$name" "$(call 8072 "$@" | keys)" "$(call 8071 "$@" | keys)"; }
 J='-H' ; JT='Content-Type: application/json'
 echo "## before any account (enforcement off)"
 cmp health GET /api/health
@@ -92,6 +105,22 @@ cmpshape gpu GET /api/gpu -b $S/py.jar
 cmpshape gpu-history GET '/api/gpu/history?seconds=900&points=600' -b $S/py.jar
 cmpshape gpu-devices GET /api/gpu/devices -b $S/py.jar
 same gpu-bad-query "$(call 8072 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | sed -n 1p)" "$(call 8071 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | sed -n 1p)"   # status only, see the 422 note above
+echo "## logs, activity, containers, stream"
+cmpkeys logs GET '/api/logs?limit=5' -b $S/py.jar
+field() { python3 -c 'import sys,json; l=sys.stdin.read().split("\n",1); print(l[0]); print(json.dumps(json.loads(l[1])[sys.argv[1]],sort_keys=True,ensure_ascii=False))' "$1"; }
+same logs-units "$(call 8072 GET '/api/logs?limit=1' -b $S/py.jar | field units)" "$(call 8071 GET '/api/logs?limit=1' -b $S/py.jar | field units)"
+cmp activity GET '/api/activity?limit=5' -b $S/py.jar
+cmp last-used GET /api/models/last-used -b $S/py.jar
+cmpkeys containers-history GET /api/containers/history -b $S/py.jar
+# Event types seen on both streams over the same eight seconds, while llama-swap
+# is poked so a journal line is certain to arrive. downloads is not ported yet
+# and only appears while one runs.
+types() { grep '^data:' | python3 -c 'import sys,json; print(sorted({json.loads(l[5:])["type"] for l in sys.stdin} - {"downloads"}))'; }
+curl -m 8 -sN -b $S/py.jar http://127.0.0.1:8072/api/stream > $S/py.stream & C1=$!
+curl -m 8 -sN -b $S/py.jar http://127.0.0.1:8071/api/stream > $S/go.stream & C2=$!
+for i in 1 2 3 4 5; do sleep 1; curl -s -o /dev/null http://127.0.0.1:8080/running; done
+wait $C1 $C2 2>/dev/null
+same stream-types "$(types < $S/py.stream)" "$(types < $S/go.stream)"
 echo "## settings and system"
 cmp settings GET /api/settings -b $S/py.jar
 cmp settings-set PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":12,"gpu_history_hours":3}'

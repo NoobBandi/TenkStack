@@ -16,19 +16,24 @@ import (
 const module = "github.com/NoobBandi/TenkStack/server-go/internal/"
 
 var allowed = map[string][]string{
-	"api":        {},
-	"paths":      {},
-	"store":      {},
-	"llamaswap":  {},
-	"auth":       {"api"},
-	"users":      {"api"},
-	"gpu":        {"api"},
-	"gpuhistory": {"api"},
-	"settings":   {"api"},
-	"system":     {"api"},
-	"ports":      {},
-	"httpapi":    {"api", "auth", "users", "paths", "llamaswap", "gpu", "gpuhistory", "settings", "system"},
-	"boundary":   {},
+	"api":              {},
+	"paths":            {},
+	"store":            {},
+	"llamaswap":        {"api"},
+	"auth":             {"api"},
+	"users":            {"api"},
+	"gpu":              {"api"},
+	"gpuhistory":       {"api"},
+	"settings":         {"api"},
+	"system":           {"api"},
+	"ports":            {},
+	"journal":          {"api"},
+	"activity":         {"api"},
+	"containers":       {},
+	"containerhistory": {"api"},
+	"httpapi": {"api", "auth", "users", "paths", "llamaswap", "gpu", "gpuhistory", "settings", "system",
+		"journal", "activity", "containerhistory"},
+	"boundary": {},
 }
 
 func TestImportDirection(t *testing.T) {

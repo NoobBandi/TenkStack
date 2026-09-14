@@ -34,6 +34,7 @@ func (s *Server) writeSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Buffers that already exist are resized rather than waited for.
+	s.Journal.SetCapacity(int(values["log_lines"]))
 	s.History.SetHours(int(values["gpu_history_hours"]))
 	writeJSON(w, http.StatusOK, s.Settings.Describe())
 }

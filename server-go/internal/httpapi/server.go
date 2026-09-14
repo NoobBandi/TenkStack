@@ -10,24 +10,32 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
+	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
+	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
+	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
 )
 
 type Server struct {
-	Auth     *auth.Auth
-	Users    *users.Store
-	Gpu      *gpu.Registry
-	History  *gpuhistory.History
-	Settings *settings.Store
-	System   *system.Sampler
-	Version  string
-	WebDist  string
+	Auth       *auth.Auth
+	Users      *users.Store
+	Gpu        *gpu.Registry
+	History    *gpuhistory.History
+	Settings   *settings.Store
+	System     *system.Sampler
+	Journal    *journal.Journal
+	LlamaSwap  *llamaswap.Client
+	Activity   *activity.Store
+	Containers *containerhistory.History
+	Version    string
+	WebDist    string
 	// DevOrigins get CORS headers with credentials, for the Vite dev server.
 	DevOrigins []string
 }
@@ -57,6 +65,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/gpu", s.readGpu)
 	mux.HandleFunc("GET /api/gpu/history", s.readGpuHistory)
 	mux.HandleFunc("GET /api/gpu/devices", s.readGpuDevices)
+
+	mux.HandleFunc("GET /api/stream", s.stream)
+	mux.HandleFunc("GET /api/logs", s.readLogs)
+	mux.HandleFunc("GET /api/activity", s.readActivity)
+	mux.HandleFunc("GET /api/models/last-used", s.readLastUsed)
+	mux.HandleFunc("GET /api/containers/history", s.readContainerHistory)
 
 	mux.HandleFunc("GET /api/settings", s.readSettings)
 	mux.HandleFunc("PUT /api/settings", s.writeSettings)
