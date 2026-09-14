@@ -2,6 +2,7 @@
 node_modules/
 dist/
 .venv/
+server-go/tenkstack
 __pycache__/
 *.py[cod]
 

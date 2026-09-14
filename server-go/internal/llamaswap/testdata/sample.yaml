@@ -1,0 +1,58 @@
+# llama-swap on one card, shared with ComfyUI.
+#
+# The VRAM policy lives in `groups` below.
+healthCheckTimeout: 900
+
+logLevel: info
+logToStdout: both
+
+store:
+  path: /home/someone/tenkstack/llama-swap/activity.sqlite
+
+macros:
+  # Owns the SYCL environment; every model flag comes from cmd.
+  llama-sycl: /home/someone/tenkstack/llama-swap/llama-server-sycl.sh
+  models-dir: /home/someone/tenkstack/models
+
+# Why every entry carries --parallel 1: one slot with the whole window.
+
+models:
+  # A hand-written entry with keys the console does not know about.
+  small-q4:
+    name: Small Q4
+    description: ''
+    aliases:
+      - small
+    cmd: |
+      ${llama-sycl}
+      --model ${models-dir}/small-q4.gguf
+      --host 127.0.0.1 --port ${PORT}
+      --ctx-size 32768
+    ttl: 0
+    env:
+      - ONEAPI_DEVICE_SELECTOR=level_zero:0
+
+  # The other half of the pair above.
+  big-q6:
+    name: Big Q6
+    description: 'quoted · with unicode · 256K'
+    cmd: |
+      ${llama-sycl}
+      --model ${models-dir}/big-q6.gguf
+
+      --ctx-size 262144
+      # inside the block this is content, not a comment
+    ttl: 300
+
+groups:
+  # Leaves room for ComfyUI alongside; members may be resident together.
+  small:
+    swap: false
+    exclusive: false
+    members: []
+  large:
+    swap: true
+    exclusive: true
+    members:
+      - small-q4
+      - big-q6

@@ -48,6 +48,7 @@ server/app/
   files.py         the file browser, with its roots and deny list
   vision_cache.py  keeps images out of turns a draft model would choke on
   paths.py, ports.py   every path and port, from the environment
+server-go/           the Go port of the backend, in progress -- see below
 web/src/
   pages/           one file per page in the sidebar
   components/      shared pieces; ClientSnippets.tsx writes the client configs
@@ -102,6 +103,48 @@ and `npm run build` refuses to proceed until it passes.
 There is no Python test suite yet. `server/tests/test_passages.py` is a
 script, not a test. Changes to the backend are verified by running them
 against a real llama-swap; say what you ran in the pull request.
+
+## The Go port
+
+The backend is being moved to Go under `server-go/`, one route at a time,
+against the same SQLite file and the same wire format. The frontend does not
+change. Until the port is complete the Python backend is what runs; do not
+add features to it that the Go side would then have to catch up with.
+
+```
+server-go/
+  cmd/tenkstack/     wiring only: open the store, build the services, mount
+  internal/api/      every JSON body the frontend reads, and nothing else
+  internal/httpapi/  handlers: decode, call a domain package, encode
+  internal/auth/     sessions and API-key identity
+  internal/users/    accounts and keys
+  internal/llamaswap/  config.yaml, read and written without losing comments
+  internal/store/    opens SQLite with the pragmas this workload needs
+  internal/paths/    every location, from the environment
+  internal/boundary/ the import-direction test
+  scripts/parity.sh  runs both backends side by side and diffs each route
+```
+
+Rules, checked by `go test ./...`:
+
+- Imports point down: `httpapi` may import domain packages; domain packages
+  import only `api`, `store` and `paths`, never each other or `httpapi`. When
+  one domain needs another it declares an interface and `cmd` wires it. The
+  table is in `internal/boundary`; a new package must be added there.
+- A handler never opens the database, runs a subprocess or reads a file. It
+  calls a domain package and writes an `api` type.
+- No package-level mutable state. Caches, locks and running jobs live in a
+  struct built once in `cmd`.
+- Response shapes are defined in `internal/api`, not as maps in handlers.
+  `scripts/parity.sh` is the acceptance test: it runs the Python backend and
+  the Go binary on a throwaway state directory and calls every ported route
+  on both; a DIFF line is a bug in one of them.
+
+```bash
+cd server-go
+go vet ./... && go test ./...
+./scripts/parity.sh
+```
 
 ## Adding a GPU vendor or a runtime
 
