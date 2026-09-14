@@ -75,6 +75,29 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Emitted while something is downloading, plus one snapshot after the
+	// last one stops: the tick carrying state=done is exactly the one a
+	// pump that only runs while active would skip.
+	go func() {
+		wasActive := false
+		for {
+			active := s.Catalog.ActiveCount() > 0
+			if active || wasActive {
+				offer(api.Event{Type: "downloads", Data: s.Catalog.Status()})
+			}
+			wasActive = active
+			wait := 3 * time.Second
+			if active {
+				wait = time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+	}()
+
 	keepalive := time.NewTicker(15 * time.Second)
 	defer keepalive.Stop()
 	var buf bytes.Buffer

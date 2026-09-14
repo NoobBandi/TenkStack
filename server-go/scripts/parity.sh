@@ -172,6 +172,16 @@ cmp chat-get-404 GET /api/chats/999 -b $S/py.jar
 same chat-delete "$(call 8072 DELETE /api/chats/2 -b $S/py.jar)" "$(call 8071 DELETE /api/chats/1 -b $S/py.jar)"
 cmp chat-delete-404 DELETE /api/chats/2 -b $S/py.jar
 STRIP=created_at cmp chats-list GET /api/chats -b $S/py.jar
+echo "## catalog (Hugging Face; the estimate reads one header over HTTP)"
+cmpkeys catalog-search GET '/api/catalog/search?q=qwen3.6&limit=3' -b $S/py.jar
+cmp catalog-files GET '/api/catalog/files?repo_id=unsloth/Qwen3.6-35B-A3B-GGUF' -b $S/py.jar
+cmp catalog-files-404 GET '/api/catalog/files?repo_id=nope/nope' -b $S/py.jar
+cmp catalog-estimate POST /api/catalog/estimate -b $S/py.jar $J "$JT" -d '{"repo_id":"unsloth/Qwen3.6-35B-A3B-GGUF","parts":["Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"],"size_bytes":0}'
+cmp catalog-estimate-400 POST /api/catalog/estimate -b $S/py.jar $J "$JT" -d '{"repo_id":"x"}'
+cmp catalog-estimate-502 POST /api/catalog/estimate -b $S/py.jar $J "$JT" -d '{"repo_id":"nope/nope","parts":["x.gguf"]}'
+cmp catalog-downloads GET /api/catalog/downloads -b $S/py.jar
+cmp catalog-download-400 POST /api/catalog/download -b $S/py.jar $J "$JT" -d '{"repo_id":"x"}'
+cmp catalog-cancel POST /api/catalog/cancel -b $S/py.jar $J "$JT" -d '{"repo_id":"x","filename":"y"}'
 echo "## search and the /v1 proxy"
 cmp search-available GET /api/search/available -b $S/py.jar
 cmp search-apikey GET '/api/search?q=x' -H "Authorization: Bearer $KEY"

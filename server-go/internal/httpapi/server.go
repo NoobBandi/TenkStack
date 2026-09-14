@@ -16,12 +16,14 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/blobs"
+	"github.com/NoobBandi/TenkStack/server-go/internal/catalog"
 	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
 	"github.com/NoobBandi/TenkStack/server-go/internal/chats"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
@@ -61,6 +63,8 @@ type Server struct {
 	Blobs      *blobs.Store
 	Vision     *visioncache.Cache
 	Search     *search.Client
+	Catalog    *catalog.Catalog
+	Remote     *gguf.Remote
 	// One eviction at a time: two requests arriving together would both
 	// decide to clear the card and both wait for it.
 	vramMu  sync.Mutex
@@ -114,6 +118,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files/partials", s.readPartials)
 	mux.HandleFunc("DELETE /api/files/partials/{filename...}", s.removePartial)
 	mux.HandleFunc("DELETE /api/files/{filename...}", s.removeFile)
+
+	mux.HandleFunc("GET /api/catalog/search", s.catalogSearch)
+	mux.HandleFunc("GET /api/catalog/files", s.catalogFiles)
+	mux.HandleFunc("POST /api/catalog/estimate", s.catalogEstimate)
+	mux.HandleFunc("POST /api/catalog/download", s.catalogDownload)
+	mux.HandleFunc("POST /api/catalog/cancel", s.catalogCancel)
+	mux.HandleFunc("GET /api/catalog/downloads", s.catalogDownloads)
 
 	mux.HandleFunc("GET /api/chats", s.listChats)
 	mux.HandleFunc("POST /api/chats", s.saveChat)

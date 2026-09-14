@@ -19,12 +19,14 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/blobs"
+	"github.com/NoobBandi/TenkStack/server-go/internal/catalog"
 	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
 	"github.com/NoobBandi/TenkStack/server-go/internal/chats"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/amd"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/intel"
@@ -129,11 +131,13 @@ func main() {
 		Channels:   gateway,
 		ComfyProbe: comfy.NewProbe(portTable.ComfyPorts(), portTable.ComfyPublicFirst-portTable.ComfyFirst,
 			network.PortOpen, docker),
-		Comfy:  comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
-		Chats:  chatStore,
-		Blobs:  blobStore,
-		Vision: vision,
-		Search: search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
+		Comfy:   comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
+		Chats:   chatStore,
+		Blobs:   blobStore,
+		Vision:  vision,
+		Search:  search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
+		Catalog: catalog.New(layout.ModelsDir),
+		Remote:  gguf.NewRemote(),
 		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
 		Version:    version,
