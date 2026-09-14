@@ -106,50 +106,60 @@ against a real llama-swap; say what you ran in the pull request.
 
 ## The Go port
 
-The backend is being moved to Go under `server-go/`, one route at a time,
-against the same SQLite file and the same wire format. The frontend does not
-change. Until the port is complete the Python backend is what runs; do not
-add features to it that the Go side would then have to catch up with.
+The backend has been ported to Go under `server-go/`, route for route,
+against the same SQLite file and the same wire format; the frontend did not
+change. Every one of the 93 routes is in place and `scripts/parity.sh` runs
+the two backends side by side and compares them. The Python tree is still
+what `install.sh` and the units run until the switch is made; until then a
+change to one backend is a change to both.
 
 ```
 server-go/
-  cmd/tenkstack/     wiring only: open the store, build the services, mount
-  internal/api/      every JSON body the frontend reads, and nothing else
-  internal/httpapi/  handlers: decode, call a domain package, encode
-  internal/auth/     sessions and API-key identity
-  internal/users/    accounts and keys
-  internal/llamaswap/  config.yaml, read and written without losing comments
-  internal/store/    opens SQLite with the pragmas this workload needs
-  internal/paths/    every location, from the environment
-  internal/boundary/ the import-direction test
-  scripts/parity.sh  runs both backends side by side and diffs each route
+  cmd/tenkstack/       wiring only: open the store, build the services, mount
+  internal/api/        every JSON body the frontend reads, and nothing else
+  internal/httpapi/    handlers: decode, call a domain package, encode
+  internal/auth users settings chats blobs   the console's own state
+  internal/gpu/        the Provider interface, one subpackage per vendor
+  internal/gpuhistory containerhistory journal   the pollers behind /api/stream
+  internal/llamaswap/  config.yaml round-trip, model entries, the client
+  internal/backends vendors containers comfy channels   the runtime layer
+  internal/catalog gguf files search visioncache images  the rest
+  internal/store paths ports   the leaves everything may import
+  internal/boundary/   the import-direction test
+  scripts/parity.sh    both backends on a throwaway state dir, every route diffed
+  scripts/diffroute.sh the full diff of one route, for when parity says DIFF
 ```
 
 Rules, checked by `go test ./...`:
 
 - Imports point down: `httpapi` may import domain packages; domain packages
-  import only `api`, `store` and `paths`, never each other or `httpapi`. When
-  one domain needs another it declares an interface and `cmd` wires it. The
-  table is in `internal/boundary`; a new package must be added there.
+  import only the leaves (`api`, `store`, `paths`, `ports`, `vendors`), never
+  each other or `httpapi`. When one domain needs another it declares an
+  interface and `cmd` wires it. The table is in `internal/boundary`; a new
+  package must be added there.
 - A handler never opens the database, runs a subprocess or reads a file. It
   calls a domain package and writes an `api` type.
 - No package-level mutable state. Caches, locks and running jobs live in a
   struct built once in `cmd`.
 - Response shapes are defined in `internal/api`, not as maps in handlers.
-  `scripts/parity.sh` is the acceptance test: it runs the Python backend and
-  the Go binary on a throwaway state directory and calls every ported route
-  on both; a DIFF line is a bug in one of them.
 
 ```bash
 cd server-go
 go vet ./... && go test ./...
-./scripts/parity.sh
+./scripts/parity.sh            # needs the Python venv beside it
+go build -ldflags "-X main.version=$(sed -n 's/^version = "\(.*\)"/\1/p' ../server/pyproject.toml)" -o tenkstack ./cmd/tenkstack
+./tenkstack -listen 127.0.0.1:8071   # same CONSOLE_* variables as the Python backend
 ```
+
+`--help` lists the flags; `CONSOLE_WEB_DIST` points it at a built frontend.
+It is one static binary with no runtime dependencies beyond the vendor
+CLIs, docker and journalctl the Python backend already needed.
 
 ## Adding a GPU vendor or a runtime
 
-**A vendor is one file** in `server/app/vendors/`, and nothing else learns its
-name. [AGENTS.md](AGENTS.md) is the complete guide: what to find out at a
+**A vendor is one file** in `server/app/vendors/`, with its record repeated in
+`server-go/internal/vendors/vendors.go` while both backends exist, and nothing
+else learns its name. [AGENTS.md](AGENTS.md) is the complete guide: what to find out at a
 shell first, the two records to implement, how to prove it works, and what a
 pull request for one must report — tokens/sec on a named model at a stated
 quantisation, because nothing else distinguishes a working port from one
