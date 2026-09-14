@@ -10,16 +10,17 @@ things are, and the few conventions the code actually follows.
 The installer is for users. A checkout runs without it:
 
 ```bash
-# Backend — Python 3.12+, uv
-cd server
-uv sync
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8070
-
 # Frontend — Node 24+
 cd web
 npm install
-npm run build      # served by the backend from web/dist
-npm run dev        # or a dev server on :5173, proxying /api to :8070
+npm run build      # or npm run dev for a dev server on :5173, proxying /api to :8070
+
+# Backend — Go 1.25+
+cd ../server-go
+./build.sh                       # embeds web/dist, writes server-go/tenkstack
+./tenkstack -listen 127.0.0.1:8070
+# or, without embedding, straight from the tree:
+CONSOLE_WEB_DIST=../web/dist go run ./cmd/tenkstack
 ```
 
 Every path the backend reads is an environment variable with a default; the
@@ -31,6 +32,10 @@ directory is reported as missing rather than silently made.
 The backend needs `llama-swap` and, to do anything useful, a GPU with its
 vendor's tooling (`xpu-smi`, `nvidia-smi`, `rocm-smi`). It starts without
 them and reports what it cannot find.
+
+The Python backend under `server/` is the previous implementation, kept so
+`server-go/scripts/parity.sh` can still diff the two; it needs `uv sync` and
+is not what runs.
 
 ## Layout
 
@@ -106,12 +111,12 @@ against a real llama-swap; say what you ran in the pull request.
 
 ## The Go port
 
-The backend has been ported to Go under `server-go/`, route for route,
-against the same SQLite file and the same wire format; the frontend did not
-change. Every one of the 93 routes is in place and `scripts/parity.sh` runs
-the two backends side by side and compares them. The Python tree is still
-what `install.sh` and the units run until the switch is made; until then a
-change to one backend is a change to both.
+The backend was ported to Go under `server-go/`, route for route, against
+the same SQLite file and the same wire format; the frontend did not change.
+It is what `install.sh` installs and what the units run: one static binary
+with the frontend embedded, built by `build.sh` and published by the release
+workflow. `scripts/parity.sh` still runs the two backends side by side and
+compares them, which is how the port was verified.
 
 ```
 server-go/
@@ -157,9 +162,9 @@ CLIs, docker and journalctl the Python backend already needed.
 
 ## Adding a GPU vendor or a runtime
 
-**A vendor is one file** in `server/app/vendors/`, with its record repeated in
-`server-go/internal/vendors/vendors.go` while both backends exist, and nothing
-else learns its name. [AGENTS.md](AGENTS.md) is the complete guide: what to find out at a
+**A vendor is one record** in `server-go/internal/vendors/vendors.go` plus a
+telemetry provider under `server-go/internal/gpu/`, and nothing else learns
+its name. [AGENTS.md](AGENTS.md) is the complete guide: what to find out at a
 shell first, the two records to implement, how to prove it works, and what a
 pull request for one must report — tokens/sec on a named model at a stated
 quantisation, because nothing else distinguishes a working port from one

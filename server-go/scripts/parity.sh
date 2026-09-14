@@ -120,9 +120,12 @@ cmpshape gpu-history GET '/api/gpu/history?seconds=900&points=600' -b $S/py.jar
 cmpshape gpu-devices GET /api/gpu/devices -b $S/py.jar
 same gpu-bad-query "$(call 8072 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | sed -n 1p)" "$(call 8071 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | sed -n 1p)"   # status only, see the 422 note above
 echo "## logs, activity, containers, stream"
-cmpkeys logs GET '/api/logs?limit=5' -b $S/py.jar
+# The Go side also follows the installer's unit name, which the Python side
+# never learned; that key is dropped before comparing.
+nounit() { sed 's/, *"tenkstack-console.service": *"[^"]*"//'; }
+same logs "$(call 8072 GET '/api/logs?limit=5' -b $S/py.jar | keys)" "$(call 8071 GET '/api/logs?limit=5' -b $S/py.jar | keys | nounit)"
 field() { python3 -c 'import sys,json; l=sys.stdin.read().split("\n",1); print(l[0]); print(json.dumps(json.loads(l[1])[sys.argv[1]],sort_keys=True,ensure_ascii=False))' "$1"; }
-same logs-units "$(call 8072 GET '/api/logs?limit=1' -b $S/py.jar | field units)" "$(call 8071 GET '/api/logs?limit=1' -b $S/py.jar | field units)"
+same logs-units "$(call 8072 GET '/api/logs?limit=1' -b $S/py.jar | field units)" "$(call 8071 GET '/api/logs?limit=1' -b $S/py.jar | field units | nounit)"
 cmp activity GET '/api/activity?limit=5' -b $S/py.jar
 cmp last-used GET /api/models/last-used -b $S/py.jar
 cmpkeys containers-history GET /api/containers/history -b $S/py.jar

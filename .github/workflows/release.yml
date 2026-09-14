@@ -1,0 +1,42 @@
+# A tag v* builds the console for both Linux architectures and attaches the
+# binaries to the release. install.sh downloads from here.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache-dependency-path: server-go/go.sum
+      - name: Frontend
+        run: cd web && npm ci && npm run build
+      - name: Binaries
+        run: |
+          for arch in amd64 arm64; do
+            GOARCH=$arch server-go/build.sh
+            mv server-go/tenkstack "tenkstack-linux-$arch"
+          done
+          sha256sum tenkstack-linux-* > SHA256SUMS
+      - name: Checks
+        run: cd server-go && go vet ./... && go test ./...
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            tenkstack-linux-amd64
+            tenkstack-linux-arm64
+            SHA256SUMS

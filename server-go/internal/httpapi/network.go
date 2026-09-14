@@ -105,9 +105,13 @@ func (s *Server) readMachine(w http.ResponseWriter, r *http.Request) {
 	for _, u := range []struct{ name, note string }{
 		{"llama-swap.service", "模型生命週期，OpenAI／Anthropic 端點"},
 		{"caddy.service", "TLS 與單一入口"},
+		{"tenkstack-console.service", "本服務"},
 		{"ai-console.service", "本服務"},
 	} {
-		unit := network.Unit(r.Context(), u.name)
+		unit, present := network.Unit(r.Context(), u.name)
+		if !present {
+			continue
+		}
 		unit.Note = u.note
 		units = append(units, unit)
 	}

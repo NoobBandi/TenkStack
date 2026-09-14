@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
@@ -71,7 +73,11 @@ type Server struct {
 	// decide to clear the card and both wait for it.
 	vramMu  sync.Mutex
 	Version string
-	WebDist string
+	// WebDist overrides the embedded frontend; Embedded is nil when the
+	// binary was built without one.
+	WebDist  string
+	Embedded fs.FS
+	Started  time.Time
 	// DevOrigins get CORS headers with credentials, for the Vite dev server.
 	DevOrigins []string
 }

@@ -17,7 +17,7 @@ and anything else can point at.
 
 Each card is told what it is for — models, images, both, or nothing — and every
 surface reports per card rather than per machine. Intel, NVIDIA and AMD are
-three files in `server/app/vendors/`; a machine with one vendor or three needs
+three records in `server-go/internal/vendors/`; a machine with one vendor or three needs
 nothing edited.
 
 It began on an **Intel Arc Pro B70** (Battlemage, 32 GB, the `xe` driver), where
@@ -256,7 +256,8 @@ that is the thing the user actually waits for.
   be able to search (`install.sh --searxng` sets it up). Optional: the tool is
   offered to the model only when the instance answers, so an absent one removes
   the capability rather than breaking the chat.
-- Python 3.12+ and Node 24+
+- Nothing else: the console is one static binary with the frontend inside it.
+  Go 1.25+ and Node 24+ only to build it yourself.
 
 ## Where things live
 

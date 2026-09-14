@@ -111,12 +111,12 @@ func Hosts(ctx context.Context) api.Network {
 
 // Unit is one user unit's state, asked of systemd. `show` answers for a
 // unit that does not exist too.
-func Unit(ctx context.Context, name string) api.MachineUnit {
+func Unit(ctx context.Context, name string) (api.MachineUnit, bool) {
 	u := api.MachineUnit{Name: name, Active: "unknown"}
 	out, err := exec.CommandContext(ctx, "systemctl", "--user", "show", name,
-		"-p", "ActiveState", "-p", "SubState", "-p", "ExecMainStartTimestamp").Output()
+		"-p", "LoadState", "-p", "ActiveState", "-p", "SubState", "-p", "ExecMainStartTimestamp").Output()
 	if err != nil && len(out) == 0 {
-		return u
+		return u, true
 	}
 	fields := map[string]string{}
 	for _, line := range strings.Split(string(out), "\n") {
@@ -129,7 +129,8 @@ func Unit(ctx context.Context, name string) api.MachineUnit {
 	}
 	u.Sub = fields["SubState"]
 	u.Since = fields["ExecMainStartTimestamp"]
-	return u
+	// A unit systemd has no file for is not on this machine at all.
+	return u, fields["LoadState"] != "not-found"
 }
 
 func Exists(path string) bool {

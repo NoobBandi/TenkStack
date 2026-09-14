@@ -3,6 +3,9 @@ node_modules/
 dist/
 .venv/
 server-go/tenkstack
+# The frontend copied into the binary by server-go/build.sh
+server-go/internal/webdist/dist/*
+!server-go/internal/webdist/dist/PLACEHOLDER
 __pycache__/
 *.py[cod]
 

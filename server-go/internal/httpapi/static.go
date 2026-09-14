@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -33,32 +36,87 @@ func (s *Server) cjkFont(w http.ResponseWriter, r *http.Request) {
 	fail(w, http.StatusNotFound, "這台機器上沒有找到 CJK 字型")
 }
 
-func (s *Server) assets() http.Handler {
-	dir := filepath.Join(s.WebDist, "assets")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := s.inside(dir, strings.TrimPrefix(r.URL.Path, "/assets/"))
+// openSite opens one file of the frontend: from the directory when one is
+// configured, otherwise from the copy embedded in the binary. A directory
+// entry is looked up on the resolved path, so `..` and a symlink out of
+// the tree are refused.
+func (s *Server) openSite(rel string) (io.ReadSeeker, fs.FileInfo, bool) {
+	rel = strings.TrimPrefix(path.Clean("/"+rel), "/")
+	if s.WebDist != "" {
+		p, ok := inside(s.WebDist, rel)
 		if !ok {
-			fail(w, http.StatusNotFound, "Not Found")
-			return
+			return nil, nil, false
 		}
-		serveFile(w, r, p, immutable)
+		f, err := os.Open(p)
+		if err != nil {
+			return nil, nil, false
+		}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return nil, nil, false
+		}
+		return f, st, true
+	}
+	if s.Embedded == nil || !fs.ValidPath(rel) {
+		return nil, nil, false
+	}
+	f, err := s.Embedded.Open(rel)
+	if err != nil {
+		return nil, nil, false
+	}
+	st, err := f.Stat()
+	if err != nil || st.IsDir() {
+		f.Close()
+		return nil, nil, false
+	}
+	rs, ok := f.(io.ReadSeeker)
+	if !ok {
+		f.Close()
+		return nil, nil, false
+	}
+	return rs, st, true
+}
+
+func (s *Server) serveSite(w http.ResponseWriter, r *http.Request, rel, cacheControl string) bool {
+	f, st, ok := s.openSite(rel)
+	if !ok {
+		return false
+	}
+	if c, ok := f.(io.Closer); ok {
+		defer c.Close()
+	}
+	w.Header().Set("Cache-Control", cacheControl)
+	modTime := st.ModTime()
+	if modTime.IsZero() {
+		modTime = s.Started
+	}
+	http.ServeContent(w, r, st.Name(), modTime, f)
+	return true
+}
+
+func (s *Server) assets() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rel := strings.TrimPrefix(r.URL.Path, "/")
+		if strings.HasSuffix(rel, "/") || !s.serveSite(w, r, rel, immutable) {
+			fail(w, http.StatusNotFound, "Not Found")
+		}
 	})
 }
 
 // spa serves a real file when there is one, otherwise the shell.
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {
-	if rel := strings.TrimPrefix(r.URL.Path, "/"); rel != "" {
-		if p, ok := s.inside(s.WebDist, rel); ok {
-			serveFile(w, r, p, revalidate)
-			return
-		}
+	if rel := strings.TrimPrefix(r.URL.Path, "/"); rel != "" && s.serveSite(w, r, rel, revalidate) {
+		return
 	}
-	serveFile(w, r, filepath.Join(s.WebDist, "index.html"), revalidate)
+	if !s.serveSite(w, r, "index.html", revalidate) {
+		fail(w, http.StatusNotFound, "前端還沒 build：跑 server-go/build.sh，或用 CONSOLE_WEB_DIST 指向 web/dist")
+	}
 }
 
 // inside resolves rel under root and reports whether it is a regular file
 // that really sits under root once symlinks and `..` are accounted for.
-func (s *Server) inside(root, rel string) (string, bool) {
+func inside(root, rel string) (string, bool) {
 	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", false

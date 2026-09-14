@@ -43,11 +43,14 @@ func (j *Journal) UnitLabels() map[string]string {
 var Units = map[string]string{
 	"llama-swap.service": "模型",
 	"caddy.service":      "代理",
-	"ai-console.service": "主控台",
-	"init.scope":         "系統",
+	// Both names the console has run under: the installer's, and the one
+	// the machine it was written on still uses.
+	"tenkstack-console.service": "主控台",
+	"ai-console.service":        "主控台",
+	"init.scope":                "系統",
 }
 
-var unitOrder = []string{"llama-swap.service", "caddy.service", "ai-console.service", "init.scope"}
+var unitOrder = []string{"llama-swap.service", "caddy.service", "tenkstack-console.service", "ai-console.service", "init.scope"}
 
 // xpu-smi writes MEI permission errors to syslog on every invocation.
 var noiseIdentifiers = map[string]bool{"xpu-smi": true}

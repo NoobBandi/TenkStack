@@ -22,6 +22,7 @@ var allowed = map[string][]string{
 	"ports":   {},
 	"store":   {},
 	"vendors": {},
+	"webdist": {},
 
 	// Domain packages: only the leaves, never each other.
 	"auth":             {"api"},

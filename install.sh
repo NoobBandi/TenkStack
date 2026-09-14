@@ -56,6 +56,10 @@ LLAMA_SWAP_PORT="${CONSOLE_LLAMA_SWAP_PORT:-8080}"
 # Answers, filled in by the questions or by flags.
 ROOT=""
 CODE=""
+FROM_SOURCE=false
+# Where install.sh gets the console: one static binary per release, with the
+# frontend inside it.
+RELEASE_URL="${TENKSTACK_RELEASE:-https://github.com/NoobBandi/TenkStack/releases/latest/download}"
 WANT_SEARXNG=""
 # Answered in the questions unless --tls/--domain pre-answered it. "y" means
 # TLS_MODE is internal or domain; --tls CERT,KEY is flag-only, since typing
@@ -186,7 +190,8 @@ usage() {
 TenkStack installer
 
   --dir PATH          安裝目錄（預設 $ROOT_DEFAULT）
-  --code PATH         程式碼 checkout（預設 $CODE_DEFAULT）
+  --source            從原始碼 build，不下載 release（會裝 Go 與 Node）
+  --code PATH         --source 時程式碼放哪（預設 $CODE_DEFAULT）
   --tls internal      Caddy 自簽 CA 做 HTTPS（隔離區網用；每台裝置要信任一次）
   --tls CERT,KEY      用你自己的憑證檔做 HTTPS
   --domain NAME       用公開網域，Let's Encrypt 自動簽（需要 80/443 對外可達）
@@ -206,6 +211,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --dir)         ROOT=${2:?--dir 需要一個路徑}; shift 2 ;;
     --code)        CODE=${2:?--code 需要一個路徑}; shift 2 ;;
+    --source)      FROM_SOURCE=true; shift ;;
     --searxng)     WANT_SEARXNG=y; shift ;;
     --no-searxng)  WANT_SEARXNG=n; shift ;;
     --comfyui|--no-comfyui)
@@ -324,8 +330,11 @@ survey_deps() {
   done
   # uv and node are installed from their own upstreams rather than apt: the
   # distro versions are routinely too old, and this needs 3.12+ and Node 24+.
-  command -v uv   >/dev/null && ok "uv"   || { MISSING_PKGS+=("uv");   warn "缺 uv"; }
-  command -v node >/dev/null && ok "node $(node --version)" || { MISSING_PKGS+=("node"); warn "缺 node"; }
+  # Go and Node are only for --source; a release install needs neither.
+  if $FROM_SOURCE; then
+    command -v go   >/dev/null && ok "go $(go version | awk '{print $3}')" || { MISSING_PKGS+=("go");   warn "缺 go（會裝到 $ROOT/go）"; }
+    command -v node >/dev/null && ok "node $(node --version)" || { MISSING_PKGS+=("node"); warn "缺 node"; }
+  fi
   command -v caddy >/dev/null && ok "caddy" || MISSING_PKGS+=("caddy")
 
   for g in docker render; do
@@ -395,7 +404,7 @@ check_choices() {
 show_plan() {
   step "計畫"
   say "  安裝目錄      $ROOT"
-  say "  程式碼        $CODE"
+  if $FROM_SOURCE; then say "  程式碼        $CODE（--source，本機 build）"; else say "  主控台        $RELEASE_URL 的 release binary"; fi
   say "  顯示卡        ${VENDORS[*]:-（無）}"
   say "  SearXNG       $( [[ $WANT_SEARXNG == y ]] && echo "裝，loopback :$SEARXNG_PORT" || echo 不裝 )"
   case $TLS_MODE in
@@ -457,9 +466,11 @@ install_deps() {
       docker)
         run bash -c 'curl -fsSL https://get.docker.com | sh'
         ok "裝好 docker" ;;
-      uv)
-        run bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-        ok "裝好 uv" ;;
+      go)
+        # A private copy under the install root, not a system package: the
+        # distribution's Go is usually too old for the go.mod here.
+        run bash -c "curl -fsSL 'https://go.dev/dl/$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1).linux-$(dpkg --print-architecture 2>/dev/null || echo amd64).tar.gz' | tar -xz -C '$ROOT'"
+        ok "裝好 go（$ROOT/go/bin）" ;;
       node)
         run bash -c 'curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -'
         apt_install nodejs
@@ -517,11 +528,35 @@ fetch_code() {
   fi
 }
 
-build_console() {
-  run bash -c "cd '$CODE/server' && uv sync --quiet"
-  ok "後端相依"
+# The console is one static binary, the frontend inside it. A release is
+# downloaded; --source builds the same thing here, which is what a checkout
+# ahead of the last release needs.
+fetch_console() {
+  local bin="$ROOT/console/tenkstack" arch
+  arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+  case $arch in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+  run mkdir -p "$ROOT/console"
+
+  if ! $FROM_SOURCE; then
+    if run curl -fsSL -o "$bin.new" "$RELEASE_URL/tenkstack-linux-$arch"; then
+      run chmod +x "$bin.new"
+      run mv "$bin.new" "$bin"
+      ok "主控台 $("$bin" -version 2>/dev/null || echo "（$arch）")"
+      return
+    fi
+    rm -f "$bin.new"
+    die "下載不到 release binary（$RELEASE_URL/tenkstack-linux-$arch）。" \
+        "還沒有 release 的話用 --source 從原始碼 build。"
+  fi
+
+  fetch_code
+  local go=go
+  command -v go >/dev/null || go="$ROOT/go/bin/go"
   run bash -c "cd '$CODE/web' && npm ci --silent && npm run build --silent"
   ok "前端 build"
+  run bash -c "cd '$CODE/server-go' && PATH='$(dirname "$go"):$PATH' ./build.sh"
+  run cp "$CODE/server-go/tenkstack" "$bin"
+  ok "主控台 build 完成"
 }
 
 make_skeleton() {
@@ -774,17 +809,14 @@ write_units() {
   # a later version.
   run bash -c "cat > '$dir/tenkstack-console.service' <<UNIT
 [Unit]
-Description=TenkStack console backend (FastAPI)
+Description=TenkStack console
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=$CODE/server
 Environment=CONSOLE_AI_DIR=$ROOT
-# --timeout-graceful-shutdown: uvicorn otherwise waits for every in-flight
-# request, and the console's event streams never end on their own.
-ExecStart=$CODE/server/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $CONSOLE_PORT --timeout-graceful-shutdown 5
+ExecStart=$ROOT/console/tenkstack -listen 127.0.0.1:$CONSOLE_PORT
 Restart=on-failure
 RestartSec=5
 
@@ -978,7 +1010,7 @@ main() {
 
   step "② 選項"
   ask    ROOT "安裝目錄 " "${ROOT:-$ROOT_DEFAULT}"
-  ask    CODE "程式碼放哪 " "${CODE:-$CODE_DEFAULT}"
+  if $FROM_SOURCE; then ask CODE "程式碼放哪 " "${CODE:-$CODE_DEFAULT}"; else CODE="${CODE:-$CODE_DEFAULT}"; fi
   ask_yn WANT_SEARXNG "裝 SearXNG（讓模型能上網搜尋）？" n
   # TLS: a flag pre-answers this the same way --searxng pre-answers the one
   # above. Otherwise two questions at most -- whether to encrypt, and if so
@@ -1004,9 +1036,8 @@ main() {
   install_groups
   trust_caddy
 
-  step "④ 取得程式碼"
-  fetch_code
-  build_console
+  step "④ 取得主控台"
+  fetch_console
 
   step "⑤ 建立目錄與設定"
   make_skeleton

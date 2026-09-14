@@ -45,6 +45,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
 	"github.com/NoobBandi/TenkStack/server-go/internal/visioncache"
+	"github.com/NoobBandi/TenkStack/server-go/internal/webdist"
 )
 
 // Set at build time: -ldflags "-X main.version=1.2.3".
@@ -52,8 +53,13 @@ var version = "dev"
 
 func main() {
 	listen := flag.String("listen", envOr("CONSOLE_LISTEN", "127.0.0.1:8071"), "address to serve on")
-	webDist := flag.String("web", envOr("CONSOLE_WEB_DIST", "../web/dist"), "built frontend directory")
+	webDist := flag.String("web", os.Getenv("CONSOLE_WEB_DIST"), "serve the frontend from this directory instead of the embedded copy")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	layout := paths.FromEnv()
 	home, _ := os.UserHomeDir()
@@ -146,6 +152,8 @@ func main() {
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
 		Version:    version,
 		WebDist:    *webDist,
+		Embedded:   webdist.FS(),
+		Started:    time.Now(),
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},
 	}
 
@@ -172,6 +180,12 @@ func main() {
 		httpServer.Shutdown(shutdownCtx)
 	}()
 
+	switch {
+	case *webDist != "":
+		log.Printf("frontend from %s", *webDist)
+	case srv.Embedded == nil:
+		log.Print("no frontend embedded and CONSOLE_WEB_DIST unset; /api works, the page will not")
+	}
 	log.Printf("tenkstack %s listening on %s", version, *listen)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)

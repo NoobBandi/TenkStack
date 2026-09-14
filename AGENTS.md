@@ -1,8 +1,15 @@
 # Adding a card
 
 This console runs on whatever GPUs are in the machine, and "whatever" is meant
-literally: Intel, NVIDIA and AMD are three files in `server/app/vendors/`, and a
-fourth card is a fourth file. Nothing else in the codebase learns its name.
+literally: Intel, NVIDIA and AMD are three records in
+`server-go/internal/vendors/vendors.go` with a telemetry provider each under
+`server-go/internal/gpu/`, and a fourth card is a fourth record. Nothing else
+in the codebase learns its name.
+
+> The walkthrough below was written against the Python tree, which the Go
+> port mirrors one to one: `vendors/nvidia.py` is `nvidia` in `vendors.go`,
+> `gpu/nvidia.py` is `internal/gpu/nvidia/`. The questions, the two records
+> and the proof required are the same; only the file names differ.
 
 This document is how to write that file — what to find out first, what to
 implement, and how to know it works. It is written for a person or an agent who
