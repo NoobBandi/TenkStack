@@ -3,7 +3,9 @@ module github.com/NoobBandi/TenkStack/server-go
 go 1.27
 
 require (
+	github.com/HugoSmits86/nativewebp v1.3.0
 	github.com/ebitengine/purego v0.11.0
+	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	golang.org/x/crypto v0.57.0
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.59.0

@@ -25,6 +25,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
+	"github.com/NoobBandi/TenkStack/server-go/internal/files"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
@@ -55,6 +56,7 @@ func main() {
 	flag.Parse()
 
 	layout := paths.FromEnv()
+	home, _ := os.UserHomeDir()
 	portTable := ports.FromEnv()
 
 	db, err := store.Open(layout.DB)
@@ -137,7 +139,9 @@ func main() {
 		Vision:  vision,
 		Search:  search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
 		Catalog: catalog.New(layout.ModelsDir),
-		Remote:  gguf.NewRemote(),
+		Files: &files.Files{ComfyDir: layout.ComfyDir, StateDir: layout.StateDir, Home: home,
+			Roots: os.Getenv("CONSOLE_FILE_ROOTS"), ExtraDeny: os.Getenv("CONSOLE_FILE_DENY")},
+		Remote: gguf.NewRemote(),
 		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
 		Version:    version,

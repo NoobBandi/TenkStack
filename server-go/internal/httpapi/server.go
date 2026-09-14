@@ -22,6 +22,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
+	"github.com/NoobBandi/TenkStack/server-go/internal/files"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
@@ -65,6 +66,7 @@ type Server struct {
 	Search     *search.Client
 	Catalog    *catalog.Catalog
 	Remote     *gguf.Remote
+	Files      *files.Files
 	// One eviction at a time: two requests arriving together would both
 	// decide to clear the card and both wait for it.
 	vramMu  sync.Mutex
@@ -118,6 +120,23 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files/partials", s.readPartials)
 	mux.HandleFunc("DELETE /api/files/partials/{filename...}", s.removePartial)
 	mux.HandleFunc("DELETE /api/files/{filename...}", s.removeFile)
+
+	mux.HandleFunc("GET /api/fs/roots", s.fsRoots)
+	mux.HandleFunc("GET /api/fs", s.fsListing)
+	mux.HandleFunc("GET /api/fs/locate", s.fsLocate)
+	mux.HandleFunc("GET /api/fs/size", s.fsTreeSize)
+	mux.HandleFunc("GET /api/fs/peek", s.fsPeek)
+	mux.HandleFunc("GET /api/fs/raw", s.fsRaw)
+	mux.HandleFunc("HEAD /api/fs/raw", s.fsRaw)
+	mux.HandleFunc("GET /api/fs/thumb", s.fsThumb)
+	mux.HandleFunc("POST /api/fs/folder", s.fsMkdir)
+	mux.HandleFunc("GET /api/fs/text", s.fsReadText)
+	mux.HandleFunc("POST /api/fs/text", s.fsWriteText)
+	mux.HandleFunc("POST /api/fs/rename", s.fsRename)
+	mux.HandleFunc("POST /api/fs/move", s.fsMove)
+	mux.HandleFunc("DELETE /api/fs", s.fsDelete)
+	mux.HandleFunc("GET /api/fs/offset", s.fsOffset)
+	mux.HandleFunc("PUT /api/fs/upload", s.fsUpload)
 
 	mux.HandleFunc("GET /api/catalog/search", s.catalogSearch)
 	mux.HandleFunc("GET /api/catalog/files", s.catalogFiles)

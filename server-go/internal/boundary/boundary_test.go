@@ -45,13 +45,14 @@ var allowed = map[string][]string{
 	"visioncache":      {},
 	"search":           {"api"},
 	"catalog":          {"api"},
+	"files":            {"api"},
 	"comfy":            {"api", "vendors"},
 	"network":          {"api"},
 	"versions":         {"api"},
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "ports", "vendors", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog"},
+		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files"},
 	"boundary": {},
 }
 

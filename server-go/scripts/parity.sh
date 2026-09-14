@@ -182,6 +182,47 @@ cmp catalog-estimate-502 POST /api/catalog/estimate -b $S/py.jar $J "$JT" -d '{"
 cmp catalog-downloads GET /api/catalog/downloads -b $S/py.jar
 cmp catalog-download-400 POST /api/catalog/download -b $S/py.jar $J "$JT" -d '{"repo_id":"x"}'
 cmp catalog-cancel POST /api/catalog/cancel -b $S/py.jar $J "$JT" -d '{"repo_id":"x","filename":"y"}'
+echo "## file browser (owner only; a scratch folder in the home root)"
+cmp fs-roots GET /api/fs/roots -b $S/py.jar
+cmp fs-apikey GET '/api/fs?root=home' -H "Authorization: Bearer $KEY"
+cmp fs-badroot GET '/api/fs?root=nope' -b $S/py.jar
+cmp fs-escape GET '/api/fs?root=home&path=..' -b $S/py.jar
+cmp fs-denied GET '/api/fs?root=home&path=.ssh' -b $S/py.jar
+SCRATCH=tenkstack-parity-$$
+# One scratch folder, made by py; go makes a sibling so the shape of a
+# successful mkdir is compared too, then the sibling is dropped.
+same fs-mkdir "$(call 8072 POST "/api/fs/folder?root=home&name=$SCRATCH" -b $S/py.jar)" "$(call 8071 POST "/api/fs/folder?root=home&name=$SCRATCH-go" -b $S/py.jar | sed "s/$SCRATCH-go/$SCRATCH/")"
+rmdir ~/$SCRATCH-go
+cmp fs-mkdir-exists POST "/api/fs/folder?root=home&name=$SCRATCH" -b $S/py.jar
+printf 'hello\nworld\n' > ~/$SCRATCH/a.txt; cp ~/$SCRATCH/a.txt ~/$SCRATCH/a2.txt; mkdir ~/$SCRATCH/sub; printf 'x' > ~/$SCRATCH/.hidden
+cmp fs-list GET "/api/fs?root=home&path=$SCRATCH" -b $S/py.jar
+cmp fs-list-hidden GET "/api/fs?root=home&path=$SCRATCH&hidden=true&query=hid" -b $S/py.jar
+cmp fs-size GET "/api/fs/size?root=home&path=$SCRATCH" -b $S/py.jar
+cmp fs-locate GET "/api/fs/locate?path=~/$SCRATCH/a.txt" -b $S/py.jar
+cmp fs-locate-missing GET "/api/fs/locate?path=/nope/nope" -b $S/py.jar
+cmp fs-peek-text GET "/api/fs/peek?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar
+cmp fs-peek-real-gguf GET "/api/fs/peek?root=home&path=$(dirname ai/models/$GG)&name=$(basename $GG)" -b $S/py.jar
+same fs-raw "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %header{content-disposition} %header{accept-ranges} %header{content-security-policy}' "http://127.0.0.1:8072/api/fs/raw?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar)" "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %header{content-disposition} %header{accept-ranges} %header{content-security-policy}' "http://127.0.0.1:8071/api/fs/raw?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar)"
+same fs-raw-range "$(curl -s -H 'Range: bytes=2-4' -w ' %{http_code} %header{content-range}' "http://127.0.0.1:8072/api/fs/raw?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar)" "$(curl -s -H 'Range: bytes=2-4' -w ' %{http_code} %header{content-range}' "http://127.0.0.1:8071/api/fs/raw?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar)"
+same fs-raw-416 "$(curl -s -o /dev/null -H 'Range: bytes=50-60' -w '%{http_code} %header{content-range}' "http://127.0.0.1:8072/api/fs/raw?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar)" "$(curl -s -o /dev/null -H 'Range: bytes=50-60' -w '%{http_code} %header{content-range}' "http://127.0.0.1:8071/api/fs/raw?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar)"
+cmp fs-thumb-415 GET "/api/fs/thumb?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar
+cmp fs-text GET "/api/fs/text?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar
+MT=$(curl -s -b $S/py.jar "http://127.0.0.1:8072/api/fs/text?root=home&path=$SCRATCH&name=a.txt" | python3 -c 'import sys,json; print(repr(json.load(sys.stdin)["mtime"]))')
+cmp fs-text-stale POST "/api/fs/text?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar $J "$JT" -d '{"text":"new","mtime":1}'
+same fs-text-write "$(call 8072 POST "/api/fs/text?root=home&path=$SCRATCH&name=a.txt" -b $S/py.jar $J "$JT" -d "{\"text\":\"one\\n\",\"mtime\":$MT}" | sed -n 1p)" "200"
+same fs-rename "$(call 8072 POST "/api/fs/rename?root=home&path=$SCRATCH&name=a.txt&to=b.txt" -b $S/py.jar)" "$(call 8071 POST "/api/fs/rename?root=home&path=$SCRATCH&name=a2.txt&to=b2.txt" -b $S/py.jar | sed 's/b2/b/')"
+cmp fs-rename-missing POST "/api/fs/rename?root=home&path=$SCRATCH&name=a.txt&to=c.txt" -b $S/py.jar
+same fs-move "$(call 8072 POST "/api/fs/move?root=home&path=$SCRATCH&name=b.txt&to_root=home&to_path=$SCRATCH/sub" -b $S/py.jar)" "$(call 8071 POST "/api/fs/move?root=home&path=$SCRATCH&name=b2.txt&to_root=home&to_path=$SCRATCH/sub" -b $S/py.jar | sed 's/b2/b/')"
+cmp fs-move-self POST "/api/fs/move?root=home&path=$SCRATCH&name=sub&to_root=home&to_path=$SCRATCH/sub" -b $S/py.jar
+cmp fs-offset GET "/api/fs/offset?root=home&path=$SCRATCH&name=up.bin" -b $S/py.jar
+same fs-upload-1 "$(printf 'abc' | call 8072 PUT "/api/fs/upload?root=home&path=$SCRATCH&name=up.bin&offset=0&total=6" -b $S/py.jar --data-binary @-)" "$(printf 'abc' | call 8071 PUT "/api/fs/upload?root=home&path=$SCRATCH&name=up2.bin&offset=0&total=6" -b $S/py.jar --data-binary @-)"
+cmp fs-upload-bad-offset PUT "/api/fs/upload?root=home&path=$SCRATCH&name=up.bin&offset=1&total=6" -b $S/py.jar --data-binary 'x'
+same fs-upload-2 "$(printf 'def' | call 8072 PUT "/api/fs/upload?root=home&path=$SCRATCH&name=up.bin&offset=3&total=6" -b $S/py.jar --data-binary @-)" "$(printf 'def' | call 8071 PUT "/api/fs/upload?root=home&path=$SCRATCH&name=up2.bin&offset=3&total=6" -b $S/py.jar --data-binary @-)"
+cmp fs-offset-exists GET "/api/fs/offset?root=home&path=$SCRATCH&name=up.bin" -b $S/py.jar
+cmp fs-delete-nonempty DELETE "/api/fs?root=home&name=$SCRATCH" -b $S/py.jar
+cmp fs-delete-missing DELETE "/api/fs?root=home&path=$SCRATCH&name=zzz" -b $S/py.jar
+same fs-delete "$(call 8072 DELETE "/api/fs?root=home&path=$SCRATCH&name=up.bin" -b $S/py.jar)" "$(call 8071 DELETE "/api/fs?root=home&path=$SCRATCH&name=up2.bin" -b $S/py.jar)"
+rm -rf ~/$SCRATCH
 echo "## search and the /v1 proxy"
 cmp search-available GET /api/search/available -b $S/py.jar
 cmp search-apikey GET '/api/search?q=x' -H "Authorization: Bearer $KEY"
