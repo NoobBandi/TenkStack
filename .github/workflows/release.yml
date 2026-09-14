@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The frontend's build stamp is `git describe`; without the tags
+          # it would show a bare hash where the release name belongs.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
