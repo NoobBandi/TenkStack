@@ -39,13 +39,18 @@ var allowed = map[string][]string{
 	"flags":            {"api"},
 	"gguf":             {},
 	"channels":         {"api"},
+	"blobs":            {},
+	"chats":            {"api"},
+	"images":           {},
+	"visioncache":      {},
+	"search":           {"api"},
 	"comfy":            {"api", "vendors"},
 	"network":          {"api"},
 	"versions":         {"api"},
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "ports", "vendors", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy"},
+		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search"},
 	"boundary": {},
 }
 

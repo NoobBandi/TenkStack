@@ -18,7 +18,9 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
+	"github.com/NoobBandi/TenkStack/server-go/internal/blobs"
 	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
+	"github.com/NoobBandi/TenkStack/server-go/internal/chats"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
@@ -34,10 +36,12 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/network"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
+	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/store"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
+	"github.com/NoobBandi/TenkStack/server-go/internal/visioncache"
 )
 
 // Set at build time: -ldflags "-X main.version=1.2.3".
@@ -77,7 +81,19 @@ func main() {
 	history.SetHours(int(prefs.Get("gpu_history_hours")))
 
 	config := llamaswap.NewStore(layout.LlamaSwapConfig)
+	models := &llamaswap.Models{Store: config, Dir: layout.ModelsDir}
 	probe := backends.New(config)
+	llamaSwapBase := fmt.Sprintf("http://127.0.0.1:%d", portTable.LlamaSwap)
+
+	blobStore := blobs.New(filepath.Join(layout.StateDir, "blobs"))
+	chatStore := chats.New(db, blobStore)
+	if err := chatStore.Init(); err != nil {
+		log.Fatalf("init chats: %v", err)
+	}
+	vision := visioncache.New(db, specExtra{models}, layout.LlamaSwapConfig, llamaSwapBase)
+	if err := vision.Init(); err != nil {
+		log.Fatalf("init vision cache: %v", err)
+	}
 	logs := journal.New()
 	logs.SetCapacity(int(prefs.Get("log_lines")))
 	docker := containers.New()
@@ -100,11 +116,11 @@ func main() {
 		Settings:   prefs,
 		System:     system.New(layout.ModelsDir),
 		Journal:    logs,
-		LlamaSwap:  llamaswap.NewClient(fmt.Sprintf("http://127.0.0.1:%d", portTable.LlamaSwap)),
+		LlamaSwap:  llamaswap.NewClient(llamaSwapBase),
 		Activity:   activity.New(layout.LlamaSwapActivity),
 		Containers: containerStats,
 		Config:     config,
-		Models:     &llamaswap.Models{Store: config, Dir: layout.ModelsDir},
+		Models:     models,
 		Backends:   probe,
 		Docker:     docker,
 		Flags:      flags.NewCache(),
@@ -113,7 +129,11 @@ func main() {
 		Channels:   gateway,
 		ComfyProbe: comfy.NewProbe(portTable.ComfyPorts(), portTable.ComfyPublicFirst-portTable.ComfyFirst,
 			network.PortOpen, docker),
-		Comfy: comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
+		Comfy:  comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
+		Chats:  chatStore,
+		Blobs:  blobStore,
+		Vision: vision,
+		Search: search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
 		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
 		Version:    version,
@@ -148,6 +168,17 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+// specExtra hands the vision cache a model's extra flags.
+type specExtra struct{ models *llamaswap.Models }
+
+func (s specExtra) ExtraOf(modelID string) (string, bool) {
+	spec := s.models.ReadSpec(modelID)
+	if spec == nil {
+		return "", false
+	}
+	return spec.Extra, true
 }
 
 func envOr(name, fallback string) string {

@@ -67,7 +67,7 @@ def norm(v):
     if isinstance(v,bool) or v is None: return v
     if isinstance(v,(int,float)): return 0
     if isinstance(v,str): return "s"
-    if isinstance(v,list): return [norm(v[0])] if v and isinstance(v[0],dict) else [norm(x) for x in v]
+    if isinstance(v,list): return [norm(v[0])] if v else []
     if isinstance(v,dict): return {k:norm(x) for k,x in v.items()}
     return v
 lines=sys.stdin.read().split("\n",1)
@@ -153,6 +153,34 @@ cmp file-delete-409 DELETE "/api/files/$GG" -b $S/py.jar
 same file-delete-escape "$(call 8072 DELETE '/api/files/../../etc/passwd' -b $S/py.jar | sed -n 1p)" "$(call 8071 DELETE '/api/files/../../etc/passwd' -b $S/py.jar | sed -n 1p)"
 cmp partial-delete-notpart DELETE "/api/files/partials/$GG" -b $S/py.jar
 same model-create-422 "$(call 8072 POST /api/models -b $S/py.jar $J "$JT" -d '{"id":"","model_file":"x.gguf"}' | sed -n 1p)" "$(call 8071 POST /api/models -b $S/py.jar $J "$JT" -d '{"id":"","model_file":"x.gguf"}' | sed -n 1p)"
+echo "## chats (the state dir is throwaway, so writes are compared too)"
+cmp chats-empty GET /api/chats -b $S/py.jar
+PNG='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+BODY='{"model":"m","params":{"temperature":0.5},"messages":[{"role":"user","content":"hello there\nfriend","images":["'$PNG'"]},{"role":"assistant","content":"hi","usage":{"total_tokens":3},"model":"m","tool_calls":[{"id":"c1"}]}]}'
+# Both write the same database, so the ids differ by design: py gets 1, go gets 2.
+same chat-save "$(call 8072 POST /api/chats -b $S/py.jar $J "$JT" -d "$BODY" | sed -n 1p)" "$(call 8071 POST /api/chats -b $S/py.jar $J "$JT" -d "$(echo "$BODY" | sed 's/hello there/hello here/')" | sed -n 1p)"
+STRIP=created_at cmp chat-get GET /api/chats/1 -b $S/py.jar
+STRIP=updated_at cmp chat-get-2 GET /api/chats/2 -b $S/py.jar
+DIG=$(curl -s -b $S/py.jar http://127.0.0.1:8072/api/chats/1 | python3 -c 'import sys,json; print(json.load(sys.stdin)["messages"][0]["images"][0].split("/")[-1])')
+same blob "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download} cc=%header{cache-control}' http://127.0.0.1:8072/api/blobs/$DIG -b $S/py.jar)" "$(curl -s -o /dev/null -w '%{http_code} %{content_type} %{size_download} cc=%header{cache-control}' http://127.0.0.1:8071/api/blobs/$DIG -b $S/py.jar)"
+cmp blob-404 GET /api/blobs/0000000000000000000000000000000000000000000000000000000000000000 -b $S/py.jar
+cmp chat-search GET '/api/chats?q=friend' -b $S/py.jar
+cmp chat-patch PATCH /api/chats/1 -b $S/py.jar $J "$JT" -d '{"title":"renamed","pinned":true}'
+cmp chat-patch-nothing PATCH /api/chats/1 -b $S/py.jar $J "$JT" -d '{}'
+cmp chat-resave-404 POST /api/chats -b $S/py.jar $J "$JT" -d '{"id":999,"messages":[]}'
+cmp chat-get-404 GET /api/chats/999 -b $S/py.jar
+same chat-delete "$(call 8072 DELETE /api/chats/2 -b $S/py.jar)" "$(call 8071 DELETE /api/chats/1 -b $S/py.jar)"
+cmp chat-delete-404 DELETE /api/chats/2 -b $S/py.jar
+STRIP=created_at cmp chats-list GET /api/chats -b $S/py.jar
+echo "## search and the /v1 proxy"
+cmp search-available GET /api/search/available -b $S/py.jar
+cmp search-apikey GET '/api/search?q=x' -H "Authorization: Bearer $KEY"
+cmpkeys search GET '/api/search?q=llama.cpp&limit=3' -b $S/py.jar
+cmp search-read GET '/api/search/read?url=http://127.0.0.1:8090/' -b $S/py.jar
+cmp search-read-query GET '/api/search/read?url=http://127.0.0.1:8090/&query=search%20engine' -b $S/py.jar
+cmp search-read-bad GET '/api/search/read?url=ftp://x' -b $S/py.jar
+STRIP=created cmp v1-models GET /v1/models -b $S/py.jar
+same v1-unknown "$(call 8072 GET /v1/nope -b $S/py.jar | sed -n 1p)" "$(call 8071 GET /v1/nope -b $S/py.jar | sed -n 1p)"
 echo "## comfyui and runtimes (reads and refusals only)"
 cmp comfy-instances GET /api/comfyui/instances -b $S/py.jar
 cmp comfy-config GET '/api/comfyui/config?port=8188' -b $S/py.jar

@@ -15,7 +15,9 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
+	"github.com/NoobBandi/TenkStack/server-go/internal/blobs"
 	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
+	"github.com/NoobBandi/TenkStack/server-go/internal/chats"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
@@ -26,9 +28,11 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
+	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
+	"github.com/NoobBandi/TenkStack/server-go/internal/visioncache"
 )
 
 type Server struct {
@@ -53,6 +57,10 @@ type Server struct {
 	ComfyProbe *comfy.Probe
 	Comfy      *comfy.Manager
 	Installer  *backends.Installer
+	Chats      *chats.Store
+	Blobs      *blobs.Store
+	Vision     *visioncache.Cache
+	Search     *search.Client
 	// One eviction at a time: two requests arriving together would both
 	// decide to clear the card and both wait for it.
 	vramMu  sync.Mutex
@@ -106,6 +114,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files/partials", s.readPartials)
 	mux.HandleFunc("DELETE /api/files/partials/{filename...}", s.removePartial)
 	mux.HandleFunc("DELETE /api/files/{filename...}", s.removeFile)
+
+	mux.HandleFunc("GET /api/chats", s.listChats)
+	mux.HandleFunc("POST /api/chats", s.saveChat)
+	mux.HandleFunc("GET /api/chats/{id}", s.readChat)
+	mux.HandleFunc("PATCH /api/chats/{id}", s.patchChat)
+	mux.HandleFunc("DELETE /api/chats/{id}", s.removeChat)
+	mux.HandleFunc("GET /api/blobs/{digest}", s.readBlob)
+	mux.HandleFunc("GET /api/search", s.webSearch)
+	mux.HandleFunc("GET /api/search/read", s.webRead)
+	mux.HandleFunc("GET /api/search/available", s.webAvailable)
+	mux.HandleFunc("GET /v1/{path...}", s.proxyV1)
+	mux.HandleFunc("POST /v1/{path...}", s.proxyV1)
+	mux.HandleFunc("OPTIONS /v1/{path...}", s.proxyV1)
 
 	mux.HandleFunc("POST /api/models/{id}/load", s.loadModel)
 	mux.HandleFunc("GET /api/comfyui/instances", s.readComfyInstances)
