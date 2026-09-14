@@ -153,6 +153,20 @@ cmp file-delete-409 DELETE "/api/files/$GG" -b $S/py.jar
 same file-delete-escape "$(call 8072 DELETE '/api/files/../../etc/passwd' -b $S/py.jar | sed -n 1p)" "$(call 8071 DELETE '/api/files/../../etc/passwd' -b $S/py.jar | sed -n 1p)"
 cmp partial-delete-notpart DELETE "/api/files/partials/$GG" -b $S/py.jar
 same model-create-422 "$(call 8072 POST /api/models -b $S/py.jar $J "$JT" -d '{"id":"","model_file":"x.gguf"}' | sed -n 1p)" "$(call 8071 POST /api/models -b $S/py.jar $J "$JT" -d '{"id":"","model_file":"x.gguf"}' | sed -n 1p)"
+echo "## comfyui and runtimes (reads and refusals only)"
+cmp comfy-instances GET /api/comfyui/instances -b $S/py.jar
+cmp comfy-config GET '/api/comfyui/config?port=8188' -b $S/py.jar
+cmp comfy-config-apikey GET '/api/comfyui/config?port=8188' -H "Authorization: Bearer $KEY"
+cmp comfy-badport POST '/api/comfyui/interrupt?port=9999' -b $S/py.jar
+cmp comfy-interrupt POST '/api/comfyui/interrupt?port=8188' -b $S/py.jar
+cmp runtimes GET /api/runtimes -b $S/py.jar
+cmp runtimes-card-404 POST /api/runtimes/card -b $S/py.jar $J "$JT" -d '{"pci_bdf_address":"0000:ff:00.0","capability":"images","on":true}'
+cmp runtimes-card-bad POST /api/runtimes/card -b $S/py.jar $J "$JT" -d '{"pci_bdf_address":"0000:0c:00.0","capability":"nope","on":true}'
+cmp runtimes-comfy-bad POST /api/runtimes/comfy -b $S/py.jar $J "$JT" -d '{"name":"x","action":"nope"}'
+cmp runtimes-comfy-remove-404 POST /api/runtimes/comfy -b $S/py.jar $J "$JT" -d '{"name":"comfyui-nope","action":"remove"}'
+cmp runtimes-action-bad POST /api/runtimes/action -b $S/py.jar $J "$JT" -d '{"vendor":"intel","action":"nope"}'
+cmp runtimes-action-enable-missing POST /api/runtimes/action -b $S/py.jar $J "$JT" -d '{"vendor":"nvidia","action":"enable"}'
+cmp runtimes-action-install-unknown POST /api/runtimes/action -b $S/py.jar $J "$JT" -d '{"vendor":"nope","action":"install"}'
 echo "## runtime: backends, containers, flags, config"
 cmp backend-devices GET /api/backends/devices -b $S/py.jar
 cmp runtime GET /api/runtime -b $S/py.jar

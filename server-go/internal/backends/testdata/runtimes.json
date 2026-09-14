@@ -1,0 +1,38 @@
+{
+ "amd": {
+  "flags": [
+   "--device",
+   "/dev/dri",
+   "--device",
+   "/dev/kfd",
+   "--group-add",
+   "video",
+   "--security-opt",
+   "seccomp=unconfined"
+  ],
+  "image": "ghcr.io/ggml-org/llama.cpp:server-rocm",
+  "label": "AMD (ROCm)",
+  "requires": null,
+  "verified": false
+ },
+ "intel": {
+  "flags": [
+   "--device",
+   "/dev/dri"
+  ],
+  "image": "ghcr.io/ggml-org/llama.cpp:server-intel",
+  "label": "Intel (SYCL)",
+  "requires": null,
+  "verified": false
+ },
+ "nvidia": {
+  "flags": [
+   "--gpus",
+   "all"
+  ],
+  "image": "ghcr.io/ggml-org/llama.cpp:server-cuda",
+  "label": "NVIDIA (CUDA)",
+  "requires": "nvidia-container-toolkit",
+  "verified": true
+ }
+}

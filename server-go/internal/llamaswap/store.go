@@ -425,6 +425,49 @@ func (s *Store) Edit(ctx context.Context, fn func(c *Config) error) error {
 	return s.applyLocked(ctx, c)
 }
 
+// AddMacro names a launcher in the config so the device probe finds it.
+func (s *Store) AddMacro(ctx context.Context, name, value string) error {
+	changed := false
+	err := s.Edit(ctx, func(c *Config) error {
+		macros := c.Root().EnsureMap("macros")
+		if Scalar(macros.Get(name)) == value {
+			return errSkip
+		}
+		macros.Set(name, Str(value))
+		changed = true
+		return nil
+	})
+	if errors.Is(err, errSkip) {
+		return nil
+	}
+	if err == nil && changed {
+		log.Printf("registered launcher macro %s -> %s", name, value)
+	}
+	return err
+}
+
+// RemoveMacro takes a launcher's name out of the config.
+func (s *Store) RemoveMacro(ctx context.Context, name string) error {
+	err := s.Edit(ctx, func(c *Config) error {
+		macros := c.Root().Map("macros")
+		if macros == nil || !macros.Has(name) {
+			return errSkip
+		}
+		macros.Delete(name)
+		return nil
+	})
+	if errors.Is(err, errSkip) {
+		return nil
+	}
+	if err == nil {
+		log.Printf("removed launcher macro %s", name)
+	}
+	return err
+}
+
+// errSkip is an edit that turned out to change nothing.
+var errSkip = errors.New("no change")
+
 // ParseError is text that is not YAML, refused before it reaches the file.
 type ParseError struct{ Err error }
 

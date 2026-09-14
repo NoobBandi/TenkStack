@@ -36,11 +36,14 @@ type Launchers interface {
 type Probe struct {
 	launchers Launchers
 
-	mu    sync.Mutex
-	cache []api.BackendDevice
+	mu       sync.Mutex
+	cache    []api.BackendDevice
+	installs map[string]*api.Install
 }
 
-func New(launchers Launchers) *Probe { return &Probe{launchers: launchers} }
+func New(launchers Launchers) *Probe {
+	return &Probe{launchers: launchers, installs: map[string]*api.Install{}}
+}
 
 func ask(ctx context.Context, launcher string) []api.BackendDevice {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)

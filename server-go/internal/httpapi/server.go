@@ -9,12 +9,14 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
+	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
@@ -48,8 +50,14 @@ type Server struct {
 	Layout     paths.Layout
 	Ports      ports.Ports
 	Channels   *channels.Channels
-	Version    string
-	WebDist    string
+	ComfyProbe *comfy.Probe
+	Comfy      *comfy.Manager
+	Installer  *backends.Installer
+	// One eviction at a time: two requests arriving together would both
+	// decide to clear the card and both wait for it.
+	vramMu  sync.Mutex
+	Version string
+	WebDist string
 	// DevOrigins get CORS headers with credentials, for the Vite dev server.
 	DevOrigins []string
 }
@@ -98,6 +106,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/files/partials", s.readPartials)
 	mux.HandleFunc("DELETE /api/files/partials/{filename...}", s.removePartial)
 	mux.HandleFunc("DELETE /api/files/{filename...}", s.removeFile)
+
+	mux.HandleFunc("POST /api/models/{id}/load", s.loadModel)
+	mux.HandleFunc("GET /api/comfyui/instances", s.readComfyInstances)
+	mux.HandleFunc("POST /api/comfyui/update/check", s.comfyUpdateCheck)
+	mux.HandleFunc("POST /api/comfyui/update", s.comfyUpdate)
+	mux.HandleFunc("GET /api/comfyui/config", s.comfyConfig)
+	mux.HandleFunc("POST /api/comfyui/config", s.comfyReconfigure)
+	mux.HandleFunc("POST /api/comfyui/restart", s.comfyRestart)
+	mux.HandleFunc("POST /api/comfyui/interrupt", s.comfyInterrupt)
+	mux.HandleFunc("GET /api/runtimes", s.readRuntimes)
+	mux.HandleFunc("POST /api/runtimes/card", s.setCardRole)
+	mux.HandleFunc("POST /api/runtimes/comfy", s.comfyAction)
+	mux.HandleFunc("POST /api/runtimes/action", s.runtimeAction)
 
 	mux.HandleFunc("GET /api/backends/devices", s.readBackendDevices)
 	mux.HandleFunc("GET /api/runtime", s.readRuntime)

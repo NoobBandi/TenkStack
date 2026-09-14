@@ -203,21 +203,13 @@ func (d *Docker) PortCards(ctx context.Context, cards []vendors.Card) map[int][]
 	return out
 }
 
-// Held is one container bound to a card, for the per-card view.
-type Held struct {
-	Name  string  `json:"name"`
-	State *string `json:"state"`
-	Image *string `json:"image"`
-	Ports string  `json:"ports"`
-}
-
 // ByCard maps a PCI bus key to the containers holding that card.
-func (d *Docker) ByCard(ctx context.Context, cards []vendors.Card) map[string][]Held {
-	out := map[string][]Held{}
+func (d *Docker) ByCard(ctx context.Context, cards []vendors.Card) map[string][]api.HeldContainer {
+	out := map[string][]api.HeldContainer{}
 	for _, c := range d.Survey(ctx, cards).Containers {
 		for _, card := range c.Cards {
 			key := BusKey(card.PCIBDFAddress)
-			out[key] = append(out[key], Held{Name: c.Name, State: c.State, Image: c.Image, Ports: c.Ports})
+			out[key] = append(out[key], api.HeldContainer{Name: c.Name, State: c.State, Image: c.Image, Ports: c.Ports})
 		}
 	}
 	return out

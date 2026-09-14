@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/channels"
+	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
@@ -29,6 +31,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/httpapi"
 	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
+	"github.com/NoobBandi/TenkStack/server-go/internal/network"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
@@ -74,6 +77,7 @@ func main() {
 	history.SetHours(int(prefs.Get("gpu_history_hours")))
 
 	config := llamaswap.NewStore(layout.LlamaSwapConfig)
+	probe := backends.New(config)
 	logs := journal.New()
 	logs.SetCapacity(int(prefs.Get("log_lines")))
 	docker := containers.New()
@@ -84,6 +88,9 @@ func main() {
 		}
 		return out
 	}))
+
+	gateway := &channels.Channels{Dir: layout.CaddyDir, CaddyBin: layout.CaddyBin, APIPort: portTable.API,
+		ComfyBase: portTable.ComfyFirst, PublicBase: portTable.ComfyPublicFirst}
 
 	srv := &httpapi.Server{
 		Auth:       authn,
@@ -98,13 +105,17 @@ func main() {
 		Containers: containerStats,
 		Config:     config,
 		Models:     &llamaswap.Models{Store: config, Dir: layout.ModelsDir},
-		Backends:   backends.New(config),
+		Backends:   probe,
 		Docker:     docker,
 		Flags:      flags.NewCache(),
 		Layout:     layout,
 		Ports:      portTable,
-		Channels: &channels.Channels{Dir: layout.CaddyDir, CaddyBin: layout.CaddyBin, APIPort: portTable.API,
-			ComfyBase: portTable.ComfyFirst, PublicBase: portTable.ComfyPublicFirst},
+		Channels:   gateway,
+		ComfyProbe: comfy.NewProbe(portTable.ComfyPorts(), portTable.ComfyPublicFirst-portTable.ComfyFirst,
+			network.PortOpen, docker),
+		Comfy: comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
+		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
+			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
 		Version:    version,
 		WebDist:    *webDist,
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},
