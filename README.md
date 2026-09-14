@@ -50,6 +50,12 @@ How it is reached from other machines is one flag:
 | `--tls CERT,KEY` | HTTPS with a certificate you already have. |
 | `--domain NAME` | HTTPS with Let's Encrypt, obtained and renewed by Caddy. Needs `:80`/`:443` reachable from the internet. |
 
+The script asks the same thing interactively; the flag only pre-answers it.
+Likewise `--searxng` installs [SearXNG](https://github.com/searxng/searxng)
+on loopback so the chat's agent can search the web — optional, and the
+console offers the model that tool only while an instance answers. ComfyUI
+is not installed here: it is set up per card from the console's GPU page.
+
 Other flags: `--dir PATH` (default `~/tenkstack`), `--yes`, `--dry-run`,
 `--help`.
 
@@ -247,9 +253,9 @@ that is the thing the user actually waits for.
 - [llama-swap](https://github.com/mostlygeek/llama-swap)
 - [Caddy](https://caddyserver.com/) for TLS and the single entry point
 - [SearXNG](https://github.com/searxng/searxng) on loopback, if the agent should
-  be able to search. Optional: the tool is offered to the model only when the
-  instance answers, so an absent one removes the capability rather than breaking
-  the chat.
+  be able to search (`install.sh --searxng` sets it up). Optional: the tool is
+  offered to the model only when the instance answers, so an absent one removes
+  the capability rather than breaking the chat.
 - Python 3.12+ and Node 24+
 
 ## Where things live

@@ -57,7 +57,11 @@ LLAMA_SWAP_PORT="${CONSOLE_LLAMA_SWAP_PORT:-8080}"
 ROOT=""
 CODE=""
 WANT_SEARXNG=""
-WANT_COMFYUI=""
+# Answered in the questions unless --tls/--domain pre-answered it. "y" means
+# TLS_MODE is internal or domain; --tls CERT,KEY is flag-only, since typing
+# two paths at a prompt is worse than typing them on the command line.
+WANT_TLS=""
+SEARXNG_PORT="${CONSOLE_SEARXNG_PORT:-8090}"
 ASSUME_YES=false
 DRY_RUN=false
 
@@ -187,10 +191,9 @@ TenkStack installer
   --tls CERT,KEY      用你自己的憑證檔做 HTTPS
   --domain NAME       用公開網域，Let's Encrypt 自動簽（需要 80/443 對外可達）
                       三個都不給 = 純 HTTP :$CONSOLE_TLS_PORT，外面已有反向代理時選這個
-  --searxng           裝 SearXNG（Docker，讓模型能上網搜尋）
+  --searxng           裝 SearXNG（Docker，loopback :$SEARXNG_PORT，讓模型能上網搜尋）
   --no-searxng        不裝
-  --comfyui           裝 ComfyUI（Docker，畫圖；映像很大）
-  --no-comfyui        不裝
+                      ComfyUI 不在這裡裝：它是按顯示卡裝的，主控台的顯示卡頁會做
   --yes               全部用預設值，完全不問
   --dry-run           印出會做什麼，不執行任何動作
   --help
@@ -205,8 +208,8 @@ while [[ $# -gt 0 ]]; do
     --code)        CODE=${2:?--code 需要一個路徑}; shift 2 ;;
     --searxng)     WANT_SEARXNG=y; shift ;;
     --no-searxng)  WANT_SEARXNG=n; shift ;;
-    --comfyui)     WANT_COMFYUI=y; shift ;;
-    --no-comfyui)  WANT_COMFYUI=n; shift ;;
+    --comfyui|--no-comfyui)
+      die "ComfyUI 不由這個腳本裝。" "它是按顯示卡裝的；主控台裝好後到「顯示卡」頁開啟。" ;;
     --tls)
       case "${2:?--tls 需要 internal 或 CERT,KEY}" in
         internal) TLS_MODE=internal ;;
@@ -340,24 +343,8 @@ survey_deps() {
     warn "家目錄只剩 ${free}G，模型權重通常要幾十 G。"
   fi
 
-  case $TLS_MODE in
-    cert)
-      [[ -r $TLS_CERT ]] || die "讀不到憑證檔 $TLS_CERT" "--tls 要的是 憑證檔,金鑰檔。"
-      [[ -r $TLS_KEY  ]] || die "讀不到金鑰檔 $TLS_KEY"  "--tls 要的是 憑證檔,金鑰檔。"
-      ok "憑證 $TLS_CERT" ;;
-    domain)
-      # Binding :80 and :443 without root needs a capability on the binary,
-      # and that needs setcap. Everything else Caddy does runs unprivileged.
-      command -v setcap >/dev/null || MISSING_PKGS+=("libcap2-bin")
-      ok "網域 $DOMAIN（Let's Encrypt；80/443 要能從外面連到這台）" ;;
-    internal) ok "HTTPS，Caddy 自簽 CA" ;;
-    "")       ok "純 HTTP（外層若有反向代理，由它負責 TLS）" ;;
-  esac
-
   local listening; listening=$(ss -ltn 2>/dev/null || true)
-  local want_ports=("$CONSOLE_PORT" "$LLAMA_SWAP_PORT" "$CONSOLE_TLS_PORT" "$API_PORT")
-  if [[ $TLS_MODE == domain ]]; then want_ports+=(80 443); fi
-  for p in "${want_ports[@]}"; do
+  for p in "$CONSOLE_PORT" "$LLAMA_SWAP_PORT" "$CONSOLE_TLS_PORT" "$API_PORT"; do
     if grep -q ":$p " <<<"$listening"; then
       # A survey finding, not a failure, while nothing is being changed --
       # --dry-run on a machine that already runs this stack would otherwise
@@ -375,13 +362,42 @@ survey_deps() {
 # ② The plan, and one confirmation
 # --------------------------------------------------------------------------
 
+# What the answers imply. Runs after the questions, because the TLS mode and
+# SearXNG are decided there -- the survey above only checks what is true of
+# the machine before anyone has chosen anything.
+check_choices() {
+  case $TLS_MODE in
+    cert)
+      [[ -r $TLS_CERT ]] || die "讀不到憑證檔 $TLS_CERT" "--tls 要的是 憑證檔,金鑰檔。"
+      [[ -r $TLS_KEY  ]] || die "讀不到金鑰檔 $TLS_KEY"  "--tls 要的是 憑證檔,金鑰檔。"
+      ok "憑證 $TLS_CERT" ;;
+    domain)
+      # Binding :80 and :443 without root needs a capability on the binary,
+      # and that needs setcap. Everything else Caddy does runs unprivileged.
+      command -v setcap >/dev/null || MISSING_PKGS+=("libcap2-bin")
+      ok "網域 $DOMAIN（Let's Encrypt；80/443 要能從外面連到這台）" ;;
+    internal) ok "HTTPS，Caddy 自簽 CA（每台裝置要信任一次）" ;;
+    "")       ok "純 HTTP（外層若有反向代理，由它負責 TLS）" ;;
+  esac
+
+  local listening; listening=$(ss -ltn 2>/dev/null || true)
+  local extra=()
+  if [[ $TLS_MODE == domain ]]; then extra+=(80 443); fi
+  if [[ $WANT_SEARXNG == y ]]; then extra+=("$SEARXNG_PORT"); fi
+  for p in "${extra[@]}"; do
+    if grep -q ":$p " <<<"$listening"; then
+      if $DRY_RUN; then warn "連接埠 $p 已經被佔用（dry-run，繼續）"
+      else die "連接埠 $p 已經被佔用。" "換一個，或把佔用它的東西停掉。"; fi
+    fi
+  done
+}
+
 show_plan() {
   step "計畫"
   say "  安裝目錄      $ROOT"
   say "  程式碼        $CODE"
   say "  顯示卡        ${VENDORS[*]:-（無）}"
-  say "  SearXNG       $WANT_SEARXNG"
-  say "  ComfyUI       $WANT_COMFYUI"
+  say "  SearXNG       $( [[ $WANT_SEARXNG == y ]] && echo "裝，loopback :$SEARXNG_PORT" || echo 不裝 )"
   case $TLS_MODE in
     "")       say "  對外          http://<這台>:$CONSOLE_TLS_PORT（無 TLS）" ;;
     internal) say "  對外          https://<這台>:$CONSOLE_TLS_PORT（自簽 CA，會跑 caddy trust）" ;;
@@ -693,6 +709,62 @@ trust_caddy() {
   esac
 }
 
+# SearXNG, if asked for. The agent's web search goes through it, and the
+# console offers the model that tool only when an instance answers on the
+# configured address -- so an absent SearXNG removes a capability rather than
+# breaking anything, which is why this is optional.
+#
+# A user unit that runs the container in the foreground, rather than
+# `docker run --restart unless-stopped`: then "start everything" and "start
+# after the re-login the docker group needs" are one mechanism, the one the
+# other units already use, instead of docker and systemd each having an
+# opinion about when this comes up. On loopback only: SearXNG has no
+# authentication and is not something to publish.
+write_searxng() {
+  [[ $WANT_SEARXNG == y ]] || return 0
+  local dir="$ROOT/searxng"
+  run mkdir -p "$dir/config"
+  # The secret signs SearXNG's own sessions. Generated once and kept in a
+  # file the unit reads, never on a command line where `ps` would show it.
+  if [[ ! -s $dir/env ]]; then
+    run bash -c "umask 077; printf 'SEARXNG_SECRET=%s\n' \"\$(head -c 32 /dev/urandom | base64 -w0)\" > '$dir/env'"
+    ok "SearXNG secret"
+  else
+    skip "SearXNG secret 已存在"
+  fi
+  local docker; docker=$(command -v docker || echo /usr/bin/docker)
+  local unit="$HOME/.config/systemd/user/tenkstack-searxng.service"
+  run mkdir -p "$(dirname "$unit")"
+  run bash -c "cat > '$unit' <<UNIT
+[Unit]
+Description=SearXNG - web search for the TenkStack agent (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$dir/env
+# A container left behind by an unclean stop would make the next run fail
+# on the name; removing it first is what makes Restart= actually restart.
+ExecStartPre=-$docker rm -f tenkstack-searxng
+ExecStart=$docker run --rm --name tenkstack-searxng -p 127.0.0.1:$SEARXNG_PORT:8080 -v $dir/config:/etc/searxng -e SEARXNG_SECRET -e SEARXNG_BASE_URL=http://127.0.0.1:$SEARXNG_PORT/ docker.io/searxng/searxng:latest
+ExecStop=$docker stop tenkstack-searxng
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+UNIT"
+  ok "SearXNG unit（loopback :$SEARXNG_PORT）"
+}
+
+# Every unit this script owns, in start order. SearXNG only when asked for.
+units() {
+  local list=(tenkstack-llama-swap.service tenkstack-console.service caddy.service)
+  if [[ $WANT_SEARXNG == y ]]; then list+=(tenkstack-searxng.service); fi
+  printf '%s\n' "${list[@]}"
+}
+
 write_units() {
   local dir="$HOME/.config/systemd/user"
   run mkdir -p "$dir"
@@ -795,7 +867,8 @@ UNIT"
 # running, and this script never has to be resumed.
 enable_units() {
   run systemctl --user daemon-reload
-  run systemctl --user enable --quiet tenkstack-console.service tenkstack-llama-swap.service caddy.service
+  # shellcheck disable=SC2046
+  run systemctl --user enable --quiet $(units)
   ok "已註冊為開機啟動"
   if [[ $(loginctl show-user "$USER" -p Linger --value 2>/dev/null) != yes ]]; then
     as_root loginctl enable-linger "$USER"
@@ -807,9 +880,24 @@ enable_units() {
 
 start_and_verify() {
   if $NEEDS_REBOOT; then skip "需要重開機，服務等開機後自己啟動"; return; fi
-  run systemctl --user start tenkstack-llama-swap.service tenkstack-console.service caddy.service
+  # shellcheck disable=SC2046
+  run systemctl --user start $(units)
 
   if $DRY_RUN; then return; fi
+
+  if [[ $WANT_SEARXNG == y ]]; then
+    # First start pulls the image, which is the slow part; the loop is long
+    # for that reason and not because SearXNG itself is slow to come up.
+    local n=0
+    until curl -sfo /dev/null "http://127.0.0.1:$SEARXNG_PORT/"; do
+      n=$((n + 1))
+      if [[ $n -gt 180 ]]; then
+        die "SearXNG 沒有回應。" "看 journalctl --user -u tenkstack-searxng -n 50；映像是 docker.io/searxng/searxng。"
+      fi
+      sleep 1
+    done
+    ok "SearXNG 回應了（拉映像花了 ${n}s）"
+  fi
   local n=0
   until curl -sfo /dev/null "http://127.0.0.1:$CONSOLE_PORT/api/health"; do
     n=$((n + 1))
@@ -871,9 +959,13 @@ finish() {
   say "  ${C_DIM}純 /v1 的 HTTP 入口在 :$API_PORT，給不信任私有 CA 的 CLI 工具用；連線頁可以關掉它。${C_OFF}"
   say ""
   say "  接下來在主控台裡："
-  say "    ・「執行環境」開啟每張卡要不要跑模型"
+  say "    ・「顯示卡」開啟每張卡要不要跑模型、要不要畫圖（ComfyUI 在這裡裝）"
   say "    ・「模型目錄」下載權重"
-  if [[ $WANT_COMFYUI == y ]]; then say "    ・「ComfyUI」建立實例"; fi
+  if [[ $WANT_SEARXNG == y ]]; then
+    say "    ・搜尋已經接好：對話裡的 agent 可以上網查（SearXNG，只聽 127.0.0.1:$SEARXNG_PORT）"
+  else
+    say "    ・要讓模型能上網搜尋，重跑並加 --searxng"
+  fi
 }
 
 # --------------------------------------------------------------------------
@@ -888,7 +980,22 @@ main() {
   ask    ROOT "安裝目錄 " "${ROOT:-$ROOT_DEFAULT}"
   ask    CODE "程式碼放哪 " "${CODE:-$CODE_DEFAULT}"
   ask_yn WANT_SEARXNG "裝 SearXNG（讓模型能上網搜尋）？" n
-  ask_yn WANT_COMFYUI "裝 ComfyUI（畫圖，映像很大）？" n
+  # TLS: a flag pre-answers this the same way --searxng pre-answers the one
+  # above. Otherwise two questions at most -- whether to encrypt, and if so
+  # whether there is a public name for Let's Encrypt; no name means Caddy's
+  # own CA. Plain HTTP is the default because a proxy in front is common and
+  # a second certificate behind one only gets in its way.
+  if [[ -n $TLS_MODE ]]; then
+    WANT_TLS=y
+    skip "HTTPS：${TLS_MODE}（由參數決定）"
+  else
+    ask_yn WANT_TLS "要 HTTPS 嗎？（前面已有反向代理就選 n）" n
+    if [[ $WANT_TLS == y ]]; then
+      ask DOMAIN "有公開網域嗎？留空就用 Caddy 自簽 CA " ""
+      if [[ -n $DOMAIN ]]; then TLS_MODE=domain; else TLS_MODE=internal; fi
+    fi
+  fi
+  check_choices
 
   show_plan
 
@@ -904,6 +1011,7 @@ main() {
   step "⑤ 建立目錄與設定"
   make_skeleton
   write_caddy
+  write_searxng
 
   step "⑥ 註冊服務"
   write_units
