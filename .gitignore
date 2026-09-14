@@ -1,13 +1,10 @@
 # Dependencies and build output
 node_modules/
 web/dist/
-.venv/
 server-go/tenkstack
 # The frontend copied into the binary by server-go/build.sh
 server-go/internal/webdist/dist/*
 !server-go/internal/webdist/dist/PLACEHOLDER
-__pycache__/
-*.py[cod]
 
 # Local state that must never be published: the session signing key would let
 # anyone forge a login, and the database holds password hashes and API keys.

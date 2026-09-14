@@ -43,7 +43,7 @@ REPO_URL="${TENKSTACK_REPO:-https://github.com/NoobBandi/TenkStack.git}"
 REPO_REF="${TENKSTACK_REF:-main}"
 
 # Where the stack lives. Named for the project rather than for the machine it
-# was first built on. Never left to the default in `paths.py`: the unit files
+# was first built on. Never left to the default in the binary: the unit files
 # below write it out explicitly, so a change to that default cannot move an
 # installation that is already running.
 ROOT_DEFAULT="$HOME/tenkstack"
@@ -560,7 +560,7 @@ fetch_console() {
 }
 
 make_skeleton() {
-  # `paths.py` deliberately creates nothing -- turning "not set up" into "set up
+  # The console deliberately creates nothing -- turning "not set up" into "set up
   # and empty" hides the difference -- so the directories are this script's job.
   for d in models llama-swap comfyui caddy/channels console; do
     run mkdir -p "$ROOT/$d"
@@ -613,7 +613,7 @@ YAML"
 # The gateway. Everything else binds loopback; this is the one process that
 # listens where other machines can reach it, and the console's channel
 # switches edit the files under caddy/channels/ and ask this unit to reload.
-# What is written here has to match what `server/app/channels.py` expects:
+# What is written here has to match what `internal/channels` expects:
 # the unit is called `caddy`, the admin API is a unix socket so `caddy reload`
 # works, channel files live in channels/ (on) or channels/disabled/ (off), and
 # each channel imports a bind file the console generates.
@@ -804,7 +804,7 @@ write_units() {
   local dir="$HOME/.config/systemd/user"
   run mkdir -p "$dir"
 
-  # CONSOLE_AI_DIR is written out rather than left to the default in paths.py.
+  # CONSOLE_AI_DIR is written out rather than left to the default in the binary.
   # An installation that is running must not move because a default changed in
   # a later version.
   run bash -c "cat > '$dir/tenkstack-console.service' <<UNIT

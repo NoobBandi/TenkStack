@@ -123,7 +123,7 @@ Caddy ──┬── :8443 https  console (UI + API + /v1 proxy)
         ├── :8000 http   /v1 only, for clients that cannot trust a private CA
         └── :8444 https  ComfyUI, gated by forward_auth against the console
                 │
-        FastAPI :8070 ──┬── llama-swap :8080 ──> llama-server per model
+        tenkstack :8070 ┬── llama-swap :8080 ──> llama-server per model
                         │                        native build, or the vendor's
                         │                        official image in a container
                         ├── ComfyUI :8188+, one instance per GPU
@@ -262,7 +262,7 @@ that is the thing the user actually waits for.
 ## Where things live
 
 Every path the backend touches is an environment variable with a default, all
-gathered in `server/app/paths.py`. The defaults describe one arrangement —
+gathered in `server-go/internal/paths/paths.go`. The defaults describe one arrangement —
 llama-swap, the models, llama.cpp, ComfyUI and Caddy side by side under one
 root — and expand against whoever is running, so an unmodified checkout works
 for any user with that layout.
@@ -291,7 +291,7 @@ Only a layout that differs from that one needs any of them set. Nothing is
 created — a missing directory is reported as missing, because turning "not set
 up" into "set up and empty" hides the difference.
 
-Three more live with the code that reads them rather than in `paths.py`, because
+Three more live with the code that reads them rather than in `paths`, because
 none of them names a single location: `CONSOLE_FILE_ROOTS` declares what the file
 browser may reach (`label=path`, separated by `;`, `ro:` in front of a path to
 refuse writes) and replaces the defaults rather than adding to them, since
