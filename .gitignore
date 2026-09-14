@@ -1,6 +1,6 @@
 # Dependencies and build output
 node_modules/
-dist/
+web/dist/
 .venv/
 server-go/tenkstack
 # The frontend copied into the binary by server-go/build.sh

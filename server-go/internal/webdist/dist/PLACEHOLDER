@@ -1,0 +1,2 @@
+The built frontend is copied here by server-go/build.sh before `go build`.
+Nothing under this directory except this file is committed.

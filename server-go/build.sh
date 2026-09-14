@@ -20,11 +20,10 @@ if [[ ! -f $REPO/web/dist/index.html ]]; then
 fi
 
 # Copied rather than linked: go:embed does not follow symlinks or leave the
-# module directory.
-rm -rf internal/webdist/dist
-mkdir -p internal/webdist/dist
+# module directory. PLACEHOLDER stays: it is the committed file that keeps
+# the embed pattern valid on a checkout without a frontend build.
+find internal/webdist/dist -mindepth 1 ! -name PLACEHOLDER -delete
 cp -r "$REPO/web/dist/." internal/webdist/dist/
-printf 'Built frontend, copied by build.sh. Not committed.\n' > internal/webdist/dist/PLACEHOLDER
 
 VERSION=$(tr -d '[:space:]' < "$REPO/VERSION")
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o tenkstack ./cmd/tenkstack
