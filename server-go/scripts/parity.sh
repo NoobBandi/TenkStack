@@ -121,6 +121,18 @@ curl -m 8 -sN -b $S/py.jar http://127.0.0.1:8071/api/stream > $S/go.stream & C2=
 for i in 1 2 3 4 5; do sleep 1; curl -s -o /dev/null http://127.0.0.1:8080/running; done
 wait $C1 $C2 2>/dev/null
 same stream-types "$(types < $S/py.stream)" "$(types < $S/go.stream)"
+echo "## runtime: backends, containers, flags, config"
+cmp backend-devices GET /api/backends/devices -b $S/py.jar
+cmp runtime GET /api/runtime -b $S/py.jar
+cmp runtime-control-404 POST /api/runtime/container -b $S/py.jar $J "$JT" -d '{"name":"no-such-container","verb":"restart"}'
+cmp runtime-control-verb POST /api/runtime/container -b $S/py.jar $J "$JT" -d '{"name":"comfyui-xpu","verb":"rm"}'
+cmp flags-llama GET /api/flags/llama-server -b $S/py.jar
+cmp flags-llama-apikey GET /api/flags/llama-server -H "Authorization: Bearer $KEY"
+cmp flags-comfy GET '/api/flags/comfyui?container=comfyui-xpu' -b $S/py.jar
+cmp flags-comfy-bad GET '/api/flags/comfyui?container=nope' -b $S/py.jar
+cmp config GET /api/config -b $S/py.jar
+same config-put-bad-yaml "$(call 8072 PUT /api/config -b $S/py.jar $J "$JT" -d '{"raw":"a: [b"}' | sed -n 1p)" "$(call 8071 PUT /api/config -b $S/py.jar $J "$JT" -d '{"raw":"a: [b"}' | sed -n 1p)"
+cmp config-put-not-string PUT /api/config -b $S/py.jar $J "$JT" -d '{"raw":5}'
 echo "## settings and system"
 cmp settings GET /api/settings -b $S/py.jar
 cmp settings-set PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":12,"gpu_history_hours":3}'

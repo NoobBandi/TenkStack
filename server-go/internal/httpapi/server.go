@@ -13,11 +13,15 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
+	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
+	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
+	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
+	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
@@ -34,6 +38,11 @@ type Server struct {
 	LlamaSwap  *llamaswap.Client
 	Activity   *activity.Store
 	Containers *containerhistory.History
+	Config     *llamaswap.Store
+	Backends   *backends.Probe
+	Docker     *containers.Docker
+	Flags      *flags.Cache
+	Layout     paths.Layout
 	Version    string
 	WebDist    string
 	// DevOrigins get CORS headers with credentials, for the Vite dev server.
@@ -71,6 +80,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/activity", s.readActivity)
 	mux.HandleFunc("GET /api/models/last-used", s.readLastUsed)
 	mux.HandleFunc("GET /api/containers/history", s.readContainerHistory)
+
+	mux.HandleFunc("GET /api/backends/devices", s.readBackendDevices)
+	mux.HandleFunc("GET /api/runtime", s.readRuntime)
+	mux.HandleFunc("POST /api/runtime/container", s.runtimeContainer)
+	mux.HandleFunc("GET /api/flags/llama-server", s.readLlamaFlags)
+	mux.HandleFunc("GET /api/flags/comfyui", s.readComfyFlags)
+	mux.HandleFunc("GET /api/config", s.readConfig)
+	mux.HandleFunc("PUT /api/config", s.writeConfig)
 
 	mux.HandleFunc("GET /api/settings", s.readSettings)
 	mux.HandleFunc("PUT /api/settings", s.writeSettings)

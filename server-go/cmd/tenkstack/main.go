@@ -16,8 +16,10 @@ import (
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/activity"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
+	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containerhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
+	"github.com/NoobBandi/TenkStack/server-go/internal/flags"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/amd"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/intel"
@@ -70,6 +72,7 @@ func main() {
 	history := gpuhistory.New(cards)
 	history.SetHours(int(prefs.Get("gpu_history_hours")))
 
+	config := llamaswap.NewStore(layout.LlamaSwapConfig)
 	logs := journal.New()
 	logs.SetCapacity(int(prefs.Get("log_lines")))
 	docker := containers.New()
@@ -92,6 +95,11 @@ func main() {
 		LlamaSwap:  llamaswap.NewClient(fmt.Sprintf("http://127.0.0.1:%d", portTable.LlamaSwap)),
 		Activity:   activity.New(layout.LlamaSwapActivity),
 		Containers: containerStats,
+		Config:     config,
+		Backends:   backends.New(config),
+		Docker:     docker,
+		Flags:      flags.NewCache(),
+		Layout:     layout,
 		Version:    version,
 		WebDist:    *webDist,
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},

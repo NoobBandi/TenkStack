@@ -16,23 +16,31 @@ import (
 const module = "github.com/NoobBandi/TenkStack/server-go/internal/"
 
 var allowed = map[string][]string{
-	"api":              {},
-	"paths":            {},
-	"store":            {},
-	"llamaswap":        {"api"},
+	// Leaves: shared by everything, importing nothing.
+	"api":     {},
+	"paths":   {},
+	"ports":   {},
+	"store":   {},
+	"vendors": {},
+
+	// Domain packages: only the leaves, never each other.
 	"auth":             {"api"},
 	"users":            {"api"},
-	"gpu":              {"api"},
-	"gpuhistory":       {"api"},
 	"settings":         {"api"},
 	"system":           {"api"},
-	"ports":            {},
+	"gpu":              {"api"},
+	"gpuhistory":       {"api"},
 	"journal":          {"api"},
 	"activity":         {"api"},
-	"containers":       {},
+	"llamaswap":        {"api"},
+	"containers":       {"api", "vendors"},
 	"containerhistory": {"api"},
-	"httpapi": {"api", "auth", "users", "paths", "llamaswap", "gpu", "gpuhistory", "settings", "system",
-		"journal", "activity", "containerhistory"},
+	"backends":         {"api", "vendors"},
+	"flags":            {"api"},
+
+	// The HTTP surface may reach every domain package.
+	"httpapi": {"api", "paths", "vendors", "auth", "users", "settings", "system", "gpu", "gpuhistory",
+		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags"},
 	"boundary": {},
 }
 
