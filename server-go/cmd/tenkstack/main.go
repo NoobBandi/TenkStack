@@ -96,6 +96,7 @@ func main() {
 		Activity:   activity.New(layout.LlamaSwapActivity),
 		Containers: containerStats,
 		Config:     config,
+		Models:     &llamaswap.Models{Store: config, Dir: layout.ModelsDir},
 		Backends:   backends.New(config),
 		Docker:     docker,
 		Flags:      flags.NewCache(),

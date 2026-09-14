@@ -38,7 +38,10 @@ var Rejected = errors.New("llama-swap 不接受這份設定，已還原成修改
 // models exist and how they start.
 type Store struct {
 	Path string
-	mu   sync.Mutex
+	// SkipVerdict writes without asking llama-swap, for tests on a file it
+	// is not watching.
+	SkipVerdict bool
+	mu          sync.Mutex
 
 	aliasMu    sync.Mutex
 	aliases    map[string]string
@@ -357,7 +360,10 @@ func (s *Store) applyLocked(ctx context.Context, c *Config) error {
 	if err != nil {
 		return err
 	}
-	cursor := mark(ctx)
+	cursor := ""
+	if !s.SkipVerdict {
+		cursor = mark(ctx)
+	}
 	if err := c.Save(s.Path); err != nil {
 		return err
 	}
@@ -365,6 +371,9 @@ func (s *Store) applyLocked(ctx context.Context, c *Config) error {
 }
 
 func (s *Store) verdict(ctx context.Context, cursor, previous string) error {
+	if s.SkipVerdict {
+		return nil
+	}
 	switch ok := accepted(ctx, cursor); {
 	case ok == nil:
 		log.Print("no reload verdict from llama-swap; leaving the config in place")

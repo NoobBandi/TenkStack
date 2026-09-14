@@ -26,8 +26,14 @@ for i in $(seq 1 60); do curl -sf http://127.0.0.1:8072/api/health >/dev/null &&
 # one request per server; the status goes to a file so the body stays a pipe
 call() { local port=$1 m=$2 p=$3; shift 3
   curl -s -o "$S/body" -w '%{http_code}' -X "$m" "http://127.0.0.1:$port$p" "$@"; echo
-  python3 -c 'import sys,json; d=open(sys.argv[1]).read()
-try: print(json.dumps(json.loads(d),sort_keys=True,ensure_ascii=False))
+  python3 -c 'import sys,json
+def norm(v):  # 1.0 and 1 are the same number to every reader of this JSON
+    if isinstance(v,float) and v.is_integer(): return int(v)
+    if isinstance(v,list): return [norm(x) for x in v]
+    if isinstance(v,dict): return {k:norm(x) for k,x in v.items()}
+    return v
+d=open(sys.argv[1]).read()
+try: print(json.dumps(norm(json.loads(d)),sort_keys=True,ensure_ascii=False))
 except Exception: print(d[:200])' "$S/body"; }
 FAILS=0
 same() { local name=$1 a=$2 b=$3
@@ -121,6 +127,24 @@ curl -m 8 -sN -b $S/py.jar http://127.0.0.1:8071/api/stream > $S/go.stream & C2=
 for i in 1 2 3 4 5; do sleep 1; curl -s -o /dev/null http://127.0.0.1:8080/running; done
 wait $C1 $C2 2>/dev/null
 same stream-types "$(types < $S/py.stream)" "$(types < $S/go.stream)"
+echo "## models (reads only; writes touch the live config)"
+cmp models GET /api/models -b $S/py.jar
+MID=$(curl -s -b $S/py.jar http://127.0.0.1:8072/api/models | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
+cmp model-spec GET "/api/models/$MID/spec" -b $S/py.jar
+cmp model-spec-404 GET /api/models/nope/spec -b $S/py.jar
+cmp model-files GET "/api/models/$MID/files" -b $S/py.jar
+cmp model-files-404 GET /api/models/nope/files -b $S/py.jar
+cmp gguf-files GET /api/models/files -b $S/py.jar
+cmp partials GET /api/files/partials -b $S/py.jar
+GG=$(curl -s -b $S/py.jar http://127.0.0.1:8072/api/models/files | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["filename"])')
+cmp recommended GET "/api/models/recommended?file=$GG" -b $S/py.jar
+cmp recommended-escape GET '/api/models/recommended?file=../../etc/passwd' -b $S/py.jar
+cmp recommended-404 GET '/api/models/recommended?file=nope.gguf' -b $S/py.jar
+cmp model-delete-404 DELETE /api/models/nope -b $S/py.jar
+cmp file-delete-409 DELETE "/api/files/$GG" -b $S/py.jar
+same file-delete-escape "$(call 8072 DELETE '/api/files/../../etc/passwd' -b $S/py.jar | sed -n 1p)" "$(call 8071 DELETE '/api/files/../../etc/passwd' -b $S/py.jar | sed -n 1p)"
+cmp partial-delete-notpart DELETE "/api/files/partials/$GG" -b $S/py.jar
+same model-create-422 "$(call 8072 POST /api/models -b $S/py.jar $J "$JT" -d '{"id":"","model_file":"x.gguf"}' | sed -n 1p)" "$(call 8071 POST /api/models -b $S/py.jar $J "$JT" -d '{"id":"","model_file":"x.gguf"}' | sed -n 1p)"
 echo "## runtime: backends, containers, flags, config"
 cmp backend-devices GET /api/backends/devices -b $S/py.jar
 cmp runtime GET /api/runtime -b $S/py.jar

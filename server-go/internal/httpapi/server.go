@@ -39,6 +39,7 @@ type Server struct {
 	Activity   *activity.Store
 	Containers *containerhistory.History
 	Config     *llamaswap.Store
+	Models     *llamaswap.Models
 	Backends   *backends.Probe
 	Docker     *containers.Docker
 	Flags      *flags.Cache
@@ -80,6 +81,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/activity", s.readActivity)
 	mux.HandleFunc("GET /api/models/last-used", s.readLastUsed)
 	mux.HandleFunc("GET /api/containers/history", s.readContainerHistory)
+
+	mux.HandleFunc("GET /api/models", s.readModels)
+	mux.HandleFunc("POST /api/models", s.createModel)
+	mux.HandleFunc("GET /api/models/files", s.readModelFiles)
+	mux.HandleFunc("GET /api/models/recommended", s.readRecommended)
+	mux.HandleFunc("POST /api/models/unload", s.unloadAll)
+	mux.HandleFunc("GET /api/models/{id}/spec", s.readModelSpec)
+	mux.HandleFunc("POST /api/models/{id}/unload", s.unloadOne)
+	mux.HandleFunc("GET /api/models/{id}/files", s.modelFiles)
+	mux.HandleFunc("DELETE /api/models/{id}", s.removeModel)
+	mux.HandleFunc("GET /api/files/partials", s.readPartials)
+	mux.HandleFunc("DELETE /api/files/partials/{filename...}", s.removePartial)
+	mux.HandleFunc("DELETE /api/files/{filename...}", s.removeFile)
 
 	mux.HandleFunc("GET /api/backends/devices", s.readBackendDevices)
 	mux.HandleFunc("GET /api/runtime", s.readRuntime)
