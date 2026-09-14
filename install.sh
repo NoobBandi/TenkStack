@@ -720,6 +720,36 @@ RestartSec=5
 WantedBy=default.target
 UNIT"
 
+  # Intel only: xpu-smi's firmware library opens /dev/mei1 on every start,
+  # cannot as a non-root user, and says so twenty times per invocation via
+  # syslog(). Sampled every two seconds per card that is 2.5 million journal
+  # lines in three days. It cannot be filtered on the console's own unit --
+  # journald applies LogFilterPatterns= to the system unit a cgroup belongs
+  # to, which for every user service is user@<uid>.service and whose
+  # properties come from PID 1, not from the user manager. So the filter is a
+  # system drop-in on user@.service, which is the one place journald will
+  # read it from. The patterns match nothing else. Needs systemd >= 253.
+  if [[ " ${VENDORS[*]} " == *" intel "* ]]; then
+    local dropin=/etc/systemd/system/user@.service.d
+    if [[ -e $dropin/tenkstack-xpu-smi-log.conf ]]; then
+      skip "xpu-smi 的 journal 過濾已在"
+    else
+      as_root mkdir -p "$dropin"
+      run bash -c "printf '%s\n' \
+        '# Written by the TenkStack installer. Drops xpu-smi'\"'\"'s /dev/mei1 permission' \
+        '# errors (twenty per invocation, via syslog) that a non-root console cannot' \
+        '# avoid. Lives here because journald only reads LogFilterPatterns= from the' \
+        '# system unit that owns the cgroup, which for user services is this one.' \
+        '[Service]' \
+        'LogFilterPatterns=~Cannot establish a handle to the Intel MEI driver' \
+        'LogFilterPatterns=~IGSC:' \
+        'LogFilterPatterns=~HECI init' \
+        | sudo tee '$dropin/tenkstack-xpu-smi-log.conf' >/dev/null"
+      as_root systemctl daemon-reload
+      ok "xpu-smi 的 journal 過濾（user@.service drop-in）"
+    fi
+  fi
+
   run bash -c "cat > '$dir/tenkstack-llama-swap.service' <<UNIT
 [Unit]
 Description=llama-swap - on-demand model swapping for llama.cpp
