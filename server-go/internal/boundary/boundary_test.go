@@ -24,7 +24,10 @@ var allowed = map[string][]string{
 	"users":      {"api"},
 	"gpu":        {"api"},
 	"gpuhistory": {"api"},
-	"httpapi":    {"api", "auth", "users", "paths", "llamaswap", "gpu", "gpuhistory"},
+	"settings":   {"api"},
+	"system":     {"api"},
+	"ports":      {},
+	"httpapi":    {"api", "auth", "users", "paths", "llamaswap", "gpu", "gpuhistory", "settings", "system"},
 	"boundary":   {},
 }
 

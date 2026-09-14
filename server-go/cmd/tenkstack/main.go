@@ -21,7 +21,9 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/httpapi"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
+	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/store"
+	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
 )
 
@@ -45,6 +47,10 @@ func main() {
 	if err := userStore.Init(); err != nil {
 		log.Fatalf("init users: %v", err)
 	}
+	prefs := settings.New(db)
+	if err := prefs.Init(); err != nil {
+		log.Fatalf("init settings: %v", err)
+	}
 	authn := auth.New(layout.SessionKey, userStore)
 	if !authn.Enforced() {
 		log.Print("no accounts exist yet, so authentication is OFF. It switches on by itself as soon as the first user is created.")
@@ -54,12 +60,15 @@ func main() {
 	// numbering, and device 0 is the card llama-server runs on by default.
 	cards := gpu.NewRegistry(intel.New(), amd.New(), nvidia.New())
 	history := gpuhistory.New(cards)
+	history.SetHours(int(prefs.Get("gpu_history_hours")))
 
 	srv := &httpapi.Server{
 		Auth:       authn,
 		Users:      userStore,
 		Gpu:        cards,
 		History:    history,
+		Settings:   prefs,
+		System:     system.New(layout.ModelsDir),
 		Version:    version,
 		WebDist:    *webDist,
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},

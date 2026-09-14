@@ -91,7 +91,16 @@ sleep 3
 cmpshape gpu GET /api/gpu -b $S/py.jar
 cmpshape gpu-history GET '/api/gpu/history?seconds=900&points=600' -b $S/py.jar
 cmpshape gpu-devices GET /api/gpu/devices -b $S/py.jar
-same gpu-bad-query "$(call 8072 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | head -1)" "$(call 8071 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | head -1)"   # status only, see the 422 note above
+same gpu-bad-query "$(call 8072 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | sed -n 1p)" "$(call 8071 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | sed -n 1p)"   # status only, see the 422 note above
+echo "## settings and system"
+cmp settings GET /api/settings -b $S/py.jar
+cmp settings-set PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":12,"gpu_history_hours":3}'
+cmp settings-back-to-default PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":8}'
+cmp settings-unknown PUT /api/settings -b $S/py.jar $J "$JT" -d '{"nope":1}'
+cmp settings-range PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":99}'
+cmp settings-not-int PUT /api/settings -b $S/py.jar $J "$JT" -d '{"agent_max_steps":"abc"}'
+cmp settings-api-key-denied PUT /api/settings -H "Authorization: Bearer $KEY" $J "$JT" -d '{"agent_max_steps":9}'
+cmpshape system GET /api/system -b $S/py.jar
 echo "## static"
 for p in / /index.html /favicon.svg /assets/ /nope.js /api/nope; do
   printf '%-14s py=%s go=%s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code} %{content_type} cc=%header{cache-control}' http://127.0.0.1:8072$p)" "$(curl -s -o /dev/null -w '%{http_code} %{content_type} cc=%header{cache-control}' http://127.0.0.1:8071$p)"
