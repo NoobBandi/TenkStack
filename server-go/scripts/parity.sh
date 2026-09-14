@@ -34,6 +34,19 @@ same() { local name=$1 a=$2 b=$3
   if [[ "$a" == "$b" ]]; then echo "SAME  $name: $(echo "$a" | tr '\n' ' ' | cut -c1-150)"
   else FAILS=$((FAILS+1)); echo "DIFF  $name"; echo "  py: $(echo "$a" | tr '\n' ' ' | cut -c1-200)"; echo "  go: $(echo "$b" | tr '\n' ' ' | cut -c1-200)"; fi; }
 cmp() { local name=$1; shift; same "$name" "$(call 8072 "$@")" "$(call 8071 "$@")"; }
+# Live readings differ between two processes, so only the shape is compared:
+# every number becomes 0, every list of samples its first element.
+shape() { python3 -c 'import sys,json
+def norm(v):
+    if isinstance(v,bool): return v
+    if isinstance(v,(int,float)): return 0
+    if isinstance(v,list): return [norm(v[0])] if v and isinstance(v[0],dict) else [norm(x) for x in v]
+    if isinstance(v,dict): return {k:norm(x) for k,x in v.items()}
+    return v
+lines=sys.stdin.read().split("\n",1)
+try: print(lines[0]); print(json.dumps(norm(json.loads(lines[1])),sort_keys=True,ensure_ascii=False))
+except Exception: print("\n".join(lines))'; }
+cmpshape() { local name=$1; shift; same "$name" "$(call 8072 "$@" | shape)" "$(call 8071 "$@" | shape)"; }
 J='-H' ; JT='Content-Type: application/json'
 echo "## before any account (enforcement off)"
 cmp health GET /api/health
@@ -73,6 +86,12 @@ cmp logout POST /api/auth/logout -b $S/py.jar
 curl -s -b $S/py.jar -X POST http://127.0.0.1:8072/api/api-keys -H "$JT" -d '{"user_id":1,"name":"t2"}' >/dev/null
 same key-del-ok "$(call 8072 DELETE /api/api-keys/1 -b $S/py.jar)" "$(call 8071 DELETE /api/api-keys/2 -b $S/py.jar)"
 cmp dup-user POST /api/users -b $S/py.jar $J "$JT" -d '{"username":"owner","password":"secret123"}'
+echo "## gpu (shapes; both pollers need a tick first)"
+sleep 3
+cmpshape gpu GET /api/gpu -b $S/py.jar
+cmpshape gpu-history GET '/api/gpu/history?seconds=900&points=600' -b $S/py.jar
+cmpshape gpu-devices GET /api/gpu/devices -b $S/py.jar
+same gpu-bad-query "$(call 8072 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | head -1)" "$(call 8071 GET '/api/gpu/history?seconds=abc' -b $S/py.jar | head -1)"   # status only, see the 422 note above
 echo "## static"
 for p in / /index.html /favicon.svg /assets/ /nope.js /api/nope; do
   printf '%-14s py=%s go=%s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code} %{content_type} cc=%header{cache-control}' http://127.0.0.1:8072$p)" "$(curl -s -o /dev/null -w '%{http_code} %{content_type} cc=%header{cache-control}' http://127.0.0.1:8071$p)"

@@ -12,12 +12,16 @@ import (
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
 )
 
 type Server struct {
 	Auth    *auth.Auth
 	Users   *users.Store
+	Gpu     *gpu.Registry
+	History *gpuhistory.History
 	Version string
 	WebDist string
 	// DevOrigins get CORS headers with credentials, for the Vite dev server.
@@ -45,6 +49,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/api-keys", s.listAPIKeys)
 	mux.HandleFunc("POST /api/api-keys", s.createAPIKey)
 	mux.HandleFunc("DELETE /api/api-keys/{id}", s.deleteAPIKey)
+
+	mux.HandleFunc("GET /api/gpu", s.readGpu)
+	mux.HandleFunc("GET /api/gpu/history", s.readGpuHistory)
+	mux.HandleFunc("GET /api/gpu/devices", s.readGpuDevices)
 
 	mux.HandleFunc("GET /fonts/cjk.ttf", s.cjkFont)
 	mux.Handle("GET /assets/", s.assets())

@@ -14,6 +14,11 @@ import (
 	"time"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/auth"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/amd"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/intel"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/nvidia"
+	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
 	"github.com/NoobBandi/TenkStack/server-go/internal/httpapi"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/store"
@@ -45,9 +50,16 @@ func main() {
 		log.Print("no accounts exist yet, so authentication is OFF. It switches on by itself as soon as the first user is created.")
 	}
 
+	// Intel first, then alphabetical: the order decides the global device
+	// numbering, and device 0 is the card llama-server runs on by default.
+	cards := gpu.NewRegistry(intel.New(), amd.New(), nvidia.New())
+	history := gpuhistory.New(cards)
+
 	srv := &httpapi.Server{
 		Auth:       authn,
 		Users:      userStore,
+		Gpu:        cards,
+		History:    history,
 		Version:    version,
 		WebDist:    *webDist,
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},
@@ -61,6 +73,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// Sampling starts with the process, not the first browser: the chart
+	// should show the last hours on load rather than begin at zero.
+	history.Start(ctx)
+	defer history.Stop()
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
