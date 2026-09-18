@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Alert, App as AntApp, Button, Card, Divider, Popconfirm, Space, Tag, Tooltip,
-  Typography,
+  Alert, App as AntApp, Button, Card, Divider, Popconfirm, Segmented, Space, Tag,
+  Tooltip, Typography,
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlayCircleOutlined,
@@ -10,15 +10,16 @@ import {
 } from '@ant-design/icons';
 import {
   checkComfyVersion, comfyAction, controlContainer, fetchComfyInstances,
-  fetchComfyStorage, fetchRuntimes, interruptComfy, restartComfy, setCardRole,
-  updateComfy,
+  fetchComfyStorage, fetchContainerHistory, fetchGpuHistory, fetchRuntimes,
+  interruptComfy, restartComfy, setCardRole, updateComfy,
   type ComfyInstance, type ComfyStorage, type GpuSample, type RuntimeCoverage,
 } from '../api';
 import { useStream } from '../stream';
 import { useIsOwner } from '../identity';
+import { vramAxisMax, vramAxisTicks } from '../hardware';
 import ContainerSettings from './comfy-settings';
-import { StatBody } from '../components/StatTile';
-import { ACCENT, LINE, MONO, VRAM_AMBER, VRAM_RED } from '../theme';
+import MetricChart from '../components/MetricChart';
+import { ACCENT, LINE, MONO, SERIES } from '../theme';
 
 const { Text } = Typography;
 
@@ -263,29 +264,100 @@ function Hero({ instance, slot, onChanged }: {
   );
 }
 
+const WINDOWS = [
+  { label: '5 分', value: 300 },
+  { label: '15 分', value: 900 },
+  { label: '1 時', value: 3600 },
+  { label: '2 時', value: 7200 },
+];
+
+interface Point { t: number; v: number | null }
+
 /**
- * What the instance is using, right now.
+ * The top of the memory axis: the container's limit when it has one, else
+ * the whole-number power of two above the highest reading in the window.
+ * Not the host's 126 GiB, against which a 2 GiB container is a flat line
+ * however hard it works; not fitted to the data either, or a steady hour
+ * would fill the panel. A power of two only moves when a peak passes it.
+ */
+function memoryCeiling(limit: number | null | undefined, points: Point[]): number {
+  if (limit) return limit;
+  const peak = Math.max(0, ...points.map((p) => p.v ?? 0));
+  let top = 1024 ** 3;
+  while (top < peak) top *= 2;
+  return top;
+}
+
+/**
+ * What the instance is using, over the last while.
  *
- * The same tile the GPU page uses, so a reading here looks like a reading
- * there. CPU and memory are the container's cgroup by way of the live
- * stream; the card is as ComfyUI reports it; disk is what the instance's own
- * directories weigh, not the drive they sit on -- the drive is the host's
- * business and is on the overview.
+ * Three panels drawn the way the overview's GPU chart is drawn, one
+ * quantity each: the container's CPU and memory from its cgroup, and the
+ * card as the host sees it. Disk is not a time series -- it is walked every
+ * five minutes -- so what the instance's directories weigh is a line under
+ * the panels rather than a fourth one.
  */
 function Resources({ instance, storage }: {
   instance: ComfyInstance;
   storage: ComfyStorage | null;
 }) {
   const { containers, system, gpus } = useStream();
+  const [seconds, setSeconds] = useState(900);
+  const [cpu, setCpu] = useState<Point[]>([]);
+  const [memory, setMemory] = useState<Point[]>([]);
+  const [vram, setVram] = useState<Point[]>([]);
   const name = instance.container;
-  const sample = name ? containers.find((c) => c.name === name) : undefined;
+  const cardIndex = instance.cards[0];
+
+  // The window before the page opened, from the server's buffers. Refetched
+  // occasionally so the far edge stays honest; the live feed fills in
+  // between.
+  const load = useCallback(async (window: number) => {
+    const [boxes, cards] = await Promise.allSettled([
+      fetchContainerHistory(window, 240),
+      fetchGpuHistory(window, 240),
+    ]);
+    if (boxes.status === 'fulfilled' && name) {
+      const series = boxes.value.series[name] ?? [];
+      setCpu(series.map((p) => ({ t: p.t, v: p.cpu === null ? null : p.cpu / 100 })));
+      setMemory(series.map((p) => ({ t: p.t, v: p.memory })));
+    }
+    if (cards.status === 'fulfilled' && cardIndex !== undefined) {
+      setVram((cards.value.devices[String(cardIndex)] ?? []).map((p) => ({ t: p.t, v: p.vram })));
+    }
+  }, [name, cardIndex]);
+
+  useEffect(() => { void load(seconds); }, [seconds, load]);
+  useEffect(() => {
+    const timer = window.setInterval(() => void load(seconds), 30000);
+    return () => window.clearInterval(timer);
+  }, [seconds, load]);
+
+  // Each live sample appended to its series, capped to the window so a page
+  // left open overnight does not grow without bound.
+  const append = useCallback((prev: Point[], point: Point) => {
+    if (prev.length && prev[prev.length - 1].t === point.t) return prev;
+    const cutoff = point.t - seconds;
+    return [...prev.filter((p) => p.t >= cutoff), point];
+  }, [seconds]);
+
+  useEffect(() => {
+    const sample = name ? containers.find((c) => c.name === name) : undefined;
+    if (!sample) return;
+    setCpu((prev) => append(prev, { t: sample.t, v: sample.cpu_percent === null ? null : sample.cpu_percent / 100 }));
+    setMemory((prev) => append(prev, { t: sample.t, v: sample.memory }));
+  }, [containers, name, append]);
+
+  useEffect(() => {
+    const card = gpus.find((g) => g.index === cardIndex);
+    if (!card) return;
+    setVram((prev) => append(prev, { t: Date.now() / 1000, v: card.memory_used_mib }));
+  }, [gpus, cardIndex, append]);
+
   const cores = system?.cpu.cores ?? null;
-  const hostMemory = system?.memory.total_bytes ?? null;
-
-  // cpu_percent is of one core: 350 means three and a half cores.
-  const cpuCores = sample?.cpu_percent != null ? sample.cpu_percent / 100 : null;
-
-  const { used: cardUsed, total: cardTotal, percent: cardPercent, own, others } = cardFigures(instance, gpus);
+  const sample = name ? containers.find((c) => c.name === name) : undefined;
+  const { total: cardTotal, own, others } = cardFigures(instance, gpus);
+  const vramMax = vramAxisMax(cardTotal ? cardTotal / 1024 ** 2 : 0);
 
   const total = storage?.measured_at
     ? (storage.models_bytes ?? 0) + (storage.input_bytes ?? 0)
@@ -293,55 +365,65 @@ function Resources({ instance, storage }: {
     : null;
 
   return (
-    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>資源</span>}>
+    <Card
+      size="small"
+      title={<span style={{ fontSize: 12, opacity: 0.75 }}>資源</span>}
+      extra={
+        <Segmented size="small" value={seconds}
+                   onChange={(v) => setSeconds(v as number)} options={WINDOWS} />
+      }
+    >
       <div style={{
-        display: 'grid', gap: 16,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        display: 'grid', gap: 20,
+        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
       }}>
-        <StatBody
+        <MetricChart
           label="CPU"
-          value={cpuCores !== null ? cpuCores.toFixed(1) : '—'}
-          unit="核"
-          percent={cpuCores !== null && cores ? cpuCores / cores * 100 : undefined}
-          footnote={cores ? `共 ${cores} 核` : undefined}
+          points={cpu}
+          colour={SERIES.temp}
+          max={cores ?? 16}
+          axis={(v) => `${v}`}
+          format={(v) => `${v.toFixed(1)} 核`}
+          note={cores ? `共 ${cores} 核` : undefined}
         />
-        <StatBody
+        <MetricChart
           label="記憶體"
-          value={sample ? gib(sample.memory).toFixed(1) : '—'}
-          unit="GiB"
-          percent={sample && hostMemory ? sample.memory / hostMemory * 100 : undefined}
-          footnote={sample?.memory_limit
-            ? `容器上限 ${gib(sample.memory_limit).toFixed(0)} GiB`
-            : hostMemory ? `主機共 ${gib(hostMemory).toFixed(0)} GiB` : undefined}
+          points={memory}
+          colour={SERIES.power}
+          max={memoryCeiling(sample?.memory_limit, memory)}
+          // A 2 GiB axis has ticks at half-gigabytes; rounded to whole ones
+          // they read 0G 1G 1G 2G 2G.
+          axis={(v) => `${Number.isInteger(gib(v)) ? gib(v) : gib(v).toFixed(1)}G`}
+          format={(v) => `${gib(v).toFixed(2)} GiB`}
+          note={sample?.memory_limit ? `容器上限 ${gib(sample.memory_limit).toFixed(0)} GiB` : '無上限，與主機共用'}
         />
-        <StatBody
+        <MetricChart
           label="顯示記憶體"
-          value={cardUsed !== null ? gib(cardUsed).toFixed(1) : '—'}
-          unit="GiB"
-          percent={cardPercent ?? undefined}
-          thresholds={[VRAM_AMBER, VRAM_RED]}
-          footnote={
-            cardTotal && own !== null && others !== null
-              ? (cardPercent ?? 0) >= VRAM_AMBER
-                ? `快滿了，算圖可能失敗（ComfyUI 佔 ${gib(own).toFixed(1)}，其他程式 ${gib(others).toFixed(1)} GiB）`
-                : others >= 1 << 30
-                  ? `ComfyUI 佔 ${gib(own).toFixed(1)}，其他程式 ${gib(others).toFixed(1)} GiB`
-                  : `ComfyUI 佔 ${gib(own).toFixed(1)} GiB，卡上共 ${gib(cardTotal).toFixed(0)} GiB`
-              : undefined
-          }
-        />
-        <StatBody
-          label="佔用空間"
-          value={total !== null ? gib(total).toFixed(1) : '—'}
-          unit="GiB"
-          // Not a ratio: the drive it sits on is on the overview page. The
-          // parts are the footnote, because the one that grows is 成品.
-          footnote={storage?.measured_at
-            ? `模型 ${size(storage.models_bytes)} ・ 成品 ${size(storage.output_bytes)}`
-              + ` ・ 程式 ${size(storage.install_bytes)} ・ 素材 ${size(storage.input_bytes)}`
-            : storage ? '正在計算…' : undefined}
+          points={vram}
+          colour={SERIES.vram}
+          max={vramMax}
+          ticks={vramAxisTicks(vramMax)}
+          axis={(v) => `${(v / 1024).toFixed(0)}G`}
+          format={(v) => `${(v / 1024).toFixed(1)} GiB`}
+          // The card, not the process: llama-server on the same card shows
+          // here, and that is the answer to "why did my picture fail".
+          note={own !== null && others !== null
+            ? others >= 1 << 30
+              ? `ComfyUI 佔 ${gib(own).toFixed(1)}，其他程式 ${gib(others).toFixed(1)} GiB`
+              : `ComfyUI 佔 ${gib(own).toFixed(1)} GiB`
+            : undefined}
         />
       </div>
+
+      <Divider style={{ margin: '12px 0 10px' }} />
+
+      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+        佔用空間 {total !== null ? `${gib(total).toFixed(1)} GiB` : storage ? '計算中…' : '—'}
+        {storage?.measured_at
+          ? ` ・ 模型 ${size(storage.models_bytes)}（各實例共用）・ 成品 ${size(storage.output_bytes)}`
+            + ` ・ 程式 ${size(storage.install_bytes)} ・ 素材 ${size(storage.input_bytes)}`
+          : ''}
+      </Text>
     </Card>
   );
 }
@@ -674,11 +756,17 @@ function InstanceSection({ instance, owner, staleAfterUpdate, onChanged, onResta
       <Hero instance={instance} slot={slot} onChanged={onChanged} />
       <Resources instance={instance} storage={storage} />
       {owner && (
-        <>
-          <Maintenance instance={instance} staleAfterUpdate={staleAfterUpdate}
-                       onChanged={onChanged} onRestarted={onRestarted} />
-          <ContainerSettings instance={instance} onDone={onChanged} />
-        </>
+        // Side by side: what is done to the instance and what it is made of
+        // are both operator material and neither is read top to bottom.
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+            <Maintenance instance={instance} staleAfterUpdate={staleAfterUpdate}
+                         onChanged={onChanged} onRestarted={onRestarted} />
+          </div>
+          <div style={{ flex: '1 1 420px', minWidth: 0 }}>
+            <ContainerSettings instance={instance} onDone={onChanged} />
+          </div>
+        </div>
       )}
     </>
   );
