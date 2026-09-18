@@ -201,7 +201,10 @@ function Hero({ instance, slot, onChanged }: {
             </Button>
           )}
           {url ? (
-            <Button type="primary" icon={<ExportOutlined />}
+            // Outlined, like 新建 on the Files page: the filled primary is a
+            // grey slab on this background, and the one thing to click on a
+            // page should not be the one ugly thing on it.
+            <Button size="small" type="primary" ghost icon={<ExportOutlined />}
                     href={url} target="_blank" rel="noreferrer">
               開啟 ComfyUI
             </Button>
@@ -210,7 +213,7 @@ function Hero({ instance, slot, onChanged }: {
             // it, so there is no authenticated way in from a browser. A link
             // that cannot connect would be worse than saying why.
             <Tooltip title="需要在 caddy/channels 補上對應的站台設定，才有經過登入的入口">
-              <Button disabled>尚未發佈</Button>
+              <Button size="small" disabled>尚未發佈</Button>
             </Tooltip>
           )}
         </Space>
