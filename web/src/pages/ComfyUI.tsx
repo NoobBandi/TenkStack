@@ -163,59 +163,45 @@ function Hero({ instance, slot, onChanged }: {
     },
   ];
 
+  // The same scale as every other card here: the state where a card's
+  // title goes, the button at the size the rest of the console uses, 11px
+  // notes. The first cut had the state at 20px and the button large, which
+  // made this the one loud card in a quiet interface.
   return (
-    <Card size="small" styles={{ body: { padding: '18px 20px 16px' } }}>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        gap: 16, flexWrap: 'wrap',
-      }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: dot, flex: 'none' }} />
-            <Text style={{ fontSize: 20, lineHeight: 1.2 }}>{state}</Text>
-            {updating && manager && (
-              <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
-                {manager.done}/{manager.total}
-              </Text>
-            )}
-            {busy && queued > 0 && (
-              <Text type="secondary" style={{ fontSize: 12 }}>還有 {queued} 張排隊</Text>
-            )}
-            {instance.stale && (
-              // ComfyUI is aiohttp over synchronous torch, so it answers nothing
-              // while a sampling step runs. Saying the numbers paused beats
-              // presenting them as current or dropping the card.
-              <Tooltip title="ComfyUI 正忙著算，暫時沒有回應。畫面上是最後一次拿到的數字。">
-                <Tag color="blue" style={{ fontSize: 11, marginInlineEnd: 0 }}>數字暫停更新</Tag>
-              </Tooltip>
-            )}
-          </div>
-          <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO, display: 'block', marginTop: 6 }}>
-            {instance.container ?? 'comfyui'}
-            {instance.device?.name ? ` ・ ${cardName(instance.device.name)}` : ''}
-            {tagged(instance.version) ? ` ・ ComfyUI ${tagged(instance.version)}` : ''}
-          </Text>
-          {crowded && others !== null && (
-            // The failure a newcomer actually hits: Run, then an out-of-memory
-            // error from inside ComfyUI, because the language model is on the
-            // card. Said here, before Run, with the two ways out. The console
-            // clears ComfyUI for a model but not the reverse -- the model
-            // leaves on its own idle timer, or when somebody unloads it.
-            <Text style={{ fontSize: 12, color: ACCENT.warn, display: 'block', marginTop: 8 }}>
-              顯示卡上有其他程式（通常是語言模型）佔著 {gib(others).toFixed(1)} GiB，大一點的圖可能算不了。
-              它閒置一陣子會自己卸載，或到<Link to="/models" style={{ color: ACCENT.warn, textDecoration: 'underline' }}>模型頁</Link>按「全部卸載」。
+    <Card
+      size="small"
+      title={
+        <Space size={8}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot }} />
+          <Text style={{ fontSize: 14 }}>{state}</Text>
+          {updating && manager && (
+            <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO }}>
+              {manager.done}/{manager.total}
             </Text>
           )}
-        </div>
-
+          {busy && queued > 0 && (
+            <Text type="secondary" style={{ fontSize: 12 }}>還有 {queued} 張排隊</Text>
+          )}
+          {instance.stale && (
+            // ComfyUI is aiohttp over synchronous torch, so it answers nothing
+            // while a sampling step runs. Saying the numbers paused beats
+            // presenting them as current or dropping the card.
+            <Tooltip title="ComfyUI 正忙著算，暫時沒有回應。畫面上是最後一次拿到的數字。">
+              <Tag color="blue" style={{ fontSize: 11 }}>數字暫停更新</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      }
+      extra={
         <Space size={8}>
           {busy && (
-            <Button danger icon={<StopOutlined />} loading={stopping} onClick={() => void onInterrupt()}>
+            <Button size="small" danger icon={<StopOutlined />}
+                    loading={stopping} onClick={() => void onInterrupt()}>
               中斷
             </Button>
           )}
           {url ? (
-            <Button type="primary" size="large" icon={<ExportOutlined />}
+            <Button type="primary" icon={<ExportOutlined />}
                     href={url} target="_blank" rel="noreferrer">
               開啟 ComfyUI
             </Button>
@@ -224,29 +210,46 @@ function Hero({ instance, slot, onChanged }: {
             // it, so there is no authenticated way in from a browser. A link
             // that cannot connect would be worse than saying why.
             <Tooltip title="需要在 caddy/channels 補上對應的站台設定，才有經過登入的入口">
-              <Button size="large" disabled>尚未發佈</Button>
+              <Button disabled>尚未發佈</Button>
             </Tooltip>
           )}
         </Space>
-      </div>
+      }
+    >
+      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+        {instance.container ?? 'comfyui'}
+        {instance.device?.name ? ` ・ ${cardName(instance.device.name)}` : ''}
+        {tagged(instance.version) ? ` ・ ComfyUI ${tagged(instance.version)}` : ''}
+      </Text>
+      {crowded && others !== null && (
+        // The failure a newcomer actually hits: Run, then an out-of-memory
+        // error from inside ComfyUI, because the language model is on the
+        // card. Said here, before Run, with the two ways out. The console
+        // clears ComfyUI for a model but not the reverse -- the model leaves
+        // on its own idle timer, or when somebody unloads it.
+        <Text style={{ fontSize: 11, color: ACCENT.warn, display: 'block', marginTop: 6 }}>
+          顯示卡上有其他程式（通常是語言模型）佔著 {gib(others).toFixed(1)} GiB，大一點的圖可能算不了。
+          它閒置一陣子會自己卸載，或到<Link to="/models" style={{ color: ACCENT.warn, textDecoration: 'underline' }}>模型頁</Link>按「全部卸載」。
+        </Text>
+      )}
 
-      <Divider style={{ margin: '16px 0 14px' }} />
+      <Divider style={{ margin: '12px 0 10px' }} />
 
       <div style={{
-        display: 'grid', gap: 20,
+        display: 'grid', gap: 16,
         gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
       }}>
         {steps.map((step, i) => (
-          <div key={step.title} style={{ display: 'flex', gap: 12, minWidth: 0 }}>
+          <div key={step.title} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
             <span style={{
-              fontFamily: MONO, fontSize: 22, lineHeight: 1, opacity: 0.3, flex: 'none',
-              width: 18, textAlign: 'right', paddingTop: 1,
+              fontFamily: MONO, fontSize: 14, lineHeight: 1.3, opacity: 0.35, flex: 'none',
+              width: 12, textAlign: 'right',
             }}>
               {i + 1}
             </span>
             <div style={{ minWidth: 0 }}>
-              <Text style={{ fontSize: 13, display: 'block' }}>{step.title}</Text>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 3, lineHeight: 1.6 }}>
+              <Text style={{ fontSize: 12, display: 'block' }}>{step.title}</Text>
+              <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 2, lineHeight: 1.6 }}>
                 {step.body}
               </Text>
             </div>
@@ -287,9 +290,9 @@ function Resources({ instance, storage }: {
     : null;
 
   return (
-    <Card size="small" styles={{ body: { padding: '14px 20px 8px' } }}>
+    <Card size="small" title={<span style={{ fontSize: 12, opacity: 0.75 }}>資源</span>}>
       <div style={{
-        display: 'grid', gap: 20,
+        display: 'grid', gap: 16,
         gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
       }}>
         <StatBody
