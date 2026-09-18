@@ -5,16 +5,17 @@ import {
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlayCircleOutlined,
-  PlusOutlined, PoweroffOutlined, ReloadOutlined, SearchOutlined, StopOutlined,
-  SyncOutlined,
+  PlusOutlined, PoweroffOutlined, ReloadOutlined, StopOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import {
-  checkComfyUpdates, comfyAction, controlContainer, fetchComfyConfig,
-  fetchComfyInstances, fetchRuntimes, interruptComfy, restartComfy, setCardRole,
-  updateComfy,
-  type ComfyInstance, type RuntimeCoverage,
+  checkComfyVersion, comfyAction, controlContainer, fetchComfyConfig,
+  fetchComfyInstances, fetchComfyStorage, fetchRuntimes, interruptComfy,
+  restartComfy, setCardRole, updateComfy,
+  type ComfyInstance, type ComfyStorage, type RuntimeCoverage,
 } from '../api';
+import { useStream } from '../stream';
 import ContainerSettings from './comfy-settings';
+import Dial from '../components/Dial';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -23,17 +24,17 @@ const { Text } = Typography;
  * Image generation.
  *
  * The console does not try to be ComfyUI. It answers what an operator asks --
- * is it up, on which cards, is it busy, take me to it -- and owns the container
- * those answers come from.
+ * is it up, on which cards, is it busy, what is it using, take me to it -- and
+ * owns the container those answers come from.
  *
- * One card per instance, and everything about that instance inside it. The
- * previous arrangement had the same decision in two places that meant opposite
- * things: a per-card switch that created a second instance, and a per-card
- * checkbox that handed the card to the first one. Ticking the box made the
- * switch read as on, and turning that switch off destroyed the whole container
- * rather than detaching one card. Cards belong to an instance, so they are
- * edited inside it; making a new instance is a separate action offered only for
- * a card that has none.
+ * One row per instance: what it is doing and what it costs on the left, what
+ * it is made of on the right. The two used to be separate columns each mapped
+ * over the instance list, which lined up only while there was one instance;
+ * with two, the second instance's settings sat beside the first instance's
+ * actions. A row keeps an instance's pieces next to each other.
+ *
+ * Cards belong to an instance, so they are edited inside it; making a new
+ * instance is a separate action offered only for a card that has none.
  */
 
 /**
@@ -52,14 +53,128 @@ function instanceUrl(instance: ComfyInstance): string | null {
   return `https://${window.location.hostname}:${instance.public_port}`;
 }
 
+const gib = (bytes: number) => bytes / 1024 ** 3;
+
+/** Bytes in the unit the figure is read in: a 67 GiB model tree and a 12 MiB
+ *  input folder should not both be forced into one of them. */
+const size = (bytes: number | null) =>
+  (bytes === null ? '—'
+    : bytes >= 1024 ** 3 ? `${gib(bytes).toFixed(1)}G`
+      : `${Math.max(1, Math.round(bytes / 1024 ** 2))}M`);
+
+/** system_stats says "0.36.0"; the release list says "v0.36.0". */
+const tagged = (v: string | null) => (v ? 'v' + v.replace(/^v/, '') : null);
+
+function ago(seconds: number | null): string {
+  if (seconds === null) return '';
+  const m = Math.round((Date.now() / 1000 - seconds) / 60);
+  return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : `${Math.round(m / 60)} 小時前`;
+}
+
+/**
+ * What the instance is using, right now.
+ *
+ * Four dials, the same instrument the host panel uses, so "83%" here means
+ * what it means there. CPU and memory come from the container's cgroup by
+ * way of the live stream; VRAM is the card as ComfyUI reports it; disk is
+ * the filesystem the instance writes to, walked in the background.
+ */
+function Resources({ instance, name, storage }: {
+  instance: ComfyInstance;
+  name: string | null;
+  storage: ComfyStorage | null;
+}) {
+  const { containers, system } = useStream();
+  const sample = name ? containers.find((c) => c.name === name) : undefined;
+  const cores = system?.cpu.cores ?? null;
+  const hostMemory = system?.memory.total_bytes ?? null;
+
+  // cpu_percent is of one core: 350 means three and a half cores. The dial
+  // is against the machine, like the host panel, so a container running
+  // one thread flat out on a sixteen-thread box reads as 6%, not 100%.
+  const cpuCores = sample?.cpu_percent != null ? sample.cpu_percent / 100 : null;
+  const cpuPercent = cpuCores !== null && cores ? cpuCores / cores * 100 : null;
+
+  // Against its own limit when it has one, the host's memory when it does
+  // not -- which is this container, so the dial says so rather than
+  // implying a cap that would stop it.
+  const memoryCap = sample?.memory_limit ?? hostMemory;
+  const memoryPercent = sample && memoryCap ? sample.memory / memoryCap * 100 : null;
+
+  const device = instance.device;
+  const vramUsed = device ? device.vram_total - device.vram_free : null;
+  const vramPercent = device && vramUsed !== null && device.vram_total > 0
+    ? vramUsed / device.vram_total * 100 : null;
+
+  const disk = storage?.disk ?? null;
+  const sizes = storage?.sizes;
+
+  return (
+    <div>
+      <div style={{
+        display: 'grid', gap: 12, justifyItems: 'center',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))',
+      }}>
+        <Dial
+          title="CPU"
+          percent={cpuPercent}
+          reading={cpuCores !== null && cores ? `${cpuCores.toFixed(1)}/${cores} 核` : '—'}
+          // The figure `docker stats` prints, for anyone who has that number
+          // in their head: one core flat out is 100 there and 6 on the dial.
+          note={sample?.cpu_percent != null ? `以單核計 ${sample.cpu_percent.toFixed(0)}%` : '沒有樣本'}
+          noteTitle="容器 cgroup 的 CPU 時間。錶盤對整台機器的核心數算，下面那個數字是 docker stats 的算法。"
+        />
+        <Dial
+          title="記憶體"
+          percent={memoryPercent}
+          reading={sample && memoryCap
+            ? `${gib(sample.memory).toFixed(1)}/${gib(memoryCap).toFixed(0)}G` : '—'}
+          note={sample?.memory_limit ? '容器上限' : '無上限，與主機共用'}
+        />
+        <Dial
+          title="VRAM"
+          percent={vramPercent}
+          reading={device && vramUsed !== null
+            ? `${gib(vramUsed).toFixed(1)}/${gib(device.vram_total).toFixed(0)}G` : '—'}
+          // The card, not the process: ComfyUI reports the whole card, and
+          // when llama-server is on it this dial is full while ComfyUI holds
+          // nothing. The note says how much is actually ComfyUI's.
+          note={device ? `ComfyUI 佔 ${gib(device.torch_vram_total).toFixed(1)} GiB` : '—'}
+          noteTitle="整張卡的使用量，包含 llama-server 等其他程式。下面的數字才是 ComfyUI 自己保留的。"
+        />
+        <Dial
+          title="磁碟"
+          percent={disk?.percent ?? null}
+          reading={disk ? `${gib(disk.used_bytes).toFixed(0)}/${gib(disk.total_bytes).toFixed(0)}G` : '—'}
+          // Available, not total-minus-used: the number that decides whether
+          // the next model fits.
+          note={disk ? `可用 ${gib(disk.free_bytes).toFixed(0)} GiB` : '—'}
+          noteTitle={storage ? `${storage.path} 所在的檔案系統` : undefined}
+        />
+      </div>
+
+      {/* What the instance's own directories weigh, as a line rather than a
+          fifth dial: it is not a ratio, and the one figure people come back
+          for is output growing. Models are shared between instances and
+          said so, or two instances would appear to hold the same 67 GiB twice. */}
+      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, display: 'block', marginTop: 4 }}>
+        {sizes?.measured_at
+          ? `模型 ${size(sizes.models_bytes)}（各實例共用）・ 輸出 ${size(sizes.output_bytes)}`
+            + ` ・ 程式與節點 ${size(sizes.install_bytes)} ・ 輸入 ${size(sizes.input_bytes)}`
+          : storage ? '正在量目錄大小…' : ' '}
+      </Text>
+    </div>
+  );
+}
+
 /**
  * One instance, and everything that is true of it.
  *
  * The order is the order an operator reads in: what it is doing, the way in,
- * then what it is made of, then the things that take it away for a while. The
- * maintenance actions sit at the bottom behind a divider because every one of
- * them stops the instance for minutes, and they should not share a row with the
- * button that opens it.
+ * what it is using, then what version it is, then the things that take it
+ * away for a while. The maintenance actions sit at the bottom behind a divider
+ * because every one of them stops the instance for minutes, and they should
+ * not share a row with the button that opens it.
  */
 function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   instance: ComfyInstance;
@@ -73,6 +188,7 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const [stopping, setStopping] = useState(false);
   const [checking, setChecking] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [storage, setStorage] = useState<ComfyStorage | null>(null);
 
   const url = instanceUrl(instance);
   const busy = instance.queue_running > 0;
@@ -80,12 +196,28 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const manager = instance.manager;
   const updating = manager?.processing ?? false;
 
-  // Only the name, which the maintenance actions address the container by.
+  // Only the name, which the maintenance actions and the live samples
+  // address the container by.
   const [name, setName] = useState<string | null>(null);
   useEffect(() => {
     fetchComfyConfig(instance.port)
       .then((found) => setName(found.name))
       .catch(() => setName(null));
+  }, [instance.port]);
+
+  // Disk changes by the batch, not by the second. The backend walks the
+  // directories at most every five minutes; this just asks often enough to
+  // see the first answer arrive.
+  useEffect(() => {
+    let live = true;
+    const load = () => {
+      fetchComfyStorage(instance.port)
+        .then((found) => { if (live) setStorage(found); })
+        .catch(() => undefined);
+    };
+    load();
+    const timer = window.setInterval(load, 20000);
+    return () => { live = false; window.clearInterval(timer); };
   }, [instance.port]);
 
   /** `done` is optional: an action that reports its own result says it once. */
@@ -110,26 +242,17 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   const onInterrupt = () =>
     run('中斷', setStopping, () => interruptComfy(instance.port), '已送出中斷');
 
+  // One call to ComfyUI's own repository. The button this replaced asked
+  // Manager to git-fetch every installed node -- forty round trips to GitHub
+  // and three minutes -- to answer a question 更新節點 answers on its way
+  // through anyway, since it fetches exactly the same forty before pulling.
   const onCheck = () =>
-    run('檢查更新', setChecking, async () => {
-      // A git fetch against every installed node, so minutes rather than
-      // seconds. Said up front, because a button that just spins reads as hung.
-      message.loading({ content: '檢查中，四十個節點各要連一次 GitHub…', key: 'check', duration: 0 });
-      try {
-        const { available } = await checkComfyUpdates(instance.port);
-        // The same channel either way: "nothing to do" is the answer people are
-        // hoping for, not a failure.
-        message.open({
-          type: available ? 'info' : 'success',
-          content: available ? '有可更新的項目' : '已是最新',
-          key: 'check',
-        });
-      } catch (error) {
-        // The loading toast has duration 0, so it has to be taken down by hand
-        // or a failed check leaves it spinning forever.
-        message.destroy('check');
-        throw error;
-      }
+    run('查版本', setChecking, async () => {
+      const found = await checkComfyVersion(instance.port);
+      message.open({
+        type: found.available ? 'info' : 'success',
+        content: found.available ? `有新版 ${found.latest}` : '已是最新',
+      });
     });
 
   const onUpdateNodes = () =>
@@ -164,6 +287,16 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
   // is the same fact and answers nobody.
   const state = updating ? '更新中' : busy ? '正在算圖' : '可以使用';
 
+  const current = tagged(typeof instance.version === 'string' ? instance.version : null);
+  const latest = instance.latest;
+  const behind = !!current && !!latest && current !== latest;
+
+  const label = (text: string) => (
+    <Text type="secondary" style={{ fontSize: 11, letterSpacing: 1, display: 'block' }}>
+      {text}
+    </Text>
+  );
+
   return (
     <Card
       size="small"
@@ -191,12 +324,6 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
               <Tag color="blue" style={{ fontSize: 11 }}>數字為舊值</Tag>
             </Tooltip>
           )}
-          {!updating && staleAfterUpdate && (
-            // The files on disk changed; the running process did not. Saying so
-            // is the point -- an update that silently needs a restart looks like
-            // an update that did nothing.
-            <Tag color="gold" style={{ fontSize: 11 }}>更新完成，待重啟</Tag>
-          )}
         </Space>
       }
       extra={
@@ -223,37 +350,65 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
         </Space>
       }
     >
-      <Text type="secondary" style={{ fontSize: 12 }}>
-        ComfyUI 是畫圖的工具，操作都在它自己的介面裡。
+      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+        {name ?? 'comfyui'} ・ :{instance.port}
+        {instance.public_port !== null ? ` → :${instance.public_port}` : ''}
+        {instance.torch ? ` ・ torch ${instance.torch}` : ''}
+        {instance.python ? ` ・ Python ${instance.python}` : ''}
+        {instance.device?.name ? ` ・ ${instance.device.name.replace(/\((R|TM)\)/g, '')}` : ''}
       </Text>
 
-      <div style={{ marginTop: 10 }}>
-        <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-          {name ?? 'comfyui'} ・ v{instance.version} ・ :{instance.port}
-          {instance.torch ? ` ・ torch ${instance.torch}` : ''}
-        </Text>
+      <Divider style={{ margin: '12px 0 10px' }} />
+
+      {label('資源')}
+      <div style={{ marginTop: 6 }}>
+        <Resources instance={instance} name={name} storage={storage} />
       </div>
 
-      <Divider style={{ margin: '14px 0 12px' }} />
+      <Divider style={{ margin: '12px 0 10px' }} />
 
-      {/* A list, not a row of five equal buttons.
-          Every one of these stops the instance for minutes, and as a row they
-          were indistinguishable: 檢查更新 sat at the same weight as 移除, and
-          the only thing separating "update the nodes" from "replace the whole
-          runtime" was a tooltip nobody hovers. The sentence beside each is what
-          that tooltip used to hide. */}
-      <Text type="secondary" style={{ fontSize: 11, letterSpacing: 1 }}>維護</Text>
+      {label('版本')}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+        <Text style={{ fontSize: 13, fontFamily: MONO }}>ComfyUI {current ?? '—'}</Text>
+        {behind ? (
+          <Tag color="gold" style={{ fontSize: 11, marginInlineEnd: 0 }}>有新版 {latest}</Tag>
+        ) : latest ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>已是最新</Text>
+        ) : manager ? (
+          <Text type="secondary" style={{ fontSize: 11 }}>還沒查過</Text>
+        ) : (
+          <Tooltip title="沒有 ComfyUI-Manager，主控台無法替它查版本或更新">
+            <Text type="secondary" style={{ fontSize: 11 }}>沒有 Manager</Text>
+          </Tooltip>
+        )}
+        {staleAfterUpdate && !updating && (
+          // The files on disk changed; the running process did not. Saying so
+          // is the point -- an update that silently needs a restart looks like
+          // an update that did nothing.
+          <Tag color="gold" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，待重啟</Tag>
+        )}
+        {manager && (
+          <Button type="link" size="small" loading={checking} onClick={() => void onCheck()}
+                  style={{ padding: 0, height: 'auto', fontSize: 11 }}>
+            {instance.latest_checked_at ? `再查（${ago(instance.latest_checked_at)}查過）` : '查一下'}
+          </Button>
+        )}
+      </div>
+
+      <Divider style={{ margin: '12px 0 10px' }} />
+
+      {/* A list, not a row of equal buttons. Every one of these stops the
+          instance for minutes, and as a row they were indistinguishable: the
+          only thing separating "update the nodes" from "replace the whole
+          runtime" was a tooltip nobody hovers. The sentence beside each is
+          what that tooltip used to hide. */}
+      {label('維護')}
       <Space direction="vertical" size={8} style={{ width: '100%', marginTop: 8 }}>
         {[
           {
-            key: 'check', label: '檢查更新', icon: <SearchOutlined />,
-            note: '問每個已安裝節點有沒有新版，要連四十次 GitHub',
-            loading: checking, disabled: updating, run: onCheck,
-          },
-          {
             key: 'nodes', label: '更新節點', icon: <CloudDownloadOutlined />,
-            note: '更新容器裡的 ComfyUI 與自訂節點，之後要重啟才生效',
-            loading: starting || updating, disabled: updating, run: onUpdateNodes,
+            note: '更新容器裡的 ComfyUI 與所有自訂節點，之後要重啟才生效',
+            loading: starting || updating, disabled: updating || !manager, run: onUpdateNodes,
           },
           {
             key: 'image', label: '更新映像', icon: <CloudDownloadOutlined />,
@@ -294,7 +449,7 @@ function Instance({ instance, staleAfterUpdate, onChanged, onRestarted }: {
         ))}
       </Space>
 
-      <Divider style={{ margin: '14px 0 12px' }} />
+      <Divider style={{ margin: '12px 0 10px' }} />
 
       {/* Apart, because it is the one that does not come back. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -503,16 +658,10 @@ export default function ComfyUI() {
         />
       )}
 
-      {/* Two columns: what the instances are doing on the left, what they are
-          made of on the right. Cards with no instance yet sit under the left
-          side, because creating one is an operation and belongs with the other
-          operations -- not beside a settings form for a container that does not
-          exist. */}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <Space direction="vertical" size={16} style={{ flex: '1 1 440px', minWidth: 0 }}>
-          {instances?.map((i) => (
+      {instances?.map((i) => (
+        <div key={i.port} style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 460px', minWidth: 0 }}>
             <Instance
-              key={i.port}
               instance={i}
               staleAfterUpdate={stale.has(i.port)}
               onChanged={() => void refresh()}
@@ -522,17 +671,17 @@ export default function ComfyUI() {
                 return next;
               })}
             />
-          ))}
-          <Spare onChanged={() => void refresh()} />
-        </Space>
+          </div>
+          <div style={{ flex: '1 1 380px', minWidth: 0, maxWidth: 520 }}>
+            <ContainerSettings instance={i} onDone={() => void refresh()} />
+          </div>
+        </div>
+      ))}
 
-        <Space direction="vertical" size={16}
-               style={{ flex: '1 1 380px', minWidth: 0, maxWidth: 520 }}>
-          {instances?.map((i) => (
-            <ContainerSettings key={i.port} instance={i} onDone={() => void refresh()} />
-          ))}
-        </Space>
-      </div>
+      {/* Under the instances, because creating one is an operation and belongs
+          after the ones that exist -- not beside a settings form for a
+          container that does not. */}
+      <Spare onChanged={() => void refresh()} />
     </Space>
   );
 }

@@ -103,8 +103,11 @@ AMD cards need the vendor's compute stack already present.
   llama.cpp image for the vendor, or a ComfyUI instance with its own port,
   storage and Caddy site block — in the background, with a bar.
 - **ComfyUI** — one row per instance, each with the GPU it was launched against,
-  because that is fixed at start and therefore decides which card is free.
-  Updates run through ComfyUI-Manager across every instance at once.
+  because that is fixed at start and therefore decides which card is free. The
+  container's CPU, memory, VRAM and disk sit on the row as the same dials the
+  host has, with what its model, output and install directories weigh. The
+  newest ComfyUI release is looked up hourly with one call; updates run
+  through ComfyUI-Manager.
 - **Files** — the whole disk rather than one application's folders: declared
   roots, a deny list the console cannot be talked out of, and previews for
   images, text, and weights — a GGUF or safetensors header is read in place, so

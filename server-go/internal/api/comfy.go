@@ -17,9 +17,37 @@ type ComfyInstance struct {
 	QueueRunning int            `json:"queue_running"`
 	QueuePending int            `json:"queue_pending"`
 	Manager      *ComfyManager  `json:"manager"`
+	// Latest is the newest ComfyUI release Manager knows of, asked at most
+	// hourly; nil until the first answer or on an instance without Manager.
+	Latest          *string  `json:"latest"`
+	LatestCheckedAt *float64 `json:"latest_checked_at"`
 	// Stale means it stopped answering and these are the last numbers it
 	// gave: the normal state during a generation, not a fault.
 	Stale bool `json:"stale"`
+}
+
+// ComfyRelease is one instance's ComfyUI against the newest release.
+type ComfyRelease struct {
+	Current   *string `json:"current"`
+	Latest    *string `json:"latest"`
+	Available bool    `json:"available"`
+}
+
+// ComfyStorageSizes is what one instance's directories weigh on disk. Nil
+// until measured; the models directory is shared by every instance.
+type ComfyStorageSizes struct {
+	ModelsBytes  *int64   `json:"models_bytes"`
+	InputBytes   *int64   `json:"input_bytes"`
+	OutputBytes  *int64   `json:"output_bytes"`
+	InstallBytes *int64   `json:"install_bytes"`
+	MeasuredAt   *float64 `json:"measured_at"`
+}
+
+// ComfyStorage is the filesystem an instance writes to and its share of it.
+type ComfyStorage struct {
+	Path  string            `json:"path"`
+	Disk  *SystemDisk       `json:"disk"`
+	Sizes ComfyStorageSizes `json:"sizes"`
 }
 
 type ComfyTemplate struct {
@@ -115,10 +143,6 @@ type ComfyConfig struct {
 	Ports      []int             `json:"ports"`
 	Devices    []string          `json:"devices"`
 	Cards      []ComfyConfigCard `json:"cards"`
-}
-
-type UpdateAvailable struct {
-	Available bool `json:"available"`
 }
 
 type LoadResult struct {

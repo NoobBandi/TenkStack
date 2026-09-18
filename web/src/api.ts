@@ -87,8 +87,13 @@ export interface ComfyDevice {
   name: string;
   type: string;
   index: number;
+  /** The whole card, as ComfyUI sees it: free drops when llama-server is
+   *  on the card too, whether or not ComfyUI holds anything. */
   vram_total: number;
   vram_free: number;
+  /** What torch itself has reserved in this process. */
+  torch_vram_total: number;
+  torch_vram_free: number;
 }
 
 /**
@@ -117,10 +122,35 @@ export interface ComfyInstance {
   queue_running: number;
   queue_pending: number;
   manager: ComfyManagerState | null;
+  /** The newest ComfyUI release Manager knows of, asked at most hourly.
+   *  Null until the first answer, or when there is no Manager to ask. */
+  latest: string | null;
+  latest_checked_at: number | null;
   /** The instance stopped answering and these numbers are the last ones it
    *  gave. ComfyUI serves nothing while a sampling step runs, so this is the
    *  normal state during a generation rather than a fault. */
   stale: boolean;
+}
+
+export interface ComfyRelease {
+  current: string | null;
+  latest: string | null;
+  available: boolean;
+}
+
+/** What one instance's directories weigh. Null until the first walk. */
+export interface ComfyStorage {
+  path: string;
+  disk: SystemSample['disks'][number] | null;
+  sizes: {
+    /** Shared by every instance on the machine. */
+    models_bytes: number | null;
+    input_bytes: number | null;
+    output_bytes: number | null;
+    /** ComfyUI itself, the custom nodes and their environment. */
+    install_bytes: number | null;
+    measured_at: number | null;
+  };
 }
 
 export interface Throughput {
@@ -721,8 +751,10 @@ export const interruptComfy = (port: number) =>
 // operation. These drive the other track -- ComfyUI and its custom nodes, which
 // are git checkouts in the instance's own storage and are untouched by an image
 // change.
-export const checkComfyUpdates = (port: number) =>
-  send<{ available: boolean }>(`/comfyui/update/check?port=${port}`, 'POST');
+export const checkComfyVersion = (port: number) =>
+  send<ComfyRelease>(`/comfyui/version/check?port=${port}`, 'POST');
+export const fetchComfyStorage = (port: number) =>
+  get<ComfyStorage>(`/comfyui/storage?port=${port}`);
 export const updateComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/update?port=${port}`, 'POST');
 export const restartComfy = (port: number) =>

@@ -166,7 +166,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("POST /api/models/{id}/load", s.loadModel)
 	mux.HandleFunc("GET /api/comfyui/instances", s.readComfyInstances)
-	mux.HandleFunc("POST /api/comfyui/update/check", s.comfyUpdateCheck)
+	mux.HandleFunc("POST /api/comfyui/version/check", s.comfyVersionCheck)
+	mux.HandleFunc("GET /api/comfyui/storage", s.comfyStorage)
 	mux.HandleFunc("POST /api/comfyui/update", s.comfyUpdate)
 	mux.HandleFunc("GET /api/comfyui/config", s.comfyConfig)
 	mux.HandleFunc("POST /api/comfyui/config", s.comfyReconfigure)

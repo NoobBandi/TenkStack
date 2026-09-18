@@ -32,6 +32,11 @@ const managerMode = "local"
 // short enough that installing Manager into a running one is noticed.
 const managerRecheck = 600 * time.Second
 
+// How often the newest ComfyUI release is asked for. One remote call, but a
+// remote call on a three-second poll would be forty minutes of GitHub an
+// hour for a number that changes every few weeks.
+const latestRecheck = time.Hour
+
 // Published lists the ports the ComfyUI containers publish right now.
 type Published interface {
 	PublishedPorts(ctx context.Context, prefix string) []int
@@ -47,8 +52,17 @@ type Probe struct {
 	mu            sync.Mutex
 	seen          map[int]api.ComfyInstance
 	managerAbsent map[int]time.Time
+	latest        map[int]latestRelease
 	client        *http.Client
 	long          *http.Client
+}
+
+// latestRelease is one port's answer to "is there a newer ComfyUI", and
+// whether a fresh answer is on its way.
+type latestRelease struct {
+	version  string
+	at       time.Time
+	inflight bool
 }
 
 func NewProbe(ports []int, publicOffset int, publicOpen func(int) bool, docker Published) *Probe {
@@ -58,7 +72,7 @@ func NewProbe(ports []int, publicOffset int, publicOpen func(int) bool, docker P
 	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
 	return &Probe{
 		Ports: ports, PublicOffset: publicOffset, PublicOpen: publicOpen, Docker: docker,
-		seen: map[int]api.ComfyInstance{}, managerAbsent: map[int]time.Time{},
+		seen: map[int]api.ComfyInstance{}, managerAbsent: map[int]time.Time{}, latest: map[int]latestRelease{},
 		client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext}},
 		long:   &http.Client{Transport: &http.Transport{DialContext: dialer.DialContext}},
 	}
@@ -169,6 +183,26 @@ func (p *Probe) Instance(ctx context.Context, port int) *api.ComfyInstance {
 	system, _ := stats["system"].(map[string]any)
 	devices, _ := stats["devices"].([]any)
 	record := api.ComfyInstance{Port: port, Manager: manager}
+	if manager != nil {
+		// Reported from the cache and refreshed behind the poll: the answer
+		// takes a second or two and the poll must not.
+		p.mu.Lock()
+		rel := p.latest[port]
+		due := !rel.inflight && time.Since(rel.at) >= latestRecheck
+		if due {
+			rel.inflight = true
+			p.latest[port] = rel
+		}
+		p.mu.Unlock()
+		if rel.version != "" {
+			v := rel.version
+			at := float64(rel.at.UnixNano()) / 1e9
+			record.Latest, record.LatestCheckedAt = &v, &at
+		}
+		if due {
+			go p.refreshLatest(context.Background(), port)
+		}
+	}
 	if public := port + p.PublicOffset; p.PublicOpen != nil && p.PublicOpen(public) {
 		record.PublicPort = &public
 	}
@@ -300,18 +334,69 @@ func (p *Probe) post(ctx context.Context, timeout time.Duration, url string, bod
 	return resp, nil
 }
 
-// UpdateCheck asks Manager whether anything is out of date: a git fetch
-// against every installed node, measured at just under three minutes here.
-func (p *Probe) UpdateCheck(ctx context.Context, port int) (bool, error) {
-	resp, err := p.post(ctx, 600*time.Second, base(port)+"/api/customnode/fetch_updates", map[string]any{"mode": managerMode})
+// refreshLatest asks Manager for the ComfyUI releases it knows of and
+// keeps the newest. One git call against ComfyUI's own repository.
+func (p *Probe) refreshLatest(ctx context.Context, port int) (string, error) {
+	found, err := p.newestRelease(ctx, port)
+	p.mu.Lock()
+	rel := p.latest[port]
+	rel.inflight = false
+	if err == nil {
+		rel.version = found
+		rel.at = time.Now()
+	} else if rel.version == "" {
+		// Nothing to show yet; retry sooner than the hour, but not on the
+		// next poll, since an instance without a route to GitHub stays that way.
+		rel.at = time.Now().Add(-latestRecheck + 5*time.Minute)
+	}
+	p.latest[port] = rel
+	p.mu.Unlock()
+	return found, err
+}
+
+func (p *Probe) newestRelease(ctx context.Context, port int) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base(port)+"/api/comfyui_manager/comfyui_versions", nil)
 	if err != nil {
-		return false, &Upstream{err.Error()}
+		return "", err
 	}
-	if resp.StatusCode != 200 && resp.StatusCode != 201 {
-		return false, &Upstream{fmt.Sprintf("manager returned %d", resp.StatusCode)}
+	resp, err := p.long.Do(req)
+	if err != nil {
+		return "", err
 	}
-	// 201 is Manager's way of saying something moved.
-	return resp.StatusCode == 201, nil
+	body, err := decode(resp)
+	if err != nil {
+		return "", err
+	}
+	// Newest first, with "nightly" ahead of the numbered ones.
+	list, _ := body["versions"].([]any)
+	for _, item := range list {
+		if v, _ := item.(string); strings.HasPrefix(v, "v") {
+			return v, nil
+		}
+	}
+	return "", errors.New("Manager listed no releases")
+}
+
+// LatestVersion asks for the newest release now rather than waiting for
+// the hourly pass, and says how it compares to what is running.
+func (p *Probe) LatestVersion(ctx context.Context, port int) (api.ComfyRelease, error) {
+	latest, err := p.refreshLatest(ctx, port)
+	if err != nil {
+		return api.ComfyRelease{}, &Upstream{err.Error()}
+	}
+	p.mu.Lock()
+	current, _ := p.seen[port].Version.(string)
+	p.mu.Unlock()
+	out := api.ComfyRelease{Latest: &latest}
+	if current != "" {
+		// system_stats says "0.36.0"; the release list says "v0.36.0".
+		c := "v" + strings.TrimPrefix(current, "v")
+		out.Current = &c
+		out.Available = c != latest
+	}
+	return out, nil
 }
 
 // Update queues core and nodes, in Manager's own order, and starts the

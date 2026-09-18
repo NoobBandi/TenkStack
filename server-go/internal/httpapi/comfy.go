@@ -15,6 +15,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
+	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/vendors"
 )
 
@@ -53,17 +54,63 @@ func (s *Server) readComfyInstances(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.ComfyProbe.Instances(r.Context()))
 }
 
-func (s *Server) comfyUpdateCheck(w http.ResponseWriter, r *http.Request) {
+// comfyVersionCheck asks now rather than waiting for the hourly pass. One
+// call to ComfyUI's own repository -- not the per-node fetch the page used
+// to offer, which asked GitHub once for each of forty custom nodes to
+// answer a question the update button answers on its way through anyway.
+func (s *Server) comfyVersionCheck(w http.ResponseWriter, r *http.Request) {
 	port, ok := s.comfyPort(w, r)
 	if !ok {
 		return
 	}
-	available, err := s.ComfyProbe.UpdateCheck(r.Context(), port)
+	out, err := s.ComfyProbe.LatestVersion(r.Context(), port)
 	if err != nil {
 		comfyError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.UpdateAvailable{Available: available})
+	writeJSON(w, http.StatusOK, out)
+}
+
+// comfyStorage is the disk one instance writes to and what its directories
+// weigh on it.
+func (s *Server) comfyStorage(w http.ResponseWriter, r *http.Request) {
+	port, ok := queryInt(w, r, "port", s.Ports.ComfyFirst)
+	if !ok {
+		return
+	}
+	name := s.comfyContainerName(r.Context(), port)
+	if name == "" {
+		fail(w, http.StatusNotFound, "找不到對應的 ComfyUI 容器")
+		return
+	}
+	writeJSON(w, http.StatusOK, api.ComfyStorage{
+		Path:  s.Layout.ComfyDir,
+		Disk:  system.Disk(s.Layout.ComfyDir),
+		Sizes: s.Comfy.Storage(comfy.SlotOf(name)),
+	})
+}
+
+// comfyContainerName is the container publishing a port: by the card
+// mapping first, else the only ComfyUI container there is.
+func (s *Server) comfyContainerName(ctx gocontext.Context, port int) string {
+	cards := cardsOf(s.Gpu.ListDevices(ctx))
+	for _, boxes := range s.Docker.ByCard(ctx, cards) {
+		for _, box := range boxes {
+			if strings.HasPrefix(box.Name, comfy.Prefix+"-") && strings.Contains(box.Ports, fmt.Sprintf(":%d", port)) {
+				return box.Name
+			}
+		}
+	}
+	var names []string
+	for _, n := range s.Docker.Names(ctx) {
+		if strings.HasPrefix(n, comfy.Prefix+"-") {
+			names = append(names, n)
+		}
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return ""
 }
 
 func queryBool(r *http.Request, name string, fallback bool) bool {
@@ -125,25 +172,7 @@ func (s *Server) comfyConfig(w http.ResponseWriter, r *http.Request) {
 	devices := s.Gpu.ListDevices(ctx)
 	cards := cardsOf(devices)
 	held := s.Docker.ByCard(ctx, cards)
-	name := ""
-	for _, boxes := range held {
-		for _, box := range boxes {
-			if strings.HasPrefix(box.Name, comfy.Prefix+"-") && strings.Contains(box.Ports, fmt.Sprintf(":%d", port)) {
-				name = box.Name
-			}
-		}
-	}
-	if name == "" {
-		var names []string
-		for _, n := range s.Docker.Names(ctx) {
-			if strings.HasPrefix(n, comfy.Prefix+"-") {
-				names = append(names, n)
-			}
-		}
-		if len(names) == 1 {
-			name = names[0]
-		}
-	}
+	name := s.comfyContainerName(ctx, port)
 	if name == "" {
 		fail(w, http.StatusNotFound, "找不到對應的 ComfyUI 容器")
 		return

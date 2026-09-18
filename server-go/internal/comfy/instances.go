@@ -44,8 +44,9 @@ type Manager struct {
 	BusKey    func(string) string
 	published *regexp.Regexp
 
-	mu   sync.Mutex
-	jobs map[string]*api.Job
+	mu      sync.Mutex
+	jobs    map[string]*api.Job
+	storage map[string]*storageEntry
 }
 
 func NewManager(docker Docker, channels Publisher, ports []int, comfyDir string, busKey func(string) string) *Manager {
