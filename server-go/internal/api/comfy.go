@@ -8,8 +8,16 @@ type ComfyManager struct {
 
 // ComfyInstance is one ComfyUI as it answers on its port.
 type ComfyInstance struct {
-	Port         int            `json:"port"`
-	PublicPort   *int           `json:"public_port"`
+	Port       int  `json:"port"`
+	PublicPort *int `json:"public_port"`
+	// Container is the docker name publishing this port, when one does;
+	// the live CPU and memory samples are keyed by it.
+	Container *string `json:"container"`
+	// Cards are the host GPU indices the container was given, first the
+	// one it draws on. ComfyUI's own device figures are the card as torch
+	// sees it from inside, which on XPU reports the whole card free
+	// whatever llama-server holds; the host's samples are the truth.
+	Cards        []int          `json:"cards"`
 	Version      any            `json:"version"`
 	Python       string         `json:"python"`
 	Torch        any            `json:"torch"`
@@ -33,21 +41,15 @@ type ComfyRelease struct {
 	Available bool    `json:"available"`
 }
 
-// ComfyStorageSizes is what one instance's directories weigh on disk. Nil
+// ComfyStorage is what one instance's directories weigh on disk. Nil
 // until measured; the models directory is shared by every instance.
-type ComfyStorageSizes struct {
+type ComfyStorage struct {
+	Path         string   `json:"path"`
 	ModelsBytes  *int64   `json:"models_bytes"`
 	InputBytes   *int64   `json:"input_bytes"`
 	OutputBytes  *int64   `json:"output_bytes"`
 	InstallBytes *int64   `json:"install_bytes"`
 	MeasuredAt   *float64 `json:"measured_at"`
-}
-
-// ComfyStorage is the filesystem an instance writes to and its share of it.
-type ComfyStorage struct {
-	Path  string            `json:"path"`
-	Disk  *SystemDisk       `json:"disk"`
-	Sizes ComfyStorageSizes `json:"sizes"`
 }
 
 type ComfyTemplate struct {

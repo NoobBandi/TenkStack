@@ -15,7 +15,6 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
-	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/vendors"
 )
 
@@ -51,7 +50,21 @@ func comfyError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) readComfyInstances(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.ComfyProbe.Instances(r.Context()))
+	ctx := r.Context()
+	found := s.ComfyProbe.Instances(ctx)
+	devices := s.Gpu.ListDevices(ctx)
+	byPort := s.Docker.PortCards(ctx, cardsOf(devices))
+	for i := range found {
+		found[i].Cards = []int{}
+		for _, address := range byPort[found[i].Port] {
+			for _, d := range devices {
+				if d.PCIBDFAddress != nil && containers.BusKey(*d.PCIBDFAddress) == containers.BusKey(address) {
+					found[i].Cards = append(found[i].Cards, d.Index)
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, found)
 }
 
 // comfyVersionCheck asks now rather than waiting for the hourly pass. One
@@ -71,8 +84,7 @@ func (s *Server) comfyVersionCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// comfyStorage is the disk one instance writes to and what its directories
-// weigh on it.
+// comfyStorage is what one instance's directories weigh on disk.
 func (s *Server) comfyStorage(w http.ResponseWriter, r *http.Request) {
 	port, ok := queryInt(w, r, "port", s.Ports.ComfyFirst)
 	if !ok {
@@ -83,11 +95,7 @@ func (s *Server) comfyStorage(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "找不到對應的 ComfyUI 容器")
 		return
 	}
-	writeJSON(w, http.StatusOK, api.ComfyStorage{
-		Path:  s.Layout.ComfyDir,
-		Disk:  system.Disk(s.Layout.ComfyDir),
-		Sizes: s.Comfy.Storage(comfy.SlotOf(name)),
-	})
+	writeJSON(w, http.StatusOK, s.Comfy.Storage(comfy.SlotOf(name)))
 }
 
 // comfyContainerName is the container publishing a port: by the card

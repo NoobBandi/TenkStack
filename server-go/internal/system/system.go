@@ -124,8 +124,7 @@ func cpuModel() *string {
 	return nil
 }
 
-// Disk is the filesystem holding path, in the three parts that add up.
-func Disk(path string) *api.SystemDisk {
+func disk(path string) *api.SystemDisk {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
 		return nil
@@ -182,12 +181,12 @@ func (s *Sampler) Sample() api.SystemSample {
 	swapTotal, swapFree := mem["SwapTotal"], mem["SwapFree"]
 
 	disks := []api.SystemDisk{}
-	if root := Disk("/"); root != nil {
+	if root := disk("/"); root != nil {
 		disks = append(disks, *root)
 	}
 	// The models directory only gets its own bar when it is a different
 	// filesystem.
-	if models := Disk(s.modelsDir); models != nil && len(disks) > 0 && models.TotalBytes != disks[0].TotalBytes {
+	if models := disk(s.modelsDir); models != nil && len(disks) > 0 && models.TotalBytes != disks[0].TotalBytes {
 		disks = append(disks, *models)
 	}
 

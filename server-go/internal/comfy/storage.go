@@ -17,7 +17,7 @@ import (
 const storageRecheck = 5 * time.Minute
 
 type storageEntry struct {
-	sizes    api.ComfyStorageSizes
+	sizes    api.ComfyStorage
 	inflight bool
 }
 
@@ -31,7 +31,7 @@ func SlotOf(container string) string {
 // from the last walk, with a new one started when that is old. The first
 // call after start reports nothing measured; the poll picks the numbers
 // up a few seconds later.
-func (m *Manager) Storage(slot string) api.ComfyStorageSizes {
+func (m *Manager) Storage(slot string) api.ComfyStorage {
 	m.mu.Lock()
 	if m.storage == nil {
 		m.storage = map[string]*storageEntry{}
@@ -42,6 +42,7 @@ func (m *Manager) Storage(slot string) api.ComfyStorageSizes {
 		m.storage[slot] = entry
 	}
 	sizes := entry.sizes
+	sizes.Path = m.ComfyDir
 	due := !entry.inflight && (sizes.MeasuredAt == nil ||
 		time.Since(time.Unix(0, int64(*sizes.MeasuredAt*1e9))) >= storageRecheck)
 	if due {
@@ -68,7 +69,7 @@ func (m *Manager) measureStorage(slot string) {
 	defer m.mu.Unlock()
 	entry := m.storage[slot]
 	entry.inflight = false
-	entry.sizes = api.ComfyStorageSizes{ModelsBytes: &models, InputBytes: &input, OutputBytes: &output,
+	entry.sizes = api.ComfyStorage{Path: root, ModelsBytes: &models, InputBytes: &input, OutputBytes: &output,
 		InstallBytes: &install, MeasuredAt: &at}
 }
 

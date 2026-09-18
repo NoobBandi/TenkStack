@@ -115,6 +115,14 @@ export interface ComfyInstance {
   /** Where Caddy republishes it behind the console's login, or null when no
    *  site block has been written for it yet. */
   public_port: number | null;
+  /** The docker container publishing this port, which the live CPU and
+   *  memory samples are keyed by. Null when docker cannot say. */
+  container: string | null;
+  /** Host GPU indices the container was given, the one it draws on first.
+   *  Its own `device` figures are the card as torch sees it from inside,
+   *  which on XPU reports the whole card free whatever llama-server holds;
+   *  the host's GPU samples are the truth. */
+  cards: number[];
   version: string | null;
   python: string;
   torch: string | null;
@@ -141,16 +149,13 @@ export interface ComfyRelease {
 /** What one instance's directories weigh. Null until the first walk. */
 export interface ComfyStorage {
   path: string;
-  disk: SystemSample['disks'][number] | null;
-  sizes: {
-    /** Shared by every instance on the machine. */
-    models_bytes: number | null;
-    input_bytes: number | null;
-    output_bytes: number | null;
-    /** ComfyUI itself, the custom nodes and their environment. */
-    install_bytes: number | null;
-    measured_at: number | null;
-  };
+  /** Shared by every instance on the machine. */
+  models_bytes: number | null;
+  input_bytes: number | null;
+  output_bytes: number | null;
+  /** ComfyUI itself, the custom nodes and their environment. */
+  install_bytes: number | null;
+  measured_at: number | null;
 }
 
 export interface Throughput {

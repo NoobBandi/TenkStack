@@ -20,6 +20,7 @@ import Logs from './pages/Logs';
 import Runtime from './pages/Runtime';
 import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
+import { IdentityProvider } from './identity';
 import { ChatProvider } from './chat';
 import { PythonRuntimeProvider } from './components/pythonRuntime';
 import { fetchAuth, fetchSettings, logout, type AuthState } from './api';
@@ -169,7 +170,9 @@ export default function App() {
             sandbox never pays for it. */}
         <PythonRuntimeProvider>
         <ChatProvider>
-          <Shell auth={auth} onSignOut={() => logout().then(refreshAuth)} />
+          <IdentityProvider value={auth}>
+            <Shell auth={auth} onSignOut={() => logout().then(refreshAuth)} />
+          </IdentityProvider>
         </ChatProvider>
         </PythonRuntimeProvider>
       </StreamProvider>

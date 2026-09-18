@@ -65,17 +65,23 @@ func (d *Docker) RemoveImage(ctx context.Context, image string) bool {
 	return ok
 }
 
-// PublishedPorts are the host ports the ComfyUI containers publish, running
-// ones only.
-func (d *Docker) PublishedPorts(ctx context.Context, prefix string) []int {
-	listing, _ := d.run(ctx, "ps", "--filter", "name="+prefix, "--format", "{{.Ports}}")
-	var out []int
-	for _, m := range published.FindAllStringSubmatch(listing, -1) {
-		n := 0
-		for _, ch := range m[1] {
-			n = n*10 + int(ch-'0')
+// PublishedPorts maps each host port the ComfyUI containers publish to the
+// container publishing it, running ones only.
+func (d *Docker) PublishedPorts(ctx context.Context, prefix string) map[int]string {
+	listing, _ := d.run(ctx, "ps", "--filter", "name="+prefix, "--format", "{{.Names}}\t{{.Ports}}")
+	out := map[int]string{}
+	for _, line := range strings.Split(listing, "\n") {
+		name, ports, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
 		}
-		out = append(out, n)
+		for _, m := range published.FindAllStringSubmatch(ports, -1) {
+			n := 0
+			for _, ch := range m[1] {
+				n = n*10 + int(ch-'0')
+			}
+			out[n] = strings.TrimSpace(name)
+		}
 	}
 	return out
 }

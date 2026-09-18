@@ -190,7 +190,16 @@ export default function Files() {
   }, [load, root, path, query]);
 
   useEffect(() => {
-    fetchFsRoots().then((d) => setRoots(d.roots)).catch(() => undefined);
+    fetchFsRoots().then((d) => {
+      setRoots(d.roots);
+      // Another page may send somebody straight to one tree -- the ComfyUI
+      // page points at an instance's output, which is where the pictures are.
+      const wanted = new URLSearchParams(window.location.search).get('root');
+      if (wanted && d.roots.some((r) => r.key === wanted)) {
+        setRoot(wanted);
+        setPath('');
+      }
+    }).catch(() => undefined);
   }, []);
   // A directory changed under a search is a different question, so the box
   // empties on navigation rather than silently hiding most of where you landed.

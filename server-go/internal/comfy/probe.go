@@ -37,9 +37,10 @@ const managerRecheck = 600 * time.Second
 // hour for a number that changes every few weeks.
 const latestRecheck = time.Hour
 
-// Published lists the ports the ComfyUI containers publish right now.
+// Published lists the ports the ComfyUI containers publish right now, and
+// which container each belongs to.
 type Published interface {
-	PublishedPorts(ctx context.Context, prefix string) []int
+	PublishedPorts(ctx context.Context, prefix string) map[int]string
 }
 
 type Probe struct {
@@ -238,15 +239,18 @@ func orZero(v any) any {
 }
 
 // AllPorts is where to look: the fixed range plus whatever the containers
-// actually publish, since an instance moved elsewhere still exists.
-func (p *Probe) AllPorts(ctx context.Context) []int {
+// actually publish, since an instance moved elsewhere still exists. The
+// map says which container publishes a port, for the ones that are known.
+func (p *Probe) AllPorts(ctx context.Context) ([]int, map[int]string) {
+	names := map[int]string{}
 	set := map[int]bool{}
 	for _, port := range p.Ports {
 		set[port] = true
 	}
 	if p.Docker != nil {
-		for _, port := range p.Docker.PublishedPorts(ctx, Prefix) {
+		for port, name := range p.Docker.PublishedPorts(ctx, Prefix) {
 			set[port] = true
+			names[port] = name
 		}
 	}
 	out := make([]int, 0, len(set))
@@ -254,10 +258,10 @@ func (p *Probe) AllPorts(ctx context.Context) []int {
 		out = append(out, port)
 	}
 	sort.Ints(out)
-	return out
+	return out, names
 }
 
-func (p *Probe) probeAll(ctx context.Context, ports []int) []api.ComfyInstance {
+func (p *Probe) probeAll(ctx context.Context, ports []int, names map[int]string) []api.ComfyInstance {
 	found := make([]*api.ComfyInstance, len(ports))
 	var wg sync.WaitGroup
 	for i, port := range ports {
@@ -268,6 +272,9 @@ func (p *Probe) probeAll(ctx context.Context, ports []int) []api.ComfyInstance {
 	out := []api.ComfyInstance{}
 	for _, inst := range found {
 		if inst != nil {
+			if name, ok := names[inst.Port]; ok {
+				inst.Container = &name
+			}
 			out = append(out, *inst)
 		}
 	}
@@ -276,7 +283,8 @@ func (p *Probe) probeAll(ctx context.Context, ports []int) []api.ComfyInstance {
 
 // Instances is every ComfyUI on this machine, in port order.
 func (p *Probe) Instances(ctx context.Context) []api.ComfyInstance {
-	return p.probeAll(ctx, p.AllPorts(ctx))
+	ports, names := p.AllPorts(ctx)
+	return p.probeAll(ctx, ports, names)
 }
 
 // Held is an instance holding VRAM and how much.
@@ -288,7 +296,7 @@ type Held struct {
 // HeldVRAM is the instances holding more than an idle amount, every card.
 func (p *Probe) HeldVRAM(ctx context.Context, idle float64) []Held {
 	var out []Held
-	for _, inst := range p.probeAll(ctx, p.Ports) {
+	for _, inst := range p.probeAll(ctx, p.Ports, nil) {
 		held, _ := inst.Device["torch_vram_total"].(float64)
 		if held >= idle {
 			out = append(out, Held{inst, held})
