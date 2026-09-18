@@ -751,8 +751,11 @@ function InstanceSection({ instance, owner, staleAfterUpdate, onChanged, onResta
     return () => { live = false; window.clearInterval(timer); };
   }, [instance.port]);
 
+  // A flex column with a gap, as the overview lays out its blocks. Not an
+  // antd Space: that spaces its direct children only, and this section is
+  // one child of the page's list, so its cards were sitting flush.
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Hero instance={instance} slot={slot} onChanged={onChanged} />
       <Resources instance={instance} storage={storage} />
       {owner && (
@@ -768,7 +771,7 @@ function InstanceSection({ instance, owner, staleAfterUpdate, onChanged, onResta
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -815,7 +818,7 @@ export default function ComfyUI() {
   }, [refresh]);
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {instances !== null && instances.length === 0 && (
         <Alert
           type="warning"
@@ -845,6 +848,6 @@ export default function ComfyUI() {
       {/* Under the instances, because creating one is an operation and
           belongs after the ones that exist. */}
       {owner && <Spare onChanged={() => void refresh()} />}
-    </Space>
+    </div>
   );
 }
