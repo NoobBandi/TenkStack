@@ -110,7 +110,10 @@ function Row({ label, children, note, action }: {
           </Text>
         )}
       </div>
-      {action && <div style={{ flex: 'none' }}>{action}</div>}
+      {/* Centred on the row rather than on its first line: a value with a
+          note under it is two lines tall, and a button hugging the top of
+          that reads as belonging to the value alone. */}
+      {action && <div style={{ flex: 'none', alignSelf: 'center' }}>{action}</div>}
     </div>
   );
 }
@@ -429,6 +432,10 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
               // Written by the console from the card list above; a typed copy
               // would fight it.
               reserved={['--default-device']}
+              // One line to start: this container has run with an empty
+              // field all along, and three empty rows were the tallest thing
+              // on the card. It grows as flags are added.
+              rows={1}
             />
           ) : (
             <Text style={{ ...mono, opacity: 0.4 }}>讀取中…</Text>
