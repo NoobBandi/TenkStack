@@ -123,6 +123,15 @@ AMD cards need the vendor's compute stack already present.
   images, text, and weights — a GGUF or safetensors header is read in place, so
   a 20 GB file answers what it is without being moved. Uploads are chunked and
   resumable, streamed to disk rather than buffered.
+- **Logs** — one stream for every part of the platform: the user units from
+  the systemd journal, the ComfyUI containers from `docker logs`. The window
+  on screen is read from those stores, so an hour is an hour of history
+  whatever the console has been doing, and a week answers in about a second
+  because journalctl is asked only for what the units' own processes wrote.
+  Sources sit down the left with whether each is being read and how many
+  lines it put in the window, which is the answer to "is this being recorded
+  at all". The console's own polling of llama-swap and Caddy is flagged and
+  hidden by default.
 - **Users** — accounts, roles and API keys for the API below.
 - **Connections** — one row per way in: the address, who may reach it, whether
   it is open, and a client configuration example. `/v1/chat/completions` speaks

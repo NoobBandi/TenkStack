@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"bytes"
+	gocontext "context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
+	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
 )
 
 const gpuPoll = 2 * time.Second
@@ -133,6 +136,54 @@ func (s *Server) readLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.LogsPage{Lines: s.Journal.History(limit), Units: s.Journal.UnitLabels()})
+}
+
+// queryLogs answers a window from the journal and docker's own files, not
+// from the buffer -- see journal.Run. `since` and `until` are unix
+// seconds; `units` and `levels` are comma lists; `q` is a substring.
+func (s *Server) queryLogs(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	since, ok := queryInt(w, r, "since", int(now.Add(-time.Hour).Unix()))
+	if !ok {
+		return
+	}
+	until, ok := queryInt(w, r, "until", int(now.Unix()))
+	if !ok {
+		return
+	}
+	limit, ok := queryInt(w, r, "limit", 5000)
+	if !ok {
+		return
+	}
+	if limit > 20000 {
+		limit = 20000
+	}
+	set := func(name string) map[string]bool {
+		out := map[string]bool{}
+		for _, v := range strings.Split(r.URL.Query().Get(name), ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				out[v] = true
+			}
+		}
+		return out
+	}
+	// A window can take seconds over a week of journal; longer than that
+	// and the page has given up anyway.
+	ctx, cancel := gocontext.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.Journal.Run(ctx, journal.Query{
+		Since:  time.Unix(int64(since), 0),
+		Until:  time.Unix(int64(until), 0),
+		Units:  set("units"),
+		Levels: set("levels"),
+		Text:   strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q"))),
+		Noise:  queryBool(r, "noise", false),
+		Limit:  limit,
+	}))
+}
+
+func (s *Server) readLogSources(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.Journal.Sources(r.Context()))
 }
 
 func (s *Server) readActivity(w http.ResponseWriter, r *http.Request) {

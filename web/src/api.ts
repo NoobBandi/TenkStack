@@ -1260,6 +1260,8 @@ export interface JournalLine {
   level: 'info' | 'warn' | 'error';
   /** The readable part: a structured line's message, or the whole line. */
   text: string;
+  /** The console's own polling of llama-swap and Caddy, hidden by default. */
+  noise?: boolean;
   /** Key/value pairs behind an expander, for lines that carried structure.
    *  Null when there is nothing more than the text itself. */
   fields: [string, string][] | null;
@@ -1267,6 +1269,63 @@ export interface JournalLine {
 
 export const fetchLogs = (limit = 400) =>
   get<{ lines: JournalLine[]; units: Record<string, string> }>(`/logs?limit=${limit}`);
+
+/** A window of history from the journal and docker's own files, not from the
+ *  buffer the followers fill. Counts cover everything that matched; `lines`
+ *  is the newest `limit` of them. */
+export interface LogsQuery {
+  lines: JournalLine[];
+  total: number;
+  truncated: boolean;
+  scanned: number;
+  /** The window was too big to read to the end; `reached` says how far
+   *  back the read got before it stopped. */
+  scan_cap: boolean;
+  reached: number | null;
+  by_level: Record<string, number>;
+  by_unit: Record<string, number>;
+  since: number;
+  until: number;
+}
+
+export const queryLogs = (opts: {
+  since: number; until: number; units?: string[]; levels?: string[]; q?: string;
+  noise?: boolean; limit?: number;
+}) => {
+  const p = new URLSearchParams({
+    since: String(Math.floor(opts.since)), until: String(Math.ceil(opts.until)),
+    limit: String(opts.limit ?? 5000), noise: String(opts.noise ?? false),
+  });
+  if (opts.units?.length) p.set('units', opts.units.join(','));
+  if (opts.levels?.length) p.set('levels', opts.levels.join(','));
+  if (opts.q) p.set('q', opts.q);
+  return get<LogsQuery>(`/logs/query?${p.toString()}`);
+};
+
+export interface LogSource {
+  unit: string;
+  label: string;
+  kind: 'unit' | 'container';
+  present: boolean;
+  /** systemd's ActiveState or docker's State, as they say it. */
+  state: string;
+  following: boolean;
+  buffered: number;
+  last_t: number | null;
+}
+
+export interface LogSources {
+  sources: LogSource[];
+  journal: {
+    available: boolean;
+    persistent: boolean;
+    disk_usage: string;
+    oldest: number | null;
+    newest: number | null;
+  };
+}
+
+export const fetchLogSources = () => get<LogSources>('/logs/sources');
 
 /**
  * Open or close one channel.

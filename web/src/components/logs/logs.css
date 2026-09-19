@@ -1,0 +1,100 @@
+/* The log pane: a grid so the message starts at the same x on every row.
+ * Time, level and source are fixed widths; the message takes the rest. The
+ * copy button holds a column of its own so it cannot shift the text when it
+ * appears on hover. */
+
+.lg-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 8px;
+  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Noto Sans Mono CJK TC', monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.lg-row {
+  display: grid;
+  grid-template-columns: 66px 40px 64px minmax(0, 1fr) 24px;
+  gap: 10px;
+  align-items: baseline;
+  padding: 0 8px 0 12px;
+  border-left: 2px solid transparent;
+}
+
+.lg-row:hover { background: rgba(255, 255, 255, 0.035); }
+.lg-expandable { cursor: pointer; }
+
+.lg-time {
+  opacity: 0.32;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lg-level { font-size: 10px; letter-spacing: 0.6px; white-space: nowrap; }
+
+.lg-unit { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.lg-text {
+  color: rgba(242, 242, 242, 0.74);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.lg-wrap .lg-text { white-space: pre-wrap; word-break: break-word; }
+
+.lg-caret { font-size: 9px; opacity: 0.45; margin-right: 6px; transition: transform 120ms; }
+
+/* Severity in the gutter, and for errors a wash behind the row. */
+.lg-warn { border-left-color: #e0a83c; }
+.lg-error { border-left-color: #e05c5c; background: rgba(224, 92, 92, 0.06); }
+.lg-error:hover { background: rgba(224, 92, 92, 0.1); }
+.lg-noise .lg-text { opacity: 0.55; }
+
+.lg-copy { opacity: 0; height: 18px !important; width: 18px !important; min-width: 0 !important; }
+.lg-copy .anticon { font-size: 11px; }
+.lg-row:hover .lg-copy { opacity: 0.6; }
+
+.lg-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 14px;
+  margin: 2px 8px 6px 190px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  font-size: 11px;
+}
+.lg-key { opacity: 0.45; white-space: nowrap; }
+.lg-val { white-space: pre-wrap; word-break: break-word; color: rgba(242, 242, 242, 0.8); }
+
+/* A day boundary: a line with the date sitting on it. */
+.lg-day {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  opacity: 0.4;
+}
+.lg-day::before, .lg-day::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.lg-notice {
+  padding: 4px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.lg-behind {
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+.lg-source:hover { background: rgba(255, 255, 255, 0.045); }

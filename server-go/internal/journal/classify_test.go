@@ -48,3 +48,16 @@ func TestKeywordLevel(t *testing.T) {
 		t.Error("keyword levels wrong")
 	}
 }
+
+func TestContainerLineBlankIsDropped(t *testing.T) {
+	if _, ok := parseContainerLine("comfyui-xpu", "2026-09-19T05:53:08.105911616Z"); ok {
+		t.Fatal("a stamp with no message came through as a line")
+	}
+	if _, ok := parseContainerLine("comfyui-xpu", "2026-09-19T05:53:08.105911616Z   "); ok {
+		t.Fatal("a stamp with only whitespace came through as a line")
+	}
+	line, ok := parseContainerLine("comfyui-xpu", "2026-09-19T05:53:08.105911616Z got prompt")
+	if !ok || line.Text != "got prompt" || line.T < 1.7e9 {
+		t.Fatalf("a real line parsed as %+v, %v", line, ok)
+	}
+}

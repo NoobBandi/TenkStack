@@ -61,6 +61,8 @@ type Journal struct {
 	lines       []api.JournalLine
 	subscribers map[chan api.JournalLine]struct{}
 	followed    map[string]bool
+	// journalUp is whether a journalctl follower is running right now.
+	journalUp bool
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -172,27 +174,46 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 func (j *Journal) readJournal(ctx context.Context) {
-	args := []string{"--user", "-o", "json", "--follow", "-n", strconv.Itoa(Backfill), "--no-pager"}
-	for _, unit := range unitOrder {
-		args = append(args, "-u", unit)
-	}
 	if _, err := exec.LookPath("journalctl"); err != nil {
 		return // no journal: a missing feature, not a failure to report
 	}
+	// The first run backfills a screenful; every run after that resumes
+	// from the last cursor seen, so a journalctl that exits and comes back
+	// does not replay the same four hundred lines into the buffer.
+	cursor := ""
 	for {
+		args := []string{"--user", "-o", "json", "--follow", "--no-pager"}
+		if cursor == "" {
+			args = append(args, "-n", strconv.Itoa(Backfill))
+		} else {
+			args = append(args, "--after-cursor", cursor)
+		}
+		for _, unit := range unitOrder {
+			args = append(args, "-u", unit)
+		}
 		cmd := follower(ctx, "journalctl", args...)
 		out, err := cmd.StdoutPipe()
 		if err != nil || cmd.Start() != nil {
 			return
 		}
+		j.mu.Lock()
+		j.journalUp = true
+		j.mu.Unlock()
 		sc := bufio.NewScanner(out)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for sc.Scan() {
-			if line, ok := parseJournalEntry(sc.Bytes()); ok {
+			line, at, ok := parseJournalEntry(sc.Bytes())
+			if at != "" {
+				cursor = at
+			}
+			if ok {
 				j.emit(line)
 			}
 		}
 		cmd.Wait()
+		j.mu.Lock()
+		j.journalUp = false
+		j.mu.Unlock()
 		// journalctl exited: a rotation or a killed process. Wait before
 		// respawning so a permanent failure does not become a spin.
 		if !sleep(ctx, 5*time.Second) {
@@ -201,13 +222,16 @@ func (j *Journal) readJournal(ctx context.Context) {
 	}
 }
 
-func parseJournalEntry(raw []byte) (api.JournalLine, bool) {
+// parseJournalEntry reads one json line from journalctl. The cursor comes
+// back even for a line that is dropped, so a restart resumes past it.
+func parseJournalEntry(raw []byte) (api.JournalLine, string, bool) {
 	var entry map[string]any
 	if json.Unmarshal(raw, &entry) != nil {
-		return api.JournalLine{}, false
+		return api.JournalLine{}, "", false
 	}
+	cursor, _ := entry["__CURSOR"].(string)
 	if id, _ := entry["SYSLOG_IDENTIFIER"].(string); noiseIdentifiers[id] {
-		return api.JournalLine{}, false
+		return api.JournalLine{}, cursor, false
 	}
 	var message string
 	switch m := entry["MESSAGE"].(type) {
@@ -223,7 +247,7 @@ func parseJournalEntry(raw []byte) (api.JournalLine, bool) {
 		message = strings.ToValidUTF8(string(b), "�")
 	}
 	if message == "" {
-		return api.JournalLine{}, false
+		return api.JournalLine{}, cursor, false
 	}
 	unit, _ := entry["_SYSTEMD_USER_UNIT"].(string)
 	if unit == "" {
@@ -250,7 +274,8 @@ func parseJournalEntry(raw []byte) (api.JournalLine, bool) {
 			label = "系統"
 		}
 	}
-	return api.JournalLine{T: seconds, Unit: unit, Label: label, Level: lvl, Text: summary, Fields: fields}, true
+	return api.JournalLine{T: seconds, Unit: unit, Label: label, Level: lvl, Text: summary, Fields: fields,
+		Noise: isNoise(clean)}, cursor, true
 }
 
 // containers lists the ComfyUI containers that exist, running or not: a
@@ -285,8 +310,17 @@ func (j *Journal) watchContainers(ctx context.Context) {
 }
 
 func (j *Journal) readContainer(ctx context.Context, name string) {
+	// As with the journal: a screenful the first time, then from the last
+	// line seen, so a container that restarts does not replay its tail.
+	var lastT float64
 	for {
-		cmd := follower(ctx, "docker", "logs", "--follow", "--timestamps", "--tail", "200", name)
+		args := []string{"logs", "--follow", "--timestamps"}
+		if lastT == 0 {
+			args = append(args, "--tail", "200")
+		} else {
+			args = append(args, "--since", time.Unix(0, int64(lastT*1e9)+1).UTC().Format(time.RFC3339Nano))
+		}
+		cmd := follower(ctx, "docker", append(args, name)...)
 		out, err := cmd.StdoutPipe()
 		if err != nil {
 			return
@@ -299,6 +333,7 @@ func (j *Journal) readContainer(ctx context.Context, name string) {
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for sc.Scan() {
 			if line, ok := parseContainerLine(name, sc.Text()); ok {
+				lastT = line.T
 				j.emit(line)
 			}
 		}
@@ -334,14 +369,20 @@ func parseContainerLine(name, raw string) (api.JournalLine, bool) {
 	}
 	seconds := float64(time.Now().UnixNano()) / 1e9
 	// --timestamps prefixes RFC3339; split it back off so the line sorts
-	// with the journal's rather than carrying its own clock.
-	if stamp, rest, ok := strings.Cut(text, " "); ok && strings.HasSuffix(stamp, "Z") && strings.Contains(stamp, "T") {
+	// with the journal's rather than carrying its own clock. A blank line
+	// in the container's output arrives as the stamp alone, and is nothing.
+	stamp, rest, _ := strings.Cut(text, " ")
+	if strings.HasSuffix(stamp, "Z") && strings.Contains(stamp, "T") {
 		if ts, err := time.Parse(time.RFC3339Nano, stamp); err == nil {
 			seconds = float64(ts.UnixNano()) / 1e9
-			text = rest
+			text = strings.TrimRight(rest, " \t\r\n")
+			if text == "" {
+				return api.JournalLine{}, false
+			}
 		}
 	}
 	clean := ansi.ReplaceAllString(text, "")
 	summary, lvl, fields := structure(clean, keywordLevel(clean))
-	return api.JournalLine{T: seconds, Unit: name, Label: comfyLabel, Level: lvl, Text: summary, Fields: fields}, true
+	return api.JournalLine{T: seconds, Unit: name, Label: comfyLabel, Level: lvl, Text: summary, Fields: fields,
+		Noise: isNoise(clean)}, true
 }

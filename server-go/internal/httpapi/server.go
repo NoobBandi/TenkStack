@@ -110,6 +110,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/stream", s.stream)
 	mux.HandleFunc("GET /api/logs", s.readLogs)
+	mux.HandleFunc("GET /api/logs/query", s.queryLogs)
+	mux.HandleFunc("GET /api/logs/sources", s.readLogSources)
 	mux.HandleFunc("GET /api/activity", s.readActivity)
 	mux.HandleFunc("GET /api/models/last-used", s.readLastUsed)
 	mux.HandleFunc("GET /api/containers/history", s.readContainerHistory)
