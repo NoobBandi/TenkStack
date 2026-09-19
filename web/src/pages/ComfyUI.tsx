@@ -10,13 +10,12 @@ import {
 } from '@ant-design/icons';
 import {
   checkComfyVersion, comfyAction, controlContainer, fetchComfyInstances,
-  fetchComfyStorage, fetchContainerHistory, fetchGpuHistory, fetchRuntimes,
-  interruptComfy, restartComfy, setCardRole, updateComfy,
+  fetchComfyStorage, fetchContainerHistory, fetchRuntimes, interruptComfy,
+  restartComfy, setCardRole, updateComfy,
   type ComfyInstance, type ComfyStorage, type GpuSample, type RuntimeCoverage,
 } from '../api';
 import { useStream } from '../stream';
 import { useIsOwner } from '../identity';
-import { vramAxisMax, vramAxisTicks } from '../hardware';
 import ContainerSettings from './comfy-settings';
 import MetricChart from '../components/MetricChart';
 import { ACCENT, LINE, MONO, SERIES } from '../theme';
@@ -291,41 +290,37 @@ function memoryCeiling(limit: number | null | undefined, points: Point[]): numbe
 /**
  * What the instance is using, over the last while.
  *
- * Three panels drawn the way the overview's GPU chart is drawn, one
- * quantity each: the container's CPU and memory from its cgroup, and the
- * card as the host sees it. Disk is not a time series -- it is walked every
- * five minutes -- so what the instance's directories weigh is a line under
- * the panels rather than a fourth one.
+ * Two panels drawn the way the overview's GPU chart is drawn, one quantity
+ * each: the container's CPU and memory from its cgroup. The card is not
+ * here -- it is on the overview and the GPU page already, and the one fact
+ * about it that matters on this page (something else is sitting on it) is
+ * said on the status card before Run. Disk is not a time series -- it is
+ * walked every five minutes -- so what the instance's directories weigh is
+ * a line under the panels rather than a third one.
  */
 function Resources({ instance, storage }: {
   instance: ComfyInstance;
   storage: ComfyStorage | null;
 }) {
-  const { containers, system, gpus } = useStream();
+  const { containers, system } = useStream();
   const [seconds, setSeconds] = useState(900);
   const [cpu, setCpu] = useState<Point[]>([]);
   const [memory, setMemory] = useState<Point[]>([]);
-  const [vram, setVram] = useState<Point[]>([]);
   const name = instance.container;
-  const cardIndex = instance.cards[0];
 
-  // The window before the page opened, from the server's buffers. Refetched
+  // The window before the page opened, from the server's buffer. Refetched
   // occasionally so the far edge stays honest; the live feed fills in
   // between.
   const load = useCallback(async (window: number) => {
-    const [boxes, cards] = await Promise.allSettled([
-      fetchContainerHistory(window, 240),
-      fetchGpuHistory(window, 240),
-    ]);
-    if (boxes.status === 'fulfilled' && name) {
-      const series = boxes.value.series[name] ?? [];
+    if (!name) return;
+    try {
+      const series = (await fetchContainerHistory(window, 240)).series[name] ?? [];
       setCpu(series.map((p) => ({ t: p.t, v: p.cpu === null ? null : p.cpu / 100 })));
       setMemory(series.map((p) => ({ t: p.t, v: p.memory })));
+    } catch {
+      // Leave whatever is on screen rather than blanking the panels.
     }
-    if (cards.status === 'fulfilled' && cardIndex !== undefined) {
-      setVram((cards.value.devices[String(cardIndex)] ?? []).map((p) => ({ t: p.t, v: p.vram })));
-    }
-  }, [name, cardIndex]);
+  }, [name]);
 
   useEffect(() => { void load(seconds); }, [seconds, load]);
   useEffect(() => {
@@ -348,16 +343,8 @@ function Resources({ instance, storage }: {
     setMemory((prev) => append(prev, { t: sample.t, v: sample.memory }));
   }, [containers, name, append]);
 
-  useEffect(() => {
-    const card = gpus.find((g) => g.index === cardIndex);
-    if (!card) return;
-    setVram((prev) => append(prev, { t: Date.now() / 1000, v: card.memory_used_mib }));
-  }, [gpus, cardIndex, append]);
-
   const cores = system?.cpu.cores ?? null;
   const sample = name ? containers.find((c) => c.name === name) : undefined;
-  const { total: cardTotal, own, others } = cardFigures(instance, gpus);
-  const vramMax = vramAxisMax(cardTotal ? cardTotal / 1024 ** 2 : 0);
 
   const total = storage?.measured_at
     ? (storage.models_bytes ?? 0) + (storage.input_bytes ?? 0)
@@ -375,7 +362,7 @@ function Resources({ instance, storage }: {
     >
       <div style={{
         display: 'grid', gap: 20,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
       }}>
         <MetricChart
           label="CPU"
@@ -396,22 +383,6 @@ function Resources({ instance, storage }: {
           axis={(v) => `${Number.isInteger(gib(v)) ? gib(v) : gib(v).toFixed(1)}G`}
           format={(v) => `${gib(v).toFixed(2)} GiB`}
           note={sample?.memory_limit ? `容器上限 ${gib(sample.memory_limit).toFixed(0)} GiB` : '無上限，與主機共用'}
-        />
-        <MetricChart
-          label="顯示記憶體"
-          points={vram}
-          colour={SERIES.vram}
-          max={vramMax}
-          ticks={vramAxisTicks(vramMax)}
-          axis={(v) => `${(v / 1024).toFixed(0)}G`}
-          format={(v) => `${(v / 1024).toFixed(1)} GiB`}
-          // The card, not the process: llama-server on the same card shows
-          // here, and that is the answer to "why did my picture fail".
-          note={own !== null && others !== null
-            ? others >= 1 << 30
-              ? `ComfyUI 佔 ${gib(own).toFixed(1)}，其他程式 ${gib(others).toFixed(1)} GiB`
-              : `ComfyUI 佔 ${gib(own).toFixed(1)} GiB`
-            : undefined}
         />
       </div>
 
