@@ -24,6 +24,7 @@ import {
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, PoweroffOutlined, ReloadOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import {
   checkComfyVersion, comfyAction, controlContainer, fetchComfyConfig,
@@ -305,14 +306,24 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
         <Row
           label="ComfyUI"
           note={manager
-            ? '透過 ComfyUI-Manager 更新 ComfyUI 本體與所有自訂節點，完成後要重啟才生效'
+            ? <>
+                查新版只問 ComfyUI 本體有沒有新的發行（一通呼叫，平常每小時自動查）；
+                更新節點是把本體和所有自訂節點都更到最新，完成後要重啟才生效。
+                {instance.latest_checked_at ? `上次查：${ago(instance.latest_checked_at)}。` : ''}
+              </>
             : '沒有 ComfyUI-Manager，主控台無法替它查版本或更新'}
           action={
-            <Button size="small" icon={<CloudDownloadOutlined />}
-                    loading={working || updating} disabled={updating || !manager}
-                    onClick={() => void run('更新', () => updateComfy(instance.port), '已開始更新')}>
-              更新節點
-            </Button>
+            <Space size={8}>
+              <Button size="small" icon={<SearchOutlined />} loading={checking} disabled={!manager}
+                      onClick={() => void onCheck()}>
+                查新版
+              </Button>
+              <Button size="small" icon={<CloudDownloadOutlined />}
+                      loading={working || updating} disabled={updating || !manager}
+                      onClick={() => void run('更新', () => updateComfy(instance.port), '已開始更新')}>
+                更新節點
+              </Button>
+            </Space>
           }
         >
           <Space size={8} wrap>
@@ -337,12 +348,6 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
             ) : manager ? (
               <Text type="secondary" style={{ fontSize: 11 }}>還沒查過</Text>
             ) : null}
-            {manager && (
-              <Button type="link" size="small" loading={checking} onClick={() => void onCheck()}
-                      style={{ padding: 0, height: 'auto', fontSize: 11 }}>
-                {instance.latest_checked_at ? `再查（${ago(instance.latest_checked_at)}查過）` : '查一下'}
-              </Button>
-            )}
           </Space>
         </Row>
 
@@ -450,7 +455,7 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
                 // Written by the console from the card list above; a typed
                 // copy would fight it.
                 reserved={['--default-device']}
-                rows={2}
+                rows={3}
               />
             </div>
           ) : (
