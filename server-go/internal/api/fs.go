@@ -18,12 +18,14 @@ type FSRoots struct {
 // the space left. Entries are maps because a stat failure lists a shorter
 // shape.
 type FSListing struct {
-	Entries      []map[string]any `json:"entries"`
-	Total        int              `json:"total,omitempty"`
-	Truncated    *bool            `json:"truncated,omitempty"`
-	Writable     bool             `json:"writable"`
-	Free         int64            `json:"free"`
-	ReadonlyRoot *bool            `json:"readonly_root,omitempty"`
+	Entries []map[string]any `json:"entries"`
+	// Never omitted: the page reads it for every folder, and an empty one
+	// is exactly where a missing field would turn into a crash.
+	Total        int   `json:"total"`
+	Truncated    *bool `json:"truncated,omitempty"`
+	Writable     bool  `json:"writable"`
+	Free         int64 `json:"free"`
+	ReadonlyRoot *bool `json:"readonly_root,omitempty"`
 }
 
 type FSLocate struct {

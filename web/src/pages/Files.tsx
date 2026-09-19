@@ -1,162 +1,134 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  App as AntApp, Alert, Button, Card, Dropdown, Empty, Input, Modal, Progress, Segmented,
-  Space, Splitter, Table, Tag, theme, Tooltip, Typography,
+  App as AntApp, Button, Dropdown, Empty, Input, Modal, Progress, Segmented, Space,
+  Spin, Tag, Tooltip, Typography,
 } from 'antd';
-import type { InputRef } from 'antd';
+import type { InputRef, MenuProps } from 'antd';
 import {
-  AppstoreOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, DragOutlined,
-  EditOutlined, FileOutlined, FolderAddOutlined, FolderOutlined, FormOutlined, MoreOutlined,
-  PartitionOutlined, PlusOutlined, QuestionCircleOutlined, QuestionOutlined, StopOutlined,
-  UnorderedListOutlined, UploadOutlined,
+  AppstoreOutlined, CloseOutlined, CopyOutlined, DeleteOutlined, DownloadOutlined, EditOutlined,
+  FileImageOutlined, FileOutlined, FileTextOutlined, FolderAddOutlined, FolderOpenOutlined,
+  FolderOutlined, FormOutlined, HddOutlined, HomeOutlined, InfoCircleOutlined,
+  PlayCircleOutlined, QuestionCircleOutlined, ReloadOutlined, SearchOutlined,
+  SoundOutlined, UnorderedListOutlined, UploadOutlined, DatabaseOutlined,
 } from '@ant-design/icons';
 import {
-  createFsFolder, deleteFsEntry, fetchFsListing, fetchFsRoots, fetchFsSize,
-  fsRawUrl, fsThumbUrl, locateFsPath, moveFsEntry, renameFsEntry, uploadFsFile,
+  createFsFolder, deleteFsEntry, fetchFsListing, fetchFsRoots, fetchFsSize, fsRawUrl,
+  fsThumbUrl, locateFsPath, moveFsEntry, renameFsEntry, uploadFsFile,
   type FsEntry, type FsRoot,
 } from '../api';
 import FilePreview from '../components/FilePreview';
 import FolderPicker from '../components/FolderPicker';
-import PathBar from '../components/PathBar';
-import DirTree from '../components/DirTree';
-import FileEditor from '../components/FileEditor';
-import { MONO } from '../theme';
+import Details from '../components/files/Details';
+import Editor from '../components/files/Editor';
+import {
+  bytes, keyOf, looksVisual, SHORTCUTS, when, type Measured, type Transfer,
+} from '../components/files/kit';
+import { ACCENT, LINE, MONO } from '../theme';
+import '../components/files/files.css';
 
 const { Text } = Typography;
 
 /**
- * The machine's directories.
+ * The machine's directories, laid out the way a file manager is.
+ *
+ * Locations down the left, the path across the top as crumbs, the folder in
+ * the middle, and on the right what the selection is. Everything that used
+ * to hang off each row -- a checkbox, a size link, a menu -- lives in that
+ * right-hand pane or on the selection-aware toolbar, so a row is a name, a
+ * size and a time, and picking one is a click.
+ *
+ * Editing is a tab, not a dialog. The folder view is the first tab and every
+ * opened text file adds one beside it, with Monaco underneath; the file can
+ * be looked at, left, and come back to, which a modal never allowed.
  *
  * This began as ComfyUI's model folders, which have no API: ComfyUI can list
  * what it found but has no way to be given anything, so getting a 20 GB
  * checkpoint onto this machine meant a shell. It now reaches whatever the
- * backend exposes, which by default is those folders plus the home directory.
- *
- * Locations are paths rather than a flat list of folder names. ComfyUI's layout
- * looked flat by convention until the first video landed in `output/video/` --
- * SaveVideo's default prefix nests, and model folders take subdirectories too.
- *
- * Kept off the ComfyUI page on purpose. That page answers whether the thing is
- * running and takes you to it; this is a workspace, and folding them together
- * would cost the first one the quality that makes it useful.
+ * backend exposes: those folders plus the home directory by default.
  */
 
-function bytes(n: number): string {
-  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1)} GiB`;
-  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MiB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(0)} KiB`;
-  return `${n} B`;
-}
+const SIDEBAR_W = 196;
+const DETAILS_W = 300;
 
-function when(seconds: number): string {
-  if (!seconds) return '';
-  return new Date(seconds * 1000).toLocaleString('zh-TW', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-}
-
-interface Transfer {
-  id: string;
+interface Tab {
+  key: string;
+  root: string;
+  path: string;
   name: string;
-  size: number;
-  sent: number;
-  error?: string;
-  abort: AbortController;
+  dirty: boolean;
 }
 
-/** A directory's recursive size, once somebody has asked for it. */
-type Measured = { files: number; bytes: number } | 'working';
-
-/** Written out once, so the dialog cannot describe a binding that is not bound. */
-const SHORTCUTS: [string, string][] = [
-  ['Ctrl / ⌘ + L', '編輯路徑，直接貼絕對路徑跳過去'],
-  ['/', '搜尋這個資料夾'],
-  ['Backspace', '回上一層'],
-  ['Ctrl / ⌘ + A', '全選'],
-  ['Esc', '取消選取'],
-  ['Ctrl / ⌘ + U', '上傳檔案'],
-  ['N', '新增資料夾'],
-  ['F2', '重新命名（選一項時）'],
-  ['Delete', '刪除已選取的'],
-  ['G', '清單／格狀切換'],
-  ['← →', '預覽開著時，走前後一個檔案'],
-  ['?', '這張表'],
-];
-
-/**
- * Whether the grid is worth offering here.
- *
- * A grid of filenames is a worse list, so it only earns its place where there
- * are pictures. Two of them is enough to mean "this is an output folder" and
- * few enough that one stray screenshot in a directory of scripts does not
- * change the view on somebody.
- */
-function looksVisual(entries: FsEntry[]): boolean {
-  let seen = 0;
-  for (const entry of entries) {
-    if (entry.media === 'image' || entry.media === 'video') seen += 1;
-    if (seen >= 2) return true;
+function iconFor(entry: FsEntry) {
+  if (entry.kind === 'dir') return <FolderOutlined />;
+  switch (entry.media) {
+    case 'image': return <FileImageOutlined />;
+    case 'video': return <PlayCircleOutlined />;
+    case 'audio': return <SoundOutlined />;
+    case 'text': return <FileTextOutlined />;
+    case 'model': return <DatabaseOutlined />;
+    default: return <FileOutlined />;
   }
-  return false;
 }
 
 export default function Files() {
   const { message, modal } = AntApp.useApp();
-  const { token } = theme.useToken();
+
+  // ---- where -----------------------------------------------------------------
   const [roots, setRoots] = useState<FsRoot[]>([]);
   const [root, setRoot] = useState('models');
   const [path, setPath] = useState('');
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [writable, setWritable] = useState(false);
   const [free, setFree] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [truncated, setTruncated] = useState(false);
+  const [loading, setLoading] = useState(false);
   // What is typed, and what has been asked for. Separated so that typing stays
   // responsive while the request trails it by a beat.
   const [typed, setTyped] = useState('');
   const [query, setQuery] = useState('');
-  const [total, setTotal] = useState(0);
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [transfers, setTransfers] = useState<Transfer[]>([]);
-  const [newFolder, setNewFolder] = useState<string | null>(null);
-  const [view, setView] = useState<'list' | 'grid'>('list');
-  // Three panes need more room than two. The tree is the one that folds first:
-  // it is the pane you can most easily do without, since the path bar still
-  // goes up and the listing still goes down.
-  const [roomy, setRoomy] = useState(() => window.innerWidth >= 1500);
-  const [treeOpen, setTreeOpen] = useState(true);
-  // Bumped when a directory appears or disappears, so the tree re-reads instead
-  // of showing a branch that no longer matches the disk.
-  const [treeToken, setTreeToken] = useState(0);
-  // The file open in the editor window, by name. Separate from `previewing`,
-  // which is an index that shifts when the listing reloads -- an edit must not
-  // follow the selection.
-  const [editing, setEditing] = useState<string | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
-  // The names a move applies to. One entry from a row menu, several from the
-  // selection -- the dialog and the loop do not need to know which.
-  const [moving, setMoving] = useState<string[] | null>(null);
-  const [busy, setBusy] = useState(false);
   const [editingPath, setEditingPath] = useState(false);
-  const [showKeys, setShowKeys] = useState(false);
-  // Set by a jump that named a file, consumed once the listing it belongs to
-  // has arrived -- the entry cannot be selected before it exists.
-  const pendingOpen = useRef<string | null>(null);
-  // An index into `entries` rather than the entry itself, so the arrows inside
-  // the panel can walk the directory without the page handing it a new object.
-  const [previewing, setPreviewing] = useState<number | null>(null);
-  // Keyed by the full location so that navigating away and back does not throw
-  // away a measurement that cost a walk of the tree.
+  const [pathText, setPathText] = useState('');
+
+  // ---- what is picked ---------------------------------------------------------
+  const [selected, setSelected] = useState<string[]>([]);
+  const anchor = useRef<string | null>(null);
+  // Grid where there are pictures, until somebody says otherwise; a choice
+  // survives stepping into a subfolder.
+  const [view, setView] = useState<'auto' | 'list' | 'grid'>('auto');
+  const [detailsOpen, setDetailsOpen] = useState(true);
   const [sizes, setSizes] = useState<Record<string, Measured>>({});
-  // Uploads outlive a navigation step, so the queue is keyed by its own id
-  // rather than by whatever is on screen.
+
+  // ---- what is happening -------------------------------------------------------
+  const [transfers, setTransfers] = useState<Transfer[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<{ entry: FsEntry; to: string } | null>(null);
+  const [moving, setMoving] = useState<FsEntry[] | null>(null);
+  const [viewing, setViewing] = useState<number | null>(null);
+  const [showKeys, setShowKeys] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+
+  // ---- tabs ---------------------------------------------------------------------
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [active, setActive] = useState('browser');
+
   const nextId = useRef(0);
   const picker = useRef<HTMLInputElement>(null);
   const search = useRef<InputRef>(null);
+  const pathInput = useRef<InputRef>(null);
 
   const activeRoot = roots.find((r) => r.key === root);
+  const rootPath = activeRoot?.path ?? '';
   const at = (name: string) => `${root}:${path}/${name}`;
+  const chosen = useMemo(
+    () => entries.filter((e) => selected.includes(keyOf(e))),
+    [entries, selected],
+  );
+  const visual = looksVisual(entries);
+  const gridding = visual && view !== 'list';
 
+  // ---- loading ------------------------------------------------------------------
   const load = useCallback(async (key: string, where: string, needle: string) => {
     setLoading(true);
     try {
@@ -164,11 +136,11 @@ export default function Files() {
       // whether the listing is the truth is a switch somebody leaves in the
       // wrong position and then wonders where their file went.
       const data = await fetchFsListing(key, where, true, needle);
-      setEntries(data.entries);
+      setEntries(data.entries ?? []);
       setWritable(data.writable);
       setFree(data.free);
-      setTotal(data.total);
-      setTruncated(data.truncated);
+      setTotal(data.total ?? 0);
+      setTruncated(data.truncated ?? false);
     } catch (error) {
       message.error((error as Error).message);
       setEntries([]);
@@ -180,14 +152,7 @@ export default function Files() {
     }
   }, [message]);
 
-  // After anything that adds, removes or renames a directory. The tree caches
-  // what it has read, so a listing refresh alone would leave it describing a
-  // shape the disk no longer has -- and navigation must not trigger this, or
-  // the tree would collapse and re-read on every step.
-  const reload = useCallback(() => {
-    void load(root, path, query);
-    setTreeToken((n) => n + 1);
-  }, [load, root, path, query]);
+  const reload = useCallback(() => { void load(root, path, query); }, [load, root, path, query]);
 
   useEffect(() => {
     fetchFsRoots().then((d) => {
@@ -201,43 +166,30 @@ export default function Files() {
       }
     }).catch(() => undefined);
   }, []);
+
   // A directory changed under a search is a different question, so the box
   // empties on navigation rather than silently hiding most of where you landed.
   useEffect(() => { setTyped(''); setQuery(''); }, [root, path]);
-
-  // Trailing the keystrokes: without this, typing a nine-character name in a
-  // 20000-entry directory is nine listings, of which eight are discarded.
   useEffect(() => {
     const timer = setTimeout(() => setQuery(typed), 250);
     return () => clearTimeout(timer);
   }, [typed]);
 
   useEffect(() => {
-    // The open panel is holding an index into a listing that is about to be
-    // replaced, and the selection names entries that are about to be gone.
-    // Clearing both is the only honest option.
-    setPreviewing(null);
+    // The viewer holds an index into a listing that is about to be replaced,
+    // and the selection names entries that are about to be gone.
+    setViewing(null);
     setSelected([]);
+    anchor.current = null;
     void load(root, path, query);
   }, [root, path, query, load]);
 
-  // Offered where there are pictures, but never taken away once chosen: a
-  // deliberate switch to the grid should survive stepping into a subfolder.
-  const visual = looksVisual(entries);
-  useEffect(() => {
-    const onResize = () => {
-      setRoomy(window.innerWidth >= 1500);
-    };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
-  // The preview has two homes and must be in exactly one: a pane beside the
-  // listing when there is width, a drawer over it when there is not.
-  const treePane = roomy && treeOpen;
-
-  const gridding = view === 'grid' && visual;
-
+  // ---- navigation -----------------------------------------------------------------
+  const go = (key: string, where: string) => {
+    setRoot(key);
+    setPath(where);
+    setActive('browser');
+  };
   const up = () => {
     if (!path) return;
     const parts = path.split('/');
@@ -248,49 +200,102 @@ export default function Files() {
   /**
    * Go wherever an absolute path points.
    *
-   * The backend does the resolving, so this accepts what somebody pasted out of
-   * a terminal -- `~`, `..`, a symlink -- and crosses roots without the page
-   * needing to know which one owns it. A path naming a file lands on its folder
-   * with the file opened, because that is what someone pasting a checkpoint's
-   * full path is after.
+   * The backend does the resolving, so this accepts what somebody pasted out
+   * of a terminal -- `~`, `..`, a symlink -- and crosses roots without the
+   * page needing to know which one owns it. A path naming a file lands on
+   * its folder with the file selected.
    */
+  const pendingSelect = useRef<string | null>(null);
   const jump = async (text: string) => {
     try {
       const where = await locateFsPath(text);
       setEditingPath(false);
-      if (where.root === root && where.path === path) {
-        // Already here, so no listing is coming and nothing would consume a
-        // pending open. Find it now or say it is gone.
-        const index = entries.findIndex((e) => e.name === where.name && e.kind === 'file');
-        if (index >= 0) setPreviewing(index);
-        return;
-      }
-      pendingOpen.current = where.name || null;
-      if (where.root !== root) setRoot(where.root);
-      setPath(where.path);
+      pendingSelect.current = where.name || null;
+      go(where.root, where.path);
     } catch (error) {
       message.error((error as Error).message);
     }
   };
-
-  // The listing a jump asked for has arrived; now the file it named can be
-  // found in it.
   useEffect(() => {
-    const wanted = pendingOpen.current;
-    if (!wanted || loading) return;
-    pendingOpen.current = null;
-    const index = entries.findIndex((e) => e.name === wanted && e.kind === 'file');
-    if (index >= 0) setPreviewing(index);
+    if (!pendingSelect.current || loading) return;
+    const hit = entries.find((e) => e.name === pendingSelect.current);
+    pendingSelect.current = null;
+    if (hit) setSelected([keyOf(hit)]);
   }, [entries, loading]);
 
+  const startEditingPath = () => {
+    setPathText(path ? `${rootPath}/${path}` : rootPath);
+    setEditingPath(true);
+    setTimeout(() => pathInput.current?.focus({ cursor: 'end' }), 0);
+  };
+
+  // ---- tabs -----------------------------------------------------------------------
+  const openEditor = (entry: FsEntry) => {
+    const key = `${root}:${path}/${entry.name}`;
+    setTabs((prev) => (prev.some((t) => t.key === key)
+      ? prev
+      : [...prev, { key, root, path, name: entry.name, dirty: false }]));
+    setActive(key);
+  };
+  const closeTab = (key: string) => {
+    const tab = tabs.find((t) => t.key === key);
+    const drop = () => {
+      setTabs((prev) => prev.filter((t) => t.key !== key));
+      if (active === key) setActive('browser');
+    };
+    if (tab?.dirty) {
+      modal.confirm({
+        title: `${tab.name} 還沒儲存`,
+        content: '關掉會丟掉這次的修改。',
+        okText: '不存，關掉', cancelText: '取消', okButtonProps: { danger: true },
+        onOk: drop,
+      });
+    } else {
+      drop();
+    }
+  };
+  const markDirty = useCallback((key: string, dirty: boolean) => {
+    setTabs((prev) => prev.map((t) => (t.key === key && t.dirty !== dirty ? { ...t, dirty } : t)));
+  }, []);
+
+  // ---- opening ----------------------------------------------------------------------
   const open = (entry: FsEntry) => {
     if (entry.kind === 'dir') {
       setPath(path ? `${path}/${entry.name}` : entry.name);
       return;
     }
-    if (entry.kind === 'file') setPreviewing(entries.indexOf(entry));
+    if (entry.kind !== 'file' || entry.partial) return;
+    if (entry.media === 'text') {
+      openEditor(entry);
+    } else if (entry.media === 'image' || entry.media === 'video' || entry.media === 'model') {
+      setViewing(entries.indexOf(entry));
+    } else {
+      window.open(fsRawUrl(root, path, entry.name, true), '_blank');
+    }
   };
 
+  // ---- selection ----------------------------------------------------------------------
+  const pick = (entry: FsEntry, event: React.MouseEvent) => {
+    const key = keyOf(entry);
+    if (event.shiftKey && anchor.current) {
+      const keys = entries.map(keyOf);
+      const a = keys.indexOf(anchor.current);
+      const b = keys.indexOf(key);
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelected(keys.slice(lo, hi + 1));
+        return;
+      }
+    }
+    if (event.ctrlKey || event.metaKey) {
+      setSelected((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+    } else {
+      setSelected([key]);
+    }
+    anchor.current = key;
+  };
+
+  // ---- actions --------------------------------------------------------------------------
   const measure = async (name: string) => {
     const key = at(name);
     setSizes((prev) => ({ ...prev, [key]: 'working' }));
@@ -298,11 +303,7 @@ export default function Files() {
       const measured = await fetchFsSize(root, path, name);
       setSizes((prev) => ({ ...prev, [key]: measured }));
     } catch (error) {
-      setSizes((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
+      setSizes((prev) => { const next = { ...prev }; delete next[key]; return next; });
       message.error((error as Error).message);
     }
   };
@@ -310,67 +311,39 @@ export default function Files() {
   const patch = (id: string, change: Partial<Transfer>) =>
     setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...change } : t)));
 
-  const startUpload = (file: File) => {
+  const startUpload = (file: File, toRoot = root, toPath = path) => {
     if (file.size > free) {
       // Refused here rather than after twenty minutes of transfer.
       message.error(`空間不足：這個檔案 ${bytes(file.size)}，磁碟剩 ${bytes(free)}`);
       return;
     }
-
     const id = `u${nextId.current++}`;
     const abort = new AbortController();
-    const where = path;
-    const which = root;
-    setTransfers((prev) => [...prev, { id, name: file.name, size: file.size, sent: 0, abort }]);
-
-    uploadFsFile(which, where, file, (sent) => patch(id, { sent }), abort.signal)
+    setTransfers((prev) => [...prev, {
+      id, name: file.name, root: toRoot, path: toPath, size: file.size, sent: 0, abort,
+    }]);
+    uploadFsFile(toRoot, toPath, file, (sent) => patch(id, { sent }), abort.signal)
       .then(() => {
         setTransfers((prev) => prev.filter((t) => t.id !== id));
         message.success(`${file.name} 已上傳`);
-        if (which === root && where === path) void load(root, path, query);
+        if (toRoot === root && toPath === path) reload();
       })
       .catch((error: Error) => {
-        // Kept in the list rather than cleared: the bytes are still on disk as a
-        // .part, so dropping the row would hide something that exists and can be
-        // resumed by choosing the same file again.
+        // Kept in the list rather than cleared: the bytes are still on disk as
+        // a .part, so dropping the row would hide something that exists and
+        // can be resumed by choosing the same file again.
         patch(id, { error: error.name === 'AbortError' ? '已取消' : error.message });
       });
   };
 
   const onPick = (event: React.ChangeEvent<HTMLInputElement>) => {
-    Array.from(event.target.files ?? []).forEach(startUpload);
-    // Cleared so choosing the same file twice fires change again, which is how
-    // a failed upload is retried.
+    Array.from(event.target.files ?? []).forEach((f) => startUpload(f));
+    // Cleared so choosing the same file twice fires change again, which is
+    // how a failed upload is retried.
     event.target.value = '';
   };
 
-  const onCreateFolder = async () => {
-    const name = (newFolder ?? '').trim();
-    if (!name) return;
-    try {
-      await createFsFolder(root, path, name);
-      setNewFolder(null);
-      reload();
-    } catch (error) {
-      message.error((error as Error).message);
-    }
-  };
-
-  const chosen = entries.filter((e) => selected.includes(`${e.kind}:${e.name}`));
-
-  /**
-   * Apply something to several entries, one request each.
-   *
-   * Sequential rather than concurrent, and it does not stop at the first
-   * failure. Half a move that reports "failed" while having moved nine of ten
-   * files is worse than one that says which one did not go: the directory is
-   * in a state either way, and only the itemised answer describes it.
-   */
-  const each = async (
-    items: FsEntry[],
-    verb: string,
-    run: (entry: FsEntry) => Promise<unknown>,
-  ) => {
+  const each = async (items: FsEntry[], verb: string, run: (entry: FsEntry) => Promise<unknown>) => {
     setBusy(true);
     const failed: string[] = [];
     for (const entry of items) {
@@ -384,79 +357,106 @@ export default function Files() {
     setSelected([]);
     const done = items.length - failed.length;
     if (done) message.success(`${done} 項已${verb}`);
-    if (failed.length) {
-      message.error(
-        { content: `${failed.length} 項失敗 — ${failed[0]}`, duration: 6 },
-      );
-    }
+    if (failed.length) message.error({ content: `${failed.length} 項失敗 — ${failed[0]}`, duration: 6 });
     reload();
+  };
+
+  const confirmDelete = (items: FsEntry[]) => {
+    modal.confirm({
+      title: items.length === 1 ? `刪除 ${items[0].name}？` : `刪除 ${items.length} 項？`,
+      content: items.some((e) => e.kind === 'dir') ? '資料夾裡的東西會一起刪掉，而且不能復原。' : '不能復原。',
+      okText: '刪除', cancelText: '取消', okButtonProps: { danger: true },
+      onOk: () => each(items, '刪除', (e) => deleteFsEntry(root, path, e.name, e.partial)),
+    });
+  };
+
+  const onCreateFolder = async () => {
+    const name = (newFolder ?? '').trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      await createFsFolder(root, path, name);
+      setNewFolder(null);
+      message.success(`已建立 ${name}`);
+      reload();
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const onRename = async () => {
     if (!renaming) return;
     const to = renaming.to.trim();
     if (!to || to === renaming.entry.name) { setRenaming(null); return; }
+    setBusy(true);
     try {
       await renameFsEntry(root, path, renaming.entry.name, to);
       setRenaming(null);
       reload();
     } catch (error) {
       message.error((error as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
-  const onMove = async (toRoot: string, toPath: string) => {
-    const names = moving ?? [];
+  const moveTo = (items: FsEntry[], toRoot: string, toPath: string) => {
     setMoving(null);
-    await each(
-      entries.filter((e) => names.includes(e.name)),
-      '移動',
-      (entry) => moveFsEntry(root, path, entry.name, toRoot, toPath),
-    );
+    if (toRoot === root && toPath === path) return;
+    void each(items, '移動', (e) => moveFsEntry(root, path, e.name, toRoot, toPath));
   };
 
-  const confirmDelete = (items: FsEntry[]) => modal.confirm({
-    title: items.length === 1 ? `刪除 ${items[0].name}？` : `刪除這 ${items.length} 項？`,
-    content: items.some((e) => e.kind === 'dir') ? '資料夾必須是空的' : undefined,
-    okText: '刪除', cancelText: '取消', okButtonProps: { danger: true },
-    onOk: () => each(items, '刪除', (e) => deleteFsEntry(root, path, e.name, e.partial)),
-  });
+  // ---- drag and drop --------------------------------------------------------------------
+  // Two kinds of drag land here: files from the desktop, which are uploads,
+  // and rows from the listing, which are moves. Telling them apart is the
+  // type on the transfer, which only our own rows set.
+  const DRAG = 'application/x-tenkstack-entries';
+  const dragEntries = (e: React.DragEvent) => {
+    try {
+      const names = JSON.parse(e.dataTransfer.getData(DRAG) || 'null') as string[] | null;
+      return names ? entries.filter((x) => names.includes(x.name)) : null;
+    } catch { return null; }
+  };
+  const startDrag = (entry: FsEntry) => (e: React.DragEvent) => {
+    const names = selected.includes(keyOf(entry)) ? chosen.map((x) => x.name) : [entry.name];
+    e.dataTransfer.setData(DRAG, JSON.stringify(names));
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const acceptsDrop = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes(DRAG);
+  const dropInto = (toRoot: string, toPath: string) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const moved = dragEntries(e);
+    if (moved) {
+      if (moved.some((x) => x.kind === 'dir' && toRoot === root && toPath === (path ? `${path}/${x.name}` : x.name))) return;
+      moveTo(moved, toRoot, toPath);
+      return;
+    }
+    Array.from(e.dataTransfer.files).forEach((f) => startUpload(f, toRoot, toPath));
+  };
 
-  /**
-   * Keys.
-   *
-   * The bindings are the ones a file manager has had since Explorer: F2
-   * renames, Delete deletes, Backspace goes up, Ctrl-L addresses. Nothing is
-   * invented, because a shortcut you have to learn is a shortcut nobody uses.
-   *
-   * Two guards matter. Anything typed into a field is typing, not a command --
-   * without that check, naming a folder "n" would open a second dialog on the
-   * keystroke. And the preview panel owns the arrows while it is open, so the
-   * page stands down entirely rather than the two fighting over a keydown.
-   */
+  // ---- keys --------------------------------------------------------------------------------
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (
-        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
-      )) {
-        return;
-      }
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       const mod = event.ctrlKey || event.metaKey;
-
-      // Ctrl-L works with a dialog open -- it is how you leave one -- and the
-      // rest do not.
       if (mod && event.key.toLowerCase() === 'l') {
         event.preventDefault();
-        setPreviewing(null);
-        setEditingPath(true);
+        setViewing(null);
+        setActive('browser');
+        startEditingPath();
         return;
       }
-      if (previewing !== null || renaming || moving || newFolder !== null || showKeys) return;
-
+      if (active !== 'browser') return;
+      if (viewing !== null || renaming || moving || newFolder !== null || showKeys) return;
       if (mod && event.key.toLowerCase() === 'a') {
         event.preventDefault();
-        setSelected(entries.filter((e) => e.kind !== 'other').map((e) => `${e.kind}:${e.name}`));
+        setSelected(entries.filter((e) => e.kind !== 'other').map(keyOf));
         return;
       }
       if (mod && event.key.toLowerCase() === 'u') {
@@ -465,38 +465,20 @@ export default function Files() {
         return;
       }
       if (mod) return;
-
       switch (event.key) {
-        case '/':
-          event.preventDefault();
-          search.current?.focus();
-          break;
-        case 'Backspace':
-          event.preventDefault();
-          up();
-          break;
-        case 'Escape':
-          setSelected([]);
-          break;
+        case '/': event.preventDefault(); search.current?.focus(); break;
+        case 'Backspace': event.preventDefault(); up(); break;
+        case 'Escape': setSelected([]); break;
+        case 'Enter': if (chosen.length === 1) open(chosen[0]); break;
         case 'F2': {
           const one = chosen.length === 1 ? chosen[0] : null;
           if (one && writable && !one.partial) setRenaming({ entry: one, to: one.name });
           break;
         }
-        case 'Delete':
-          if (chosen.length && writable) confirmDelete(chosen);
-          break;
-        case 'n':
-        case 'N':
-          if (writable) setNewFolder('');
-          break;
-        case 'g':
-        case 'G':
-          if (visual) setView((v) => (v === 'grid' ? 'list' : 'grid'));
-          break;
-        case '?':
-          setShowKeys(true);
-          break;
+        case 'Delete': if (chosen.length && writable) confirmDelete(chosen); break;
+        case 'n': case 'N': if (writable) setNewFolder(''); break;
+        case 'g': case 'G': if (visual) setView(gridding ? 'list' : 'grid'); break;
+        case '?': setShowKeys(true); break;
         default:
       }
     };
@@ -504,135 +486,255 @@ export default function Files() {
     return () => window.removeEventListener('keydown', onKey);
     // No dependency array on purpose. The handler closes over most of this
     // component's state, and listing them would be a list that goes stale
-    // silently -- a forgotten entry means a key acting on the directory you
-    // were in two navigations ago. Re-binding one listener per render costs
-    // nothing measurable.
+    // silently. Re-binding one listener per render costs nothing measurable.
+  });
+
+  // The path as a shell would take it, for pasting into a terminal or a
+  // workflow. The clipboard API needs a secure context, which the console
+  // is behind Caddy and on loopback; elsewhere the old selection trick.
+  const copyPath = async (entry?: FsEntry) => {
+    const rel = entry ? (path ? `${path}/${entry.name}` : entry.name) : path;
+    const full = rel ? `${rootPath}/${rel}` : rootPath;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(full);
+      } else {
+        const box = document.createElement('textarea');
+        box.value = full;
+        box.style.position = 'fixed';
+        box.style.opacity = '0';
+        document.body.appendChild(box);
+        box.select();
+        document.execCommand('copy');
+        box.remove();
+      }
+      message.success({ content: `已複製 ${full}`, duration: 2 });
+    } catch {
+      message.error('複製不了，瀏覽器不給剪貼簿');
+    }
+  };
+
+  // ---- pieces ---------------------------------------------------------------------------------
+  const menuFor = (entry: FsEntry): MenuProps['items'] => {
+    const isFile = entry.kind === 'file' && !entry.partial;
+    return [
+      entry.kind === 'dir'
+        ? { key: 'open', label: '打開', icon: <FolderOpenOutlined />, onClick: () => open(entry) }
+        : isFile && entry.media === 'text'
+          ? { key: 'edit', label: writable ? '編輯' : '檢視', icon: <FormOutlined />, onClick: () => open(entry) }
+          : isFile ? { key: 'view', label: '檢視', icon: <FileOutlined />, onClick: () => open(entry) } : null,
+      isFile ? { key: 'download', label: '下載', icon: <DownloadOutlined />,
+                 onClick: () => window.open(fsRawUrl(root, path, entry.name, true), '_blank') } : null,
+      { key: 'copy', label: '複製路徑', icon: <CopyOutlined />, onClick: () => void copyPath(entry) },
+      { type: 'divider' },
+      { key: 'rename', label: '重新命名', icon: <EditOutlined />, disabled: !writable || entry.partial,
+        onClick: () => setRenaming({ entry, to: entry.name }) },
+      { key: 'move', label: '移動…', icon: <FolderOpenOutlined />, disabled: !writable || entry.partial,
+        onClick: () => setMoving(selected.includes(keyOf(entry)) ? chosen : [entry]) },
+      { key: 'delete', label: '刪除', icon: <DeleteOutlined />, danger: true, disabled: !writable,
+        onClick: () => confirmDelete(selected.includes(keyOf(entry)) ? chosen : [entry]) },
+    ];
+  };
+
+  const crumbs = path ? path.split('/') : [];
+  const groups: { title: string; key: FsRoot['group'] }[] = [
+    { title: 'ComfyUI', key: 'comfy' }, { title: '其他', key: 'other' },
+  ];
+
+  const rowStyle = (entry: FsEntry, isSelected: boolean): React.CSSProperties => ({
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 96px 110px', alignItems: 'center',
+    gap: 12, padding: '0 12px', height: 32, cursor: 'default', userSelect: 'none',
+    background: isSelected ? 'rgba(255,255,255,0.08)' : undefined,
+    opacity: entry.kind === 'other' ? 0.45 : 1,
+    borderRadius: 4,
   });
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+    <div style={{
+      height: 'calc(100vh - 56px - 48px)', display: 'flex',
+      border: `1px solid ${LINE.faint}`, borderRadius: 8, overflow: 'hidden',
+      background: 'rgba(255,255,255,0.015)',
+    }}>
       <input ref={picker} type="file" multiple hidden onChange={onPick} />
 
-      {activeRoot && activeRoot.exists && !activeRoot.writable && (
-        <Alert
-          type="warning"
-          showIcon
-          message="這個目錄主控台寫不進去"
-          description={
-            <span>
-              <code>{activeRoot.path}</code> 是容器以 root 身分建立的，而主控台不是 root。
-              一次性修好（不需要 sudo，透過容器本身即可）：
-              <br />
-              <code style={{ fontSize: 11 }}>
-                docker exec comfyui-xpu find /root/ComfyUI/models /root/ComfyUI/input
-                /root/ComfyUI/output -type d -exec chown 1000:1000 {'{}'} +
-              </code>
-            </span>
-          }
-        />
-      )}
+      {/* ---- locations ------------------------------------------------------- */}
+      <aside style={{
+        width: SIDEBAR_W, flex: 'none', borderRight: `1px solid ${LINE.faint}`,
+        display: 'flex', flexDirection: 'column', minHeight: 0,
+      }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 8px' }}>
+          {groups.map((g) => {
+            const members = roots.filter((r) => r.group === g.key);
+            if (!members.length) return null;
+            return (
+              <div key={g.key} style={{ marginBottom: 12 }}>
+                <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2, display: 'block', padding: '4px 8px' }}>
+                  {g.title}
+                </Text>
+                {members.map((r) => {
+                  const current = r.key === root;
+                  return (
+                    <div
+                      key={r.key}
+                      role="button" tabIndex={0}
+                      onClick={() => go(r.key, '')}
+                      onKeyDown={(e) => { if (e.key === 'Enter') go(r.key, ''); }}
+                      onDragOver={(e) => { if (acceptsDrop(e) && r.writable) { e.preventDefault(); } }}
+                      onDrop={dropInto(r.key, '')}
+                      title={`${r.note}\n${r.path}`}
+                      className="fs-loc"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                        borderRadius: 4, cursor: 'pointer', fontSize: 12,
+                        background: current ? 'rgba(255,255,255,0.08)' : undefined,
+                        opacity: r.exists ? 1 : 0.4,
+                      }}
+                    >
+                      {r.key === 'home' || g.key === 'other' ? <HomeOutlined /> : <FolderOutlined />}
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {r.label}
+                      </span>
+                      {!r.writable && <Text type="secondary" style={{ fontSize: 9 }}>唯讀</Text>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
 
-      {/* One block, not two. The places, the path and the listing are the
-          same object seen at three scales -- picking a place changes the path,
-          which changes the listing -- and a border between the first and the
-          other two said they were separate things. */}
-      <Card
-        size="small"
-        // The header holds a block now, and antd's title is a single ellipsised
-        // line by default -- left alone it would clip the second strip and the
-        // note off the end of the first one.
-        styles={{
-          title: { whiteSpace: 'normal', overflow: 'visible' },
-          header: { padding: '10px 12px' },
-        }}
-        title={
-          <div>
-          <Space size={16} wrap align="start" style={{ width: '100%' }}>
-            {/* Two strips, not one row of six. ComfyUI's trees are why this page
-                exists and there are several of them; the machine's own
-                directories are a different kind of place, and in one row they all
-                read as an undifferentiated list -- three of them starting with the
-                same word. Only the strip holding the selection shows one:
-                Segmented renders nothing as chosen when its value is not among
-                its options. */}
-            <Space direction="vertical" size={6}>
-              {([['comfy', 'ComfyUI'], ['other', '其他']] as const).map(([g, label]) => {
-                const mine = roots.filter((r) => r.group === g);
-                if (!mine.length) return null;
-                return (
-                  <Space key={g} size={8}>
-                    <Text type="secondary" style={{
-                      fontSize: 11, width: 48, display: 'inline-block',
-                    }}>
-                      {label}
-                    </Text>
-                    <Segmented
-                      size="small"
-                      value={mine.some((r) => r.key === root) ? root : ''}
-                      onChange={(v) => { setRoot(v as string); setPath(''); }}
-                      options={mine.map((r) => ({ label: r.label, value: r.key }))}
-                    />
-                  </Space>
-                );
-              })}
-            </Space>
-            <Text style={{
-              fontSize: 11, fontFamily: MONO, opacity: 0.5, marginLeft: 'auto',
-            }}>
-              磁碟可用 {bytes(free)}
-            </Text>
+        {/* Disk, then whatever is in flight. Under the locations so they are
+            always in view, since an upload outlives the folder it started in. */}
+        <div style={{ borderTop: `1px solid ${LINE.faint}`, padding: '10px 12px', fontSize: 11 }}>
+          <Space size={6}>
+            <HddOutlined style={{ opacity: 0.5 }} />
+            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>可用 {bytes(free)}</Text>
           </Space>
+          {transfers.map((t) => (
+            <div key={t.id} style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Text style={{ fontSize: 11, fontFamily: MONO, flex: 1, minWidth: 0 }} ellipsis>{t.name}</Text>
+                <Button size="small" type="text" icon={<CloseOutlined style={{ fontSize: 10 }} />}
+                        onClick={() => {
+                          if (t.error) setTransfers((prev) => prev.filter((x) => x.id !== t.id));
+                          else t.abort.abort();
+                        }} />
+              </div>
+              {t.error ? (
+                <Text type="danger" style={{ fontSize: 10 }}>{t.error}</Text>
+              ) : (
+                <Progress percent={Math.floor(t.sent / t.size * 100)} size="small" showInfo={false}
+                          strokeColor="rgba(255,255,255,0.7)" trailColor={LINE.faint} />
+              )}
+            </div>
+          ))}
+        </div>
+      </aside>
 
-          {/* The chosen place's own line, under the strips rather than beside
-              them. In the same row it was vertically centred against a two-row
-              block and read as a caption for neither of them. */}
-          {activeRoot?.note && (
-            <Text type="secondary" style={{
-              fontSize: 11, display: 'block', marginTop: 10,
-            }}>
-              {activeRoot.note}
-            </Text>
-          )}
+      {/* ---- main ------------------------------------------------------------ */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        {tabs.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'stretch', borderBottom: `1px solid ${LINE.faint}`,
+            overflowX: 'auto', flex: 'none',
+          }}>
+            {[{ key: 'browser', name: '檔案', dirty: false }, ...tabs].map((t) => {
+              const on = active === t.key;
+              return (
+                <div
+                  key={t.key}
+                  role="tab" tabIndex={0}
+                  onClick={() => setActive(t.key)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') setActive(t.key); }}
+                  onAuxClick={(e) => { if (e.button === 1 && t.key !== 'browser') closeTab(t.key); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px', height: 34,
+                    fontSize: 12, fontFamily: t.key === 'browser' ? undefined : MONO, cursor: 'pointer',
+                    borderRight: `1px solid ${LINE.faint}`,
+                    borderBottom: on ? '1px solid #fff' : '1px solid transparent',
+                    marginBottom: -1, opacity: on ? 1 : 0.6, whiteSpace: 'nowrap',
+                  }}
+                >
+                  {t.key === 'browser' ? <FolderOutlined /> : <FileTextOutlined />}
+                  {t.name}
+                  {t.key !== 'browser' && (
+                    t.dirty
+                      ? <span title="未儲存" style={{ width: 8, height: 8, borderRadius: '50%', background: ACCENT.warn }} />
+                      : <CloseOutlined style={{ fontSize: 10, opacity: 0.6 }}
+                                       onClick={(e) => { e.stopPropagation(); closeTab(t.key); }} />
+                  )}
+                </div>
+              );
+            })}
           </div>
-        }
-        extra={
-          <Space size={8}>
-            <Dropdown
-              disabled={!writable}
-              menu={{
-                items: [
-                  {
-                    key: 'upload',
-                    label: '上傳檔案',
-                    icon: <UploadOutlined />,
-                    onClick: () => picker.current?.click(),
-                  },
-                  {
-                    key: 'folder',
-                    label: '新增資料夾',
-                    icon: <FolderAddOutlined />,
-                    onClick: () => setNewFolder(''),
-                  },
-                ],
-              }}
-            >
-              <Button size="small" type="primary" ghost icon={<PlusOutlined />}>
-                新建 <DownOutlined style={{ fontSize: 9 }} />
-              </Button>
-            </Dropdown>
-            <Input.Search
+        )}
+
+        {tabs.map((t) => (
+          <Editor key={t.key} root={t.root} path={t.path} name={t.name} active={active === t.key}
+                  onDirty={(d) => markDirty(t.key, d)} onSaved={reload} />
+        ))}
+
+        <div style={{ display: active === 'browser' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {/* crumbs + search */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+            borderBottom: `1px solid ${LINE.faint}`, flex: 'none',
+          }}>
+            {editingPath ? (
+              <Input
+                ref={pathInput}
+                size="small"
+                value={pathText}
+                onChange={(e) => setPathText(e.target.value)}
+                onPressEnter={() => void jump(pathText)}
+                onBlur={() => setEditingPath(false)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setEditingPath(false); }}
+                style={{ fontFamily: MONO, fontSize: 12, flex: 1 }}
+                placeholder="貼上絕對路徑，Enter 跳過去"
+              />
+            ) : (
+              <div
+                role="button" tabIndex={0}
+                onClick={startEditingPath}
+                onKeyDown={(e) => { if (e.key === 'Enter') startEditingPath(); }}
+                title="點一下輸入路徑（Ctrl+L）"
+                style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 4, cursor: 'text', height: 24, overflow: 'hidden' }}
+              >
+                <Crumb label={activeRoot?.label ?? root} onClick={() => setPath('')} last={!crumbs.length} />
+                {crumbs.map((seg, i) => (
+                  <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 11 }}>›</Text>
+                    <Crumb label={seg} last={i === crumbs.length - 1}
+                           onClick={() => setPath(crumbs.slice(0, i + 1).join('/'))} />
+                  </span>
+                ))}
+              </div>
+            )}
+            <Input
               ref={search}
               size="small"
               allowClear
+              prefix={<SearchOutlined style={{ opacity: 0.4 }} />}
               placeholder="搜尋這個資料夾（/）"
               value={typed}
               onChange={(e) => setTyped(e.target.value)}
-              style={{ width: 190 }}
+              style={{ width: 220 }}
             />
+          </div>
+
+          {/* toolbar */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+            borderBottom: `1px solid ${LINE.faint}`, flex: 'none', minHeight: 40,
+          }}>
+            <Button size="small" icon={<UploadOutlined />} disabled={!writable}
+                    onClick={() => picker.current?.click()}>上傳</Button>
+            <Button size="small" icon={<FolderAddOutlined />} disabled={!writable}
+                    onClick={() => setNewFolder('')}>新資料夾</Button>
             {visual && (
               <Segmented
                 size="small"
-                value={view}
+                value={gridding ? 'grid' : 'list'}
                 onChange={(v) => setView(v as 'list' | 'grid')}
                 options={[
                   { value: 'list', icon: <UnorderedListOutlined /> },
@@ -640,515 +742,252 @@ export default function Files() {
                 ]}
               />
             )}
-            {roomy && (
-              <Tooltip title={treeOpen ? '隱藏目錄樹' : '顯示目錄樹'}>
-                <Button
-                  size="small"
-                  type={treeOpen ? 'default' : 'text'}
-                  icon={<PartitionOutlined />}
-                  onClick={() => setTreeOpen((v) => !v)}
-                />
+            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, marginLeft: 4 }}>
+              {loading ? '讀取中…' : `${total.toLocaleString()} 項${truncated ? `，只列出前 ${entries.length.toLocaleString()}` : ''}`}
+            </Text>
+
+            {/* One item's actions are in the details pane beside it; the
+                toolbar repeats them only when that pane is closed, and
+                always carries the ones that apply to several at once. */}
+            {chosen.length > 0 && (
+              <Space size={6} style={{ marginLeft: 'auto' }}>
+                <Text type="secondary" style={{ fontSize: 11 }}>已選 {chosen.length}</Text>
+                {!detailsOpen && chosen.length === 1 && chosen[0].kind === 'file' && !chosen[0].partial && (
+                  <Button size="small" icon={<DownloadOutlined />}
+                          href={fsRawUrl(root, path, chosen[0].name, true)}>下載</Button>
+                )}
+                {!detailsOpen && chosen.length === 1 && (
+                  <Button size="small" icon={<EditOutlined />} disabled={!writable || chosen[0].partial}
+                          onClick={() => setRenaming({ entry: chosen[0], to: chosen[0].name })}>重新命名</Button>
+                )}
+                {(!detailsOpen || chosen.length > 1) && (
+                  <>
+                    <Button size="small" icon={<FolderOpenOutlined />} disabled={!writable}
+                            onClick={() => setMoving(chosen)}>移動</Button>
+                    <Button size="small" danger icon={<DeleteOutlined />} disabled={!writable}
+                            onClick={() => confirmDelete(chosen)}>刪除</Button>
+                  </>
+                )}
+              </Space>
+            )}
+            <Space size={2} style={{ marginLeft: chosen.length ? 0 : 'auto' }}>
+              <Tooltip title="重新整理">
+                <Button size="small" type="text" icon={<ReloadOutlined />} onClick={reload} />
               </Tooltip>
-            )}
-            <Button size="small" onClick={() => void load(root, path, query)}>重新整理</Button>
-            <Tooltip title="快捷鍵（?）">
-              <Button
-                size="small" type="text" icon={<QuestionCircleOutlined />}
-                onClick={() => setShowKeys(true)}
-              />
-            </Tooltip>
-          </Space>
-        }
-      >
-        {/* The drop target is the whole panel rather than a separate box: with
-            the listing already filling it, a dedicated dragger would be a third
-            region competing for the same space. */}
-        <div
-          onDragOver={(e) => { if (writable) e.preventDefault(); }}
-          onDrop={(e) => {
-            if (!writable) return;
-            e.preventDefault();
-            Array.from(e.dataTransfer.files).forEach(startUpload);
-          }}
-          style={{ minHeight: 120 }}
-        >
-          {transfers.map((t) => (
-            <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <Text style={{ fontSize: 12, fontFamily: MONO, flex: '0 1 240px' }} ellipsis>
-                {t.name}
-              </Text>
-              <Progress
-                percent={Math.floor((t.sent / Math.max(t.size, 1)) * 100)}
-                size="small"
-                status={t.error ? 'exception' : 'active'}
-                style={{ flex: 1, margin: 0 }}
-              />
-              <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-                {bytes(t.sent)} / {bytes(t.size)}
-              </Text>
-              {t.error ? (
-                <Tooltip title={t.error}>
-                  <Button
-                    size="small" type="text"
-                    onClick={() => setTransfers((p) => p.filter((x) => x.id !== t.id))}
-                  >
-                    關閉
-                  </Button>
-                </Tooltip>
-              ) : (
-                <Button size="small" type="text" icon={<StopOutlined />}
-                        onClick={() => t.abort.abort()} />
-              )}
-            </div>
-          ))}
-
-          {truncated && (
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 10 }}
-              message={
-                <span style={{ fontSize: 12 }}>
-                  這裡有 {total.toLocaleString()} 個項目，只顯示前 {entries.length.toLocaleString()} 個。
-                  用上面的搜尋找特定的檔案 — 搜尋是在伺服器端跑的，找得到沒顯示出來的那些。
-                </span>
-              }
-            />
-          )}
-
-          {chosen.length > 0 && (
-            <Space
-              size={8}
-              style={{
-                width: '100%', marginBottom: 10, padding: '6px 10px',
-                background: 'rgba(255,255,255,0.04)', borderRadius: 4,
-              }}
-            >
-              <Text style={{ fontSize: 12 }}>已選 {chosen.length} 項</Text>
-              <Button
-                size="small" icon={<DragOutlined />} disabled={!writable || busy}
-                onClick={() => setMoving(chosen.map((e) => e.name))}
-              >
-                移動
-              </Button>
-              <Button
-                size="small" danger icon={<DeleteOutlined />} disabled={!writable || busy}
-                onClick={() => confirmDelete(chosen)}
-              >
-                刪除
-              </Button>
-              <Button size="small" type="text" onClick={() => setSelected([])}>取消選取</Button>
+              <Tooltip title={detailsOpen ? '收起詳細資料' : '顯示詳細資料'}>
+                <Button size="small" type={detailsOpen ? 'default' : 'text'} icon={<InfoCircleOutlined />}
+                        onClick={() => setDetailsOpen((v) => !v)} />
+              </Tooltip>
+              <Tooltip title="快捷鍵（?）">
+                <Button size="small" type="text" icon={<QuestionCircleOutlined />} onClick={() => setShowKeys(true)} />
+              </Tooltip>
             </Space>
-          )}
+          </div>
 
-          {/* Listing beside the preview rather than under a drawer that covers
-              it. Looking at a file is nearly always a question about which file,
-              and a panel that hides the directory answers it with the directory
-              out of sight -- the arrows step through a list you can no longer
-              see. Split only when there is room; below that width the drawer is
-              still the better of two bad options. */}
-          <Splitter style={{ minHeight: 240 }}>
-            {treePane && (
-              <Splitter.Panel defaultSize={220} min={160} max={380} collapsible>
-                <DirTree
-                  root={root}
-                  path={path}
-                  refreshToken={treeToken}
-                  onNavigate={(next) => { setPath(next); setSelected([]); }}
-                />
-              </Splitter.Panel>
-            )}
-            <Splitter.Panel min={280}>
-              <div>
-              {/* Above the table rather than in the card's header, so it lines
-                  up with the rows and stays lined up: the tree beside it is a
-                  resizable panel, and a header padded to today's width would
-                  come apart the first time somebody dragged it.
-
-                  Indented to where a row's name begins, which is antd's own
-                  arithmetic rather than a number picked by eye: the selection
-                  column is `controlHeight` wide and the cell beside it carries
-                  `paddingXS`. Taken from the tokens so it follows the theme
-                  instead of drifting from it. */}
-              <div style={{
-                paddingLeft: token.controlHeight + token.paddingXS,
-                paddingRight: token.paddingXS,
-                paddingTop: 2,
-                paddingBottom: 10,
-              }}>
-                <PathBar
-                  rootPath={activeRoot?.path ?? ''}
-                  path={path}
-                  onSegment={setPath}
-                  onSubmit={(text) => void jump(text)}
-                  editing={editingPath}
-                  onEditing={setEditingPath}
-                />
-              </div>
-              {gridding ? (
-                <Grid entries={entries} root={root} path={path} onOpen={open} />
-              ) : (
-              <Table<FsEntry>
-                size="small"
-                loading={loading}
-                dataSource={entries}
-                rowKey={(row) => `${row.kind}:${row.name}`}
-                rowSelection={{
-                  selectedRowKeys: selected,
-                  onChange: (keys) => setSelected(keys as string[]),
-                  // Devices and sockets have no operation that would apply to them.
-                  getCheckboxProps: (row) => ({ disabled: row.kind === 'other' }),
-                  columnWidth: 36,
-                }}
-                pagination={false}
-                // Rows are drawn only where they are looked at. Three thousand
-                // ordinary antd rows is a second of layout and a scrollbar that
-                // stutters; virtual needs every column to carry a width and an x
-                // for the total, which is the whole cost of it.
-                virtual={entries.length > 200}
-                // 36 selection + 400 name + 150 size + 130 modified + 78 actions.
-                scroll={{ y: 460, x: 794 }}
-                locale={{
-                  emptyText: (
-                    <Empty
-                      description={
-                        query
-                          ? `沒有符合「${query}」的項目`
-                          : writable ? '空的 — 拖檔案進來，或用右上角的「新建」' : '空的'
-                      }
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    />
-                  ),
-                }}
-                columns={[
-                  {
-                    title: '名稱',
-                    // A width is required for the virtual renderer; the sum of the
-                    // widths is the `x` above, so nothing overflows or leaves a gap.
-                    width: 400,
-                    render: (_, row) => (
-                      <Space size={7}>
-                        {row.kind === 'dir'
-                          ? <FolderOutlined style={{ fontSize: 11, opacity: 0.5 }} />
-                          : row.kind === 'other'
-                            ? <QuestionOutlined style={{ fontSize: 11, opacity: 0.35 }} />
-                            : <span style={{ display: 'inline-block', width: 11 }} />}
-                        {row.kind === 'other' ? (
-                          <Text
-                            style={{ fontSize: 12, fontFamily: MONO, opacity: 0.55 }}
-                          >
-                            {row.name}
-                          </Text>
-                        ) : (
-                          <a
-                            style={{
-                              fontSize: 12, fontFamily: MONO,
-                              opacity: row.hidden ? 0.6 : 1,
-                            }}
-                            onClick={() => open(row)}
-                          >
-                            {row.name}
-                          </a>
-                        )}
-                        {row.partial && <Tag color="gold" style={{ fontSize: 10 }}>未完成</Tag>}
-                        {row.kind === 'other' && (
-                          <Tooltip title="裝置、通訊端或斷掉的連結。列出來是為了跟 ls 一致，但打不開。">
-                            <Tag style={{ fontSize: 10 }}>特殊</Tag>
-                          </Tooltip>
-                        )}
-                      </Space>
-                    ),
-                  },
-                  {
-                    title: '大小',
-                    width: 150,
-                    align: 'right',
-                    render: (_, row) => {
-                      if (row.kind !== 'dir') {
-                        return (
-                          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.65 }}>
-                            {bytes(row.size ?? 0)}
-                          </Text>
-                        );
-                      }
-                      // Asked for, not volunteered. Computing this for every folder
-                      // while listing is what made the old version walk the entire
-                      // disk on each navigation step.
-                      const measured = sizes[at(row.name)];
-                      if (measured === 'working') {
-                        return <Text type="secondary" style={{ fontSize: 11 }}>計算中…</Text>;
-                      }
-                      if (measured) {
-                        return (
-                          <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.65 }}>
-                            {measured.files} 項 ・ {bytes(measured.bytes)}
-                          </Text>
-                        );
-                      }
-                      return (
-                        <Button
-                          size="small" type="text"
-                          style={{ fontSize: 11, opacity: 0.5 }}
-                          onClick={() => void measure(row.name)}
-                        >
-                          計算大小
-                        </Button>
-                      );
-                    },
-                  },
-                  {
-                    title: '修改時間',
-                    width: 130,
-                    align: 'right',
-                    render: (_, row) => (
-                      <Text style={{ fontSize: 11, fontFamily: MONO, opacity: 0.45 }}>
-                        {when(row.modified)}
-                      </Text>
-                    ),
-                  },
-                  {
-                    title: '',
-                    width: 78,
-                    align: 'right',
-                    render: (_, row) => (
-                      <Space size={0}>
-                        {row.kind === 'file' && !row.partial && (
-                          <Tooltip title="下載">
-                            {/* An anchor rather than a fetch: the browser's own
-                                download manager handles a 20 GB file, and nothing
-                                has to hold it in memory to offer it. */}
-                            <Button
-                              size="small" type="text" icon={<DownloadOutlined />}
-                              href={fsRawUrl(root, path, row.name, true)}
-                            />
-                          </Tooltip>
-                        )}
-                        <Dropdown
-                          trigger={['click']}
-                          disabled={row.kind === 'other'}
-                          menu={{
-                            items: [
-                              // Only for text, and only where the directory
-                              // takes writes: an edit item opening a window
-                              // whose save button can never work is worse than
-                              // no item at all.
-                              ...(row.kind === 'file' && row.media === 'text' && !row.partial
-                                ? [{
-                                  key: 'edit',
-                                  label: writable ? '編輯' : '檢視原始碼',
-                                  icon: <FormOutlined />,
-                                  onClick: () => setEditing(row.name),
-                                }]
-                                : []),
-                              {
-                                key: 'rename',
-                                label: '重新命名',
-                                icon: <EditOutlined />,
-                                disabled: !writable || row.partial,
-                                onClick: () => setRenaming({ entry: row, to: row.name }),
-                              },
-                              {
-                                key: 'move',
-                                label: '移動到…',
-                                icon: <DragOutlined />,
-                                disabled: !writable || row.partial,
-                                onClick: () => setMoving([row.name]),
-                              },
-                              { type: 'divider' },
-                              {
-                                key: 'delete',
-                                label: '刪除',
-                                icon: <DeleteOutlined />,
-                                danger: true,
-                                disabled: !writable,
-                                onClick: () => confirmDelete([row]),
-                              },
-                            ],
+          {/* listing + details */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <Dropdown
+              trigger={['contextMenu']}
+              menu={{ items: [
+                { key: 'copy', label: '複製這個資料夾的路徑', icon: <CopyOutlined />, onClick: () => void copyPath() },
+                { key: 'new', label: '新資料夾', icon: <FolderAddOutlined />, disabled: !writable, onClick: () => setNewFolder('') },
+                { key: 'upload', label: '上傳…', icon: <UploadOutlined />, disabled: !writable, onClick: () => picker.current?.click() },
+              ] }}
+            >
+            <div
+              style={{
+                flex: 1, minWidth: 0, overflowY: 'auto', position: 'relative',
+                outline: dragOver ? `2px dashed ${LINE.medium}` : 'none', outlineOffset: -4,
+              }}
+              onDragOver={(e) => { if (acceptsDrop(e)) { e.preventDefault(); if (writable) setDragOver(true); } }}
+              onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
+              onDrop={writable ? dropInto(root, path) : (e) => { e.preventDefault(); setDragOver(false); }}
+              onClick={(e) => { if (e.target === e.currentTarget) setSelected([]); }}
+            >
+              {loading && !entries.length ? (
+                <div style={{ height: '100%', display: 'grid', placeItems: 'center' }}><Spin /></div>
+              ) : !entries.length ? (
+                <div style={{ height: '100%', display: 'grid', placeItems: 'center' }}>
+                  <Empty description={query ? '沒有符合的' : '空的資料夾'} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                </div>
+              ) : gridding ? (
+                <div style={{
+                  display: 'grid', gap: 10, padding: 12,
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+                }}>
+                  {entries.map((entry) => {
+                    const isSelected = selected.includes(keyOf(entry));
+                    const thumb = entry.kind === 'file' && (entry.media === 'image' || entry.media === 'video');
+                    return (
+                      <Dropdown key={keyOf(entry)} menu={{ items: menuFor(entry) }} trigger={['contextMenu']}>
+                        <div
+                          draggable={writable && !entry.partial}
+                          onDragStart={startDrag(entry)}
+                          onClick={(e) => { e.stopPropagation(); pick(entry, e); }}
+                          onDoubleClick={() => open(entry)}
+                          onContextMenu={(e) => { e.stopPropagation(); if (!isSelected) { setSelected([keyOf(entry)]); anchor.current = keyOf(entry); } }}
+                          onDragOver={entry.kind === 'dir' ? (e) => { if (acceptsDrop(e)) { e.preventDefault(); e.stopPropagation(); } } : undefined}
+                          onDrop={entry.kind === 'dir' ? dropInto(root, path ? `${path}/${entry.name}` : entry.name) : undefined}
+                          className="fs-tile"
+                          style={{
+                            borderRadius: 6, padding: 6, cursor: 'default', userSelect: 'none',
+                            background: isSelected ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.02)',
+                            border: `1px solid ${isSelected ? LINE.medium : LINE.faint}`,
                           }}
                         >
-                          <Button size="small" type="text" icon={<MoreOutlined />} />
-                        </Dropdown>
-                      </Space>
-                    ),
-                  },
-                ]}
-              />
+                          <div style={{
+                            aspectRatio: '1 / 1', borderRadius: 4, overflow: 'hidden', background: '#000',
+                            display: 'grid', placeItems: 'center', fontSize: 28, opacity: thumb ? 1 : 0.35,
+                          }}>
+                            {thumb
+                              ? <img src={fsThumbUrl(root, path, entry.name)} alt="" loading="lazy"
+                                     style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              : iconFor(entry)}
+                          </div>
+                          <Text style={{ fontSize: 11, fontFamily: MONO, display: 'block', marginTop: 6 }} ellipsis title={entry.name}>
+                            {entry.name}
+                          </Text>
+                        </div>
+                      </Dropdown>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ padding: '4px 6px' }}>
+                  <div style={{ ...rowStyle({ kind: 'dir' } as FsEntry, false), height: 26, cursor: 'default' }}>
+                    <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2 }}>名稱</Text>
+                    <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2, textAlign: 'right' }}>大小</Text>
+                    <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2, textAlign: 'right' }}>修改時間</Text>
+                  </div>
+                  {entries.map((entry) => {
+                    const isSelected = selected.includes(keyOf(entry));
+                    const measured = sizes[at(entry.name)];
+                    return (
+                      <Dropdown key={keyOf(entry)} menu={{ items: menuFor(entry) }} trigger={['contextMenu']}>
+                        <div
+                          draggable={writable && !entry.partial}
+                          onDragStart={startDrag(entry)}
+                          onClick={(e) => { e.stopPropagation(); pick(entry, e); }}
+                          onDoubleClick={() => open(entry)}
+                          onContextMenu={(e) => { e.stopPropagation(); if (!isSelected) { setSelected([keyOf(entry)]); anchor.current = keyOf(entry); } }}
+                          onDragOver={entry.kind === 'dir' ? (e) => { if (acceptsDrop(e)) { e.preventDefault(); e.stopPropagation(); } } : undefined}
+                          onDrop={entry.kind === 'dir' ? dropInto(root, path ? `${path}/${entry.name}` : entry.name) : undefined}
+                          className="fs-row"
+                          style={rowStyle(entry, isSelected)}
+                        >
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                            <span style={{ opacity: 0.55, fontSize: 13, flex: 'none' }}>{iconFor(entry)}</span>
+                            <Text style={{ fontSize: 12, fontFamily: MONO }} ellipsis>{entry.name}</Text>
+                            {entry.partial && <Tag color="gold" style={{ fontSize: 10, marginInlineEnd: 0 }}>未完成</Tag>}
+                          </span>
+                          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, textAlign: 'right' }}>
+                            {entry.kind === 'dir'
+                              ? (measured && measured !== 'working' ? bytes(measured.bytes) : '—')
+                              : entry.size !== null ? bytes(entry.size) : ''}
+                          </Text>
+                          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, textAlign: 'right' }}>
+                            {when(entry.modified)}
+                          </Text>
+                        </div>
+                      </Dropdown>
+                    );
+                  })}
+                </div>
               )}
+            </div>
+            </Dropdown>
+
+            {detailsOpen && (
+              <div style={{ width: DETAILS_W, flex: 'none', borderLeft: `1px solid ${LINE.faint}`, overflowY: 'auto' }}>
+                <Details
+                  root={root} rootPath={rootPath} path={path} entries={entries} chosen={chosen}
+                  writable={writable} free={free} total={total} sizes={sizes}
+                  onMeasure={(name) => void measure(name)}
+                  onOpen={open}
+                  onView={(entry) => setViewing(entries.indexOf(entry))}
+                  onRename={(entry) => setRenaming({ entry, to: entry.name })}
+                  onMove={(items) => setMoving(items)}
+                  onDelete={confirmDelete}
+                  onCopyPath={(entry) => void copyPath(entry)}
+                />
               </div>
-            </Splitter.Panel>
-          </Splitter>
+            )}
+          </div>
         </div>
-      </Card>
+      </div>
 
-      {editing && (
-        <FileEditor
-          root={root}
-          path={path}
-          name={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => void load(root, path, query)}
-        />
-      )}
-
-      {previewing !== null && (
+      {/* ---- dialogs ------------------------------------------------------------- */}
+      {viewing !== null && entries[viewing] && (
         <FilePreview
-          root={root}
-          path={path}
-          entries={entries}
-          index={previewing}
-          onIndex={setPreviewing}
-          onClose={() => setPreviewing(null)}
-          onEdit={(name) => { setPreviewing(null); setEditing(name); }}
+          root={root} path={path} entries={entries} index={viewing}
+          onIndex={setViewing} onClose={() => setViewing(null)}
+          onEdit={writable ? (name) => {
+            const hit = entries.find((e) => e.name === name);
+            setViewing(null);
+            if (hit) openEditor(hit);
+          } : undefined}
         />
       )}
-
+      {moving && (
+        <FolderPicker
+          roots={roots} fromRoot={root} fromPath={path} title={`移動 ${moving.length} 項到…`}
+          moving={moving.map((e) => e.name)}
+          onPick={(toRoot, toPath) => moveTo(moving, toRoot, toPath)}
+          onCancel={() => setMoving(null)}
+        />
+      )}
       <Modal
         open={newFolder !== null}
-        title="新增資料夾"
+        title="新資料夾"
         okText="建立" cancelText="取消"
+        confirmLoading={busy}
         onOk={() => void onCreateFolder()}
         onCancel={() => setNewFolder(null)}
         destroyOnHidden
       >
-        <Input
-          autoFocus
-          value={newFolder ?? ''}
-          placeholder="資料夾名稱"
-          onChange={(e) => setNewFolder(e.target.value)}
-          onPressEnter={() => void onCreateFolder()}
-        />
-        <Text type="secondary" style={{ fontSize: 11 }}>
-          建立在 {activeRoot?.label}{path ? ` / ${path}` : ''} 底下
-        </Text>
+        <Input autoFocus value={newFolder ?? ''} onChange={(e) => setNewFolder(e.target.value)}
+               onPressEnter={() => void onCreateFolder()} placeholder="名稱" style={{ fontFamily: MONO }} />
       </Modal>
-
       <Modal
         open={renaming !== null}
         title="重新命名"
-        okText="更名" cancelText="取消"
+        okText="改名" cancelText="取消"
+        confirmLoading={busy}
         onOk={() => void onRename()}
         onCancel={() => setRenaming(null)}
         destroyOnHidden
       >
-        <Input
-          autoFocus
-          value={renaming?.to ?? ''}
-          onChange={(e) => setRenaming((prev) => (prev ? { ...prev, to: e.target.value } : prev))}
-          onPressEnter={() => void onRename()}
-        />
-        <Text type="secondary" style={{ fontSize: 11 }}>
-          只是換個名字，位置不變。同名的東西已經存在時會拒絕。
-        </Text>
+        <Input autoFocus value={renaming?.to ?? ''}
+               onChange={(e) => setRenaming((r) => (r ? { ...r, to: e.target.value } : r))}
+               onPressEnter={() => void onRename()} style={{ fontFamily: MONO }} />
       </Modal>
-
-      <Modal
-        open={showKeys}
-        title="快捷鍵"
-        footer={null}
-        onCancel={() => setShowKeys(false)}
-      >
-        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px' }}>
-          {SHORTCUTS.map(([keys, what]) => (
-            <Fragment key={keys}>
-              <kbd
-                style={{
-                  fontFamily: MONO, fontSize: 11, padding: '2px 7px',
-                  border: '1px solid rgba(255,255,255,0.15)', borderRadius: 4,
-                  background: 'rgba(255,255,255,0.05)', whiteSpace: 'nowrap',
-                }}
-              >
-                {keys}
-              </kbd>
+      <Modal open={showKeys} title="快捷鍵" footer={null} onCancel={() => setShowKeys(false)}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', fontSize: 12 }}>
+          {SHORTCUTS.map(([key, what]) => (
+            <span key={key} style={{ display: 'contents' }}>
+              <Text code style={{ fontSize: 11 }}>{key}</Text>
               <Text style={{ fontSize: 12 }}>{what}</Text>
-            </Fragment>
+            </span>
           ))}
         </div>
       </Modal>
-
-      {moving && (
-        <FolderPicker
-          roots={roots}
-          fromRoot={root}
-          fromPath={path}
-          moving={moving}
-          title={moving.length === 1 ? `移動 ${moving[0]}` : `移動 ${moving.length} 項`}
-          onPick={(toRoot, toPath) => void onMove(toRoot, toPath)}
-          onCancel={() => setMoving(null)}
-        />
-      )}
-    </Space>
+    </div>
   );
 }
 
-/**
- * The same listing as pictures.
- *
- * Auto-fill rather than a fixed column count: this panel is the width of the
- * window minus a sidebar that collapses, and a grid that reflows is the whole
- * reason to use one.
- */
-function Grid({ entries, root, path, onOpen }: {
-  entries: FsEntry[];
-  root: string;
-  path: string;
-  onOpen: (entry: FsEntry) => void;
-}) {
+function Crumb({ label, last, onClick }: { label: string; last: boolean; onClick: () => void }) {
   return (
-    <div
+    <span
+      role="button" tabIndex={0}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onClick(); } }}
       style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(148px, 1fr))',
-        gap: 12,
-        maxHeight: 520,
-        overflowY: 'auto',
+        fontSize: 12, fontFamily: MONO, padding: '2px 6px', borderRadius: 4, cursor: 'pointer',
+        opacity: last ? 1 : 0.65, whiteSpace: 'nowrap',
       }}
+      className="fs-crumb"
     >
-      {entries.map((entry) => (
-        <div
-          key={`${entry.kind}:${entry.name}`}
-          onClick={() => onOpen(entry)}
-          style={{
-            cursor: entry.kind === 'other' ? 'default' : 'pointer',
-            border: '1px solid rgba(255,255,255,0.08)',
-            borderRadius: 6,
-            overflow: 'hidden',
-            background: 'rgba(255,255,255,0.02)',
-          }}
-        >
-          <div
-            style={{
-              height: 116, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', background: 'rgba(0,0,0,0.25)',
-            }}
-          >
-            {entry.media === 'image' && !entry.partial ? (
-              // Lazy so that a folder of four hundred renders costs four
-              // hundred requests only if somebody scrolls that far.
-              <img
-                src={fsThumbUrl(root, path, entry.name)}
-                alt={entry.name}
-                loading="lazy"
-                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-              />
-            ) : entry.kind === 'dir' ? (
-              <FolderOutlined style={{ fontSize: 30, opacity: 0.3 }} />
-            ) : (
-              <FileOutlined style={{ fontSize: 26, opacity: 0.25 }} />
-            )}
-          </div>
-          <div style={{ padding: '6px 8px' }}>
-            <Text
-              ellipsis={{ tooltip: entry.name }}
-              style={{ fontSize: 11, fontFamily: MONO, display: 'block' }}
-            >
-              {entry.name}
-            </Text>
-            <Text type="secondary" style={{ fontSize: 10, fontFamily: MONO }}>
-              {entry.kind === 'dir' ? '資料夾' : bytes(entry.size ?? 0)}
-            </Text>
-          </div>
-        </div>
-      ))}
-    </div>
+      {label}
+    </span>
   );
 }

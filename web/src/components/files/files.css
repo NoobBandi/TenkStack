@@ -1,0 +1,6 @@
+/* Hover states the inline styles cannot express. Selection is drawn inline
+ * (it is state); hover is here (it is not). */
+.fs-row:hover { background: rgba(255, 255, 255, 0.045); }
+.fs-crumb:hover { background: rgba(255, 255, 255, 0.07); opacity: 1 !important; }
+.fs-loc:hover { background: rgba(255, 255, 255, 0.045); }
+.fs-tile:hover { border-color: rgba(255, 255, 255, 0.22) !important; }

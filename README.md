@@ -115,7 +115,10 @@ AMD cards need the vendor's compute stack already present.
   never pass in a container, where ComfyUI must bind 0.0.0.0 and the
   console's login is what actually gates the UI. Remove the
   `# managed by TenkStack` line to take the hook over.
-- **Files** — the whole disk rather than one application's folders: declared
+- **Files** — laid out the way a file manager is: locations down the left,
+  the path as crumbs, the folder in the middle, and what the selection is on
+  the right; opening a text file adds a tab with Monaco underneath. The whole
+  disk rather than one application's folders: declared
   roots, a deny list the console cannot be talked out of, and previews for
   images, text, and weights — a GGUF or safetensors header is read in place, so
   a 20 GB file answers what it is without being moved. Uploads are chunked and
