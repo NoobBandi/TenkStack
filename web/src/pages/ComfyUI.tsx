@@ -5,20 +5,16 @@ import {
   Tooltip, Typography,
 } from 'antd';
 import {
-  CloudDownloadOutlined, DeleteOutlined, ExportOutlined, PlayCircleOutlined,
-  PlusOutlined, PoweroffOutlined, ReloadOutlined, StopOutlined, SyncOutlined,
+  ExportOutlined, PlayCircleOutlined, PlusOutlined, StopOutlined, SyncOutlined,
 } from '@ant-design/icons';
 import {
-  checkComfyVersion, comfyAction, controlContainer, fetchComfyInstances,
-  fetchComfyStorage, fetchContainerHistory, fetchRuntimes, interruptComfy,
-  restartComfy, setCardRole, updateComfy,
-  type ComfyConfig, type ComfyInstance, type ComfyStorage, type GpuSample,
-  type RuntimeCoverage,
+  controlContainer, fetchComfyInstances, fetchComfyStorage, fetchContainerHistory,
+  fetchRuntimes, interruptComfy, setCardRole,
+  type ComfyInstance, type ComfyStorage, type GpuSample, type RuntimeCoverage,
 } from '../api';
 import { useStream } from '../stream';
 import { useIsOwner } from '../identity';
-import ContainerSettings from './comfy-settings';
-import './comfy.css';
+import ContainerCard from './comfy-settings';
 import MetricChart from '../components/MetricChart';
 import { ACCENT, LINE, MONO, SERIES } from '../theme';
 
@@ -94,12 +90,6 @@ function cardFigures(instance: ComfyInstance, gpus: GpuSample[]) {
 /** Past this much held by something else, a picture of any size is at
  *  risk, and it is worth saying so before Run rather than after. */
 const CROWDED = 4 * 1024 ** 3;
-
-function ago(seconds: number | null): string {
-  if (seconds === null) return '';
-  const m = Math.round((Date.now() / 1000 - seconds) / 60);
-  return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : `${Math.round(m / 60)} 小時前`;
-}
 
 /**
  * Is it free, the way in, and what to do once inside.
@@ -402,219 +392,6 @@ function Resources({ instance, storage }: {
 }
 
 /**
- * The container: what it runs, what can be done to it, what it is made of.
- *
- * One card, because these are all things the administrator does to one
- * object, and split down the middle because they are done differently. On
- * the left, actions -- each a button with the sentence that says what it
- * costs, since as a row of equal buttons the only thing separating "update
- * the nodes" from "replace the whole runtime" was a tooltip nobody hovers.
- * On the right, the form: edited, then applied with one rebuild. Across the
- * top, what the container runs, which is what both sides act on. Remove is
- * last on the left, apart, because it is the one that does not come back.
- */
-function Container({ instance, staleAfterUpdate, onChanged, onRestarted }: {
-  instance: ComfyInstance;
-  /** True once an update has finished here but the process still runs the old
-   *  code, so the card can say what is left to do. */
-  staleAfterUpdate: boolean;
-  onChanged: () => void;
-  onRestarted: () => void;
-}) {
-  const { message } = AntApp.useApp();
-  const [checking, setChecking] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [config, setConfig] = useState<ComfyConfig | null>(null);
-
-  const name = instance.container;
-  const busy = instance.queue_running > 0;
-  const manager = instance.manager;
-  const updating = manager?.processing ?? false;
-
-  /** `done` is optional: an action that reports its own result says it once. */
-  const run = async (
-    label: string,
-    action: () => Promise<unknown>,
-    done?: string,
-  ) => {
-    setStarting(true);
-    try {
-      await action();
-      if (done) message.success(done);
-      onChanged();
-    } catch (error) {
-      message.error(`${label}失敗：${(error as Error).message}`);
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  // One call to ComfyUI's own repository. The button this replaced asked
-  // Manager to git-fetch every installed node -- forty round trips to GitHub
-  // and three minutes -- to answer a question 更新節點 answers on its way
-  // through anyway, since it fetches exactly the same forty before pulling.
-  const onCheck = async () => {
-    setChecking(true);
-    try {
-      const found = await checkComfyVersion(instance.port);
-      message.open({
-        type: found.available ? 'info' : 'success',
-        content: found.available ? `有新版 ${found.latest}` : '已是最新',
-      });
-      onChanged();
-    } catch (error) {
-      message.error(`查版本失敗：${(error as Error).message}`);
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const current = tagged(instance.version);
-  const latest = instance.latest;
-  const behind = !!current && !!latest && current !== latest;
-
-  const actions = [
-    {
-      key: 'nodes', label: '更新節點', icon: <CloudDownloadOutlined />,
-      note: '更新容器裡的 ComfyUI 與所有自訂節點，之後要重啟才生效',
-      loading: starting || updating, disabled: updating || !manager,
-      run: () => run('更新', () => updateComfy(instance.port), '已開始更新'),
-    },
-    {
-      key: 'image', label: '更新映像', icon: <CloudDownloadOutlined />,
-      note: '下載新的 docker 映像重建容器，換掉整個執行環境',
-      loading: starting, disabled: updating || !name,
-      run: () => run('更新映像', () => comfyAction(name!, 'update'), '已開始下載新映像並重建'),
-    },
-    {
-      key: 'restart', label: '重啟', icon: <ReloadOutlined />,
-      note: '重新啟動容器裡的 ComfyUI',
-      loading: starting, disabled: false,
-      run: () => run('重啟', async () => { await restartComfy(instance.port); onRestarted(); }, '已送出重啟'),
-    },
-    {
-      // Stopping keeps the container, and `--restart unless-stopped` means a
-      // container stopped by hand stays stopped across a reboot. That is the
-      // difference from 移除, and the reason both exist: one parks it, the
-      // other ends it.
-      key: 'stop', label: '停止', icon: <PoweroffOutlined />,
-      note: '停掉容器但留著，之後可以再啟動；重開機也不會自己起來',
-      loading: starting, disabled: !name,
-      run: () => run('停止', () => controlContainer(name!, 'stop'), '已停止'),
-    },
-  ];
-
-  const label = (text: string) => (
-    <Text type="secondary" style={{ fontSize: 11, letterSpacing: 1, display: 'block', marginBottom: 10 }}>
-      {text}
-    </Text>
-  );
-
-  return (
-    <Card
-      size="small"
-      title={
-        <Space size={8}>
-          <span style={{ fontSize: 12, opacity: 0.75 }}>容器</span>
-          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>{name ?? ''}</Text>
-        </Space>
-      }
-      extra={
-        <Space size={8} wrap>
-          <Text style={{ fontSize: 12, fontFamily: MONO }}>ComfyUI {current ?? '—'}</Text>
-          {behind ? (
-            <Tag color="gold" style={{ fontSize: 11, marginInlineEnd: 0 }}>有新版 {latest}</Tag>
-          ) : latest ? (
-            <Text type="secondary" style={{ fontSize: 11 }}>已是最新</Text>
-          ) : manager ? (
-            <Text type="secondary" style={{ fontSize: 11 }}>還沒查過</Text>
-          ) : (
-            <Tooltip title="沒有 ComfyUI-Manager，主控台無法替它查版本或更新">
-              <Text type="secondary" style={{ fontSize: 11 }}>沒有 Manager</Text>
-            </Tooltip>
-          )}
-          {staleAfterUpdate && !updating && (
-            // The files on disk changed; the running process did not. Saying
-            // so is the point -- an update that silently needs a restart looks
-            // like an update that did nothing.
-            <Tag color="gold" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，待重啟</Tag>
-          )}
-          {manager && (
-            <Button type="link" size="small" loading={checking} onClick={() => void onCheck()}
-                    style={{ padding: 0, height: 'auto', fontSize: 11 }}>
-              {instance.latest_checked_at ? `再查（${ago(instance.latest_checked_at)}查過）` : '查一下'}
-            </Button>
-          )}
-        </Space>
-      }
-    >
-      {/* What it runs: the image both halves act on -- 更新映像 replaces it,
-          the form rebuilds from it -- and the runtime inside it. */}
-      <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, display: 'block' }}>
-        {config?.image ?? '映像讀取中…'}
-        {config?.image_size ? ` ・ ${config.image_size}` : ''}
-        {instance.torch ? ` ・ torch ${instance.torch}` : ''}
-        {instance.python ? ` ・ Python ${instance.python}` : ''}
-        {` ・ :${instance.port}`}
-        {instance.public_port !== null ? ` → :${instance.public_port}` : ''}
-      </Text>
-
-      <Divider style={{ margin: '12px 0 14px' }} />
-
-      <div className="comfy-container-body"
-           style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 340px', minWidth: 0 }}>
-          {label('操作')}
-          <Space direction="vertical" size={8} style={{ width: '100%' }}>
-            {actions.map((action) => (
-              <div key={action.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <Button
-                  size="small" icon={action.icon}
-                  loading={action.loading} disabled={action.disabled}
-                  danger={action.key === 'restart' && busy}
-                  style={{ width: 104, flex: 'none' }}
-                  onClick={() => void action.run()}
-                >
-                  {action.label}
-                </Button>
-                <Text type="secondary" style={{ fontSize: 11, minWidth: 0 }}>{action.note}</Text>
-              </div>
-            ))}
-          </Space>
-
-          <Divider style={{ margin: '12px 0 10px' }} />
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Popconfirm
-              title={`移除 ${name ?? '這個容器'}？`}
-              description="容器會被刪掉，output 與設定檔留在磁碟上。"
-              okText="移除" cancelText="取消" okButtonProps={{ danger: true }}
-              disabled={!name}
-              onConfirm={() => void run('移除', () => comfyAction(name!, 'remove'), '已移除')}
-            >
-              <Button size="small" danger icon={<DeleteOutlined />} disabled={!name}
-                      style={{ width: 104, flex: 'none' }}>
-                移除
-              </Button>
-            </Popconfirm>
-            <Text type="secondary" style={{ fontSize: 11, minWidth: 0 }}>
-              刪掉容器本身。output、工作流程與設定都在磁碟上，不會跟著走
-            </Text>
-          </div>
-        </div>
-
-        {/* The rule between the halves is in comfy.css, drawn only while they
-            are side by side. */}
-        <div className="comfy-container-form" style={{ flex: '1 1 420px', minWidth: 0 }}>
-          {label('組成')}
-          <ContainerSettings instance={instance} onLoaded={setConfig} onDone={onChanged} />
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-/**
  * Cards that have nothing running on them.
  *
  * Two shapes, and both have to be here or one of them becomes unreachable. A
@@ -774,8 +551,8 @@ function InstanceSection({ instance, owner, staleAfterUpdate, onChanged, onResta
       <Hero instance={instance} slot={slot} onChanged={onChanged} />
       <Resources instance={instance} storage={storage} />
       {owner && (
-        <Container instance={instance} staleAfterUpdate={staleAfterUpdate}
-                   onChanged={onChanged} onRestarted={onRestarted} />
+        <ContainerCard instance={instance} staleAfterUpdate={staleAfterUpdate}
+                       onChanged={onChanged} onRestarted={onRestarted} />
       )}
     </div>
   );

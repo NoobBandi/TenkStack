@@ -52,15 +52,13 @@ func comfyError(w http.ResponseWriter, err error) {
 func (s *Server) readComfyInstances(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	found := s.ComfyProbe.Instances(ctx)
-	devices := s.Gpu.ListDevices(ctx)
-	byPort := s.Docker.PortCards(ctx, cardsOf(devices))
+	cards := s.cards(ctx)
+	byPort := s.Docker.PortCards(ctx, cards)
 	for i := range found {
 		found[i].Cards = []int{}
 		for _, address := range byPort[found[i].Port] {
-			for _, d := range devices {
-				if d.PCIBDFAddress != nil && containers.BusKey(*d.PCIBDFAddress) == containers.BusKey(address) {
-					found[i].Cards = append(found[i].Cards, d.Index)
-				}
+			if j := findCard(cards, address); j >= 0 {
+				found[i].Cards = append(found[i].Cards, j)
 			}
 		}
 	}
@@ -101,8 +99,7 @@ func (s *Server) comfyStorage(w http.ResponseWriter, r *http.Request) {
 // comfyContainerName is the container publishing a port: by the card
 // mapping first, else the only ComfyUI container there is.
 func (s *Server) comfyContainerName(ctx gocontext.Context, port int) string {
-	cards := cardsOf(s.Gpu.ListDevices(ctx))
-	for _, boxes := range s.Docker.ByCard(ctx, cards) {
+	for _, boxes := range s.Docker.ByCard(ctx, s.cards(ctx)) {
 		for _, box := range boxes {
 			if strings.HasPrefix(box.Name, comfy.Prefix+"-") && strings.Contains(box.Ports, fmt.Sprintf(":%d", port)) {
 				return box.Name
@@ -177,8 +174,7 @@ func (s *Server) comfyConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	devices := s.Gpu.ListDevices(ctx)
-	cards := cardsOf(devices)
+	cards := s.cards(ctx)
 	held := s.Docker.ByCard(ctx, cards)
 	name := s.comfyContainerName(ctx, port)
 	if name == "" {
@@ -240,12 +236,9 @@ func (s *Server) comfyConfig(w http.ResponseWriter, r *http.Request) {
 		p := s.Channels.PublicPort(*out.Port)
 		out.PublicPort = &p
 	}
-	for _, c := range devices {
-		address := ""
-		if c.PCIBDFAddress != nil {
-			address = *c.PCIBDFAddress
-		}
-		out.Cards = append(out.Cards, api.ComfyConfigCard{PCIBDFAddress: c.PCIBDFAddress, Name: c.Name, Vendor: c.Vendor,
+	for _, c := range cards {
+		address := c.PCIBDFAddress
+		out.Cards = append(out.Cards, api.ComfyConfigCard{PCIBDFAddress: &address, Name: c.Name, Vendor: c.Vendor,
 			Held: claimed[containers.BusKey(address)]})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -274,7 +267,7 @@ func (s *Server) comfyReconfigure(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnprocessableEntity, "invalid JSON body")
 		return
 	}
-	cards := cardsOf(s.Gpu.ListDevices(r.Context()))
+	cards := s.cards(r.Context())
 	keys := map[string]bool{}
 	for _, a := range in.Addresses {
 		if a != "" {
@@ -366,7 +359,7 @@ func (s *Server) setCardRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	cards := cardsOf(s.Gpu.ListDevices(ctx))
+	cards := s.cards(ctx)
 	i := findCard(cards, in.Address)
 	if i < 0 {
 		fail(w, http.StatusNotFound, "沒有這張卡")
@@ -447,7 +440,7 @@ func (s *Server) comfyAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "update":
-		cards := cardsOf(s.Gpu.ListDevices(ctx))
+		cards := s.cards(ctx)
 		held := s.Docker.ByCard(ctx, cards)
 		found := -1
 		for i, c := range cards {

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	gocontext "context"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -14,6 +15,24 @@ import (
 )
 
 // cardsOf is the GPU list as the container side sees it.
+// cards is the inventory alone -- index, name, vendor, address -- which is
+// all that mapping containers to cards needs. ListDevices also attaches
+// each card's detail and a live sample, two subprocesses per card, and a
+// handler that only wants to know which card is which should not pay
+// that on every call.
+func (s *Server) cards(ctx gocontext.Context) []vendors.Card {
+	found := s.Gpu.Discover(ctx)
+	out := make([]vendors.Card, 0, len(found))
+	for _, d := range found {
+		address := ""
+		if d.PCIBDFAddress != nil {
+			address = *d.PCIBDFAddress
+		}
+		out = append(out, vendors.Card{PCIBDFAddress: address, Name: d.Name, Vendor: d.Vendor})
+	}
+	return out
+}
+
 func cardsOf(devices []api.GpuDevice) []vendors.Card {
 	out := make([]vendors.Card, 0, len(devices))
 	for _, d := range devices {
