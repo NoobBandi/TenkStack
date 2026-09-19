@@ -98,16 +98,15 @@ export default function LogList({ lines, follow, onFollow, wrap, empty, notice }
     if (!bottom && follow) onFollow(false);
   }, [follow, onFollow]);
 
-  // The whole line, fields included: a Caddy or llama-swap line is mostly
-  // its fields, and a copy that left them behind would paste the headline
-  // of a problem without the problem.
+  // A line that was JSON is copied as that JSON, exactly as the program
+  // wrote it -- types and all, which the flattened fields lost. A plain line
+  // is copied as shown.
   const copy = async (line: JournalLine) => {
-    const head = `${clock(line.t)} ${line.label} ${LEVEL_SHORT[line.level] ?? line.level} ${line.text}`;
-    const fields = (line.fields ?? []).map(([k, v]) => `  ${k}: ${v}`);
-    const text = [head, ...fields].join('\n');
+    const text = line.raw
+      ?? `${clock(line.t)} ${line.label} ${LEVEL_SHORT[line.level] ?? line.level} ${line.text}`;
     try {
       await navigator.clipboard.writeText(text);
-      message.success({ content: '已複製這一行', duration: 1.5 });
+      message.success({ content: line.raw ? '已複製原始 JSON' : '已複製這一行', duration: 1.5 });
     } catch {
       message.error('複製不了，瀏覽器不給剪貼簿');
     }

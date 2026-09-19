@@ -12,6 +12,11 @@ type JournalLine struct {
 	// Noise marks the console's own polling of llama-swap and Caddy: a
 	// loopback GET every few seconds that the page hides by default.
 	Noise bool `json:"noise,omitempty"`
+	// Raw is the line as the program wrote it, only when that was a JSON
+	// object: Text and Fields are the console's reading of it, with the
+	// types flattened away, and a copy should be able to give back the
+	// original.
+	Raw string `json:"raw,omitempty"`
 }
 
 // LogsQuery is a window of history: the newest lines that matched, with

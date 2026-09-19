@@ -61,3 +61,15 @@ func TestContainerLineBlankIsDropped(t *testing.T) {
 		t.Fatalf("a real line parsed as %+v, %v", line, ok)
 	}
 }
+
+func TestRawJSONOnlyForObjects(t *testing.T) {
+	if got := rawJSON(`  {"level":"warn","msg":"x","n":1}`); got != `{"level":"warn","msg":"x","n":1}` {
+		t.Fatalf("json line not kept raw: %q", got)
+	}
+	if got := rawJSON(`[INFO] Request 127.0.0.1 "GET /running"`); got != "" {
+		t.Fatalf("plain line got a raw: %q", got)
+	}
+	if got := rawJSON(`{not json`); got != "" {
+		t.Fatalf("broken json got a raw: %q", got)
+	}
+}

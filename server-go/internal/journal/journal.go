@@ -275,7 +275,16 @@ func parseJournalEntry(raw []byte) (api.JournalLine, string, bool) {
 		}
 	}
 	return api.JournalLine{T: seconds, Unit: unit, Label: label, Level: lvl, Text: summary, Fields: fields,
-		Noise: isNoise(clean)}, cursor, true
+		Noise: isNoise(clean), Raw: rawJSON(clean)}, cursor, true
+}
+
+// rawJSON is the line itself when it is one JSON object, else nothing.
+func rawJSON(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		return trimmed
+	}
+	return ""
 }
 
 // containers lists the ComfyUI containers that exist, running or not: a
@@ -384,5 +393,5 @@ func parseContainerLine(name, raw string) (api.JournalLine, bool) {
 	clean := ansi.ReplaceAllString(text, "")
 	summary, lvl, fields := structure(clean, keywordLevel(clean))
 	return api.JournalLine{T: seconds, Unit: name, Label: comfyLabel, Level: lvl, Text: summary, Fields: fields,
-		Noise: isNoise(clean)}, true
+		Noise: isNoise(clean), Raw: rawJSON(clean)}, true
 }

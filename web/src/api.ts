@@ -1262,6 +1262,8 @@ export interface JournalLine {
   text: string;
   /** The console's own polling of llama-swap and Caddy, hidden by default. */
   noise?: boolean;
+  /** The line as the program wrote it, when that was a JSON object. */
+  raw?: string;
   /** Key/value pairs behind an expander, for lines that carried structure.
    *  Null when there is nothing more than the text itself. */
   fields: [string, string][] | null;
