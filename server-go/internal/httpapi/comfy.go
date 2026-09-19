@@ -149,6 +149,32 @@ func (s *Server) comfyRestart(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, api.OK{OK: true})
 }
 
+// comfyStop stops the container, after letting the instance finish
+// stopping: the queue is emptied and the current generation interrupted
+// first, so docker's ten-second grace does not end in a kill mid-step.
+func (s *Server) comfyStop(w http.ResponseWriter, r *http.Request) {
+	if _, d := s.Auth.RequireOwner(r); d != nil {
+		denied(w, d)
+		return
+	}
+	port, ok := s.comfyPort(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	name := s.comfyContainerName(ctx, port)
+	if name == "" {
+		fail(w, http.StatusNotFound, "找不到對應的 ComfyUI 容器")
+		return
+	}
+	s.ComfyProbe.Quiesce(ctx, port, 15*time.Second)
+	if !s.Docker.Control(ctx, name, "stop") {
+		fail(w, http.StatusBadGateway, "docker stop 失敗，詳細原因在主控台的日誌裡")
+		return
+	}
+	writeJSON(w, http.StatusOK, api.OK{OK: true})
+}
+
 func (s *Server) comfyInterrupt(w http.ResponseWriter, r *http.Request) {
 	port, ok := s.comfyPort(w, r)
 	if !ok {

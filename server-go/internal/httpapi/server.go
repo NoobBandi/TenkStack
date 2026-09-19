@@ -172,6 +172,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/comfyui/config", s.comfyConfig)
 	mux.HandleFunc("POST /api/comfyui/config", s.comfyReconfigure)
 	mux.HandleFunc("POST /api/comfyui/restart", s.comfyRestart)
+	mux.HandleFunc("POST /api/comfyui/stop", s.comfyStop)
 	mux.HandleFunc("POST /api/comfyui/interrupt", s.comfyInterrupt)
 	mux.HandleFunc("GET /api/runtimes", s.readRuntimes)
 	mux.HandleFunc("POST /api/runtimes/card", s.setCardRole)

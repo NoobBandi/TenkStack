@@ -766,6 +766,10 @@ export const fetchComfyStorage = (port: number) =>
   get<ComfyStorage>(`/comfyui/storage?port=${port}`);
 export const updateComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/update?port=${port}`, 'POST');
+/** Empties the queue, interrupts the current generation, then stops the
+ *  container -- so a picture in progress is cancelled, not killed. */
+export const stopComfy = (port: number) =>
+  send<{ ok: boolean }>(`/comfyui/stop?port=${port}`, 'POST');
 export const restartComfy = (port: number) =>
   send<{ ok: boolean }>(`/comfyui/restart?port=${port}`, 'POST');
 

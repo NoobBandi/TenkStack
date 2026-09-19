@@ -27,8 +27,8 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import {
-  checkComfyVersion, comfyAction, controlContainer, fetchComfyConfig,
-  restartComfy, saveComfyConfig, updateComfy,
+  checkComfyVersion, comfyAction, fetchComfyConfig, restartComfy,
+  saveComfyConfig, stopComfy, updateComfy,
   type ComfyConfig, type ComfyInstance,
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -261,10 +261,12 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
             // reboot. That is the difference from 移除, and the reason both
             // exist: one parks it, the other ends it.
             title={`停止 ${name ?? '這個容器'}？`}
-            description="容器留著，之後可以再啟動；重開機也不會自己起來。"
+            description={busy
+              ? '正在算的那張會先被中斷，排隊的會被清掉。容器留著，之後可以再啟動；重開機也不會自己起來。'
+              : '容器留著，之後可以再啟動；重開機也不會自己起來。'}
             okText="停止" cancelText="取消"
             disabled={!name}
-            onConfirm={() => void run('停止', () => controlContainer(name!, 'stop'), '已停止')}
+            onConfirm={() => void run('停止', () => stopComfy(instance.port), '已停止')}
           >
             <Button size="small" icon={<PoweroffOutlined />} disabled={!name} loading={working}>停止</Button>
           </Popconfirm>

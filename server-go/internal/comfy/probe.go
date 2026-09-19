@@ -457,6 +457,39 @@ func (p *Probe) Interrupt(ctx context.Context, port int) (bool, error) {
 	return resp.StatusCode == 200 || resp.StatusCode == 204, nil
 }
 
+// Quiesce empties the queue and interrupts whatever is being generated,
+// then waits for the worker to actually stop, so a container about to be
+// stopped is not killed mid-step. docker stop gives the process ten
+// seconds and ComfyUI's launcher does not pass the signal on, so without
+// this a running generation ends in SIGKILL and the picture is lost.
+// Pending prompts are cleared first: interrupting alone would start the
+// next one. Best effort; a container that is not answering is stopped
+// anyway.
+func (p *Probe) Quiesce(ctx context.Context, port int, wait time.Duration) {
+	p.post(ctx, 5*time.Second, base(port)+"/queue", map[string]any{"clear": true})
+	p.post(ctx, 5*time.Second, base(port)+"/interrupt", nil)
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		resp, err := p.get(ctx, base(port)+"/queue")
+		if err != nil {
+			return
+		}
+		queue, err := decode(resp)
+		if err != nil {
+			return
+		}
+		running, _ := queue["queue_running"].([]any)
+		if len(running) == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // Free asks an instance to unload its models; it returns as soon as the
 // flag is set, so the caller waits for the memory to actually go.
 func (p *Probe) Free(ctx context.Context, port int) error {
