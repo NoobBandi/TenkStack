@@ -307,7 +307,7 @@ function Resources({ instance, storage }: {
     if (!name) return;
     try {
       const series = (await fetchContainerHistory(window, 240)).series[name] ?? [];
-      setCpu(series.map((p) => ({ t: p.t, v: p.cpu === null ? null : p.cpu / 100 })));
+      setCpu(series.map((p) => ({ t: p.t, v: p.cpu })));
       setMemory(series.map((p) => ({ t: p.t, v: p.memory })));
     } catch {
       // Leave whatever is on screen rather than blanking the panels.
@@ -331,7 +331,7 @@ function Resources({ instance, storage }: {
   useEffect(() => {
     const sample = name ? containers.find((c) => c.name === name) : undefined;
     if (!sample) return;
-    setCpu((prev) => append(prev, { t: sample.t, v: sample.cpu_percent === null ? null : sample.cpu_percent / 100 }));
+    setCpu((prev) => append(prev, { t: sample.t, v: sample.cpu_percent }));
     setMemory((prev) => append(prev, { t: sample.t, v: sample.memory }));
   }, [containers, name, append]);
 
@@ -360,10 +360,13 @@ function Resources({ instance, storage }: {
           label="CPU"
           points={cpu}
           colour={SERIES.temp}
-          max={cores ?? 16}
-          axis={(v) => `${v}`}
-          format={(v) => `${v.toFixed(1)} 核`}
-          note={cores ? `共 ${cores} 核` : undefined}
+          // The figure docker stats prints: one core flat out is 100%, so
+          // the top of the axis is every core at once. The same number the
+          // runtime page shows for this container.
+          max={(cores ?? 16) * 100}
+          axis={(v) => `${v}%`}
+          format={(v) => `${v.toFixed(0)}%`}
+          note={cores ? `100% 是一核，共 ${cores} 核` : undefined}
         />
         <MetricChart
           label="記憶體"
