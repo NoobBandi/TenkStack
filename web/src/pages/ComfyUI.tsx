@@ -366,7 +366,7 @@ function Resources({ instance, storage }: {
           max={(cores ?? 16) * 100}
           axis={(v) => `${v}%`}
           format={(v) => `${v.toFixed(0)}%`}
-          note={cores ? `100% 是一核，共 ${cores} 核` : undefined}
+          note={cores ? `100% 是 1 核，共 ${cores} 核` : undefined}
         />
         <MetricChart
           label="記憶體"
