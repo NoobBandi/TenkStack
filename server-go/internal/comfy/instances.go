@@ -142,6 +142,7 @@ func (m *Manager) mkdirs(slot string) error {
 			return err
 		}
 	}
+	m.Seed()
 	return nil
 }
 

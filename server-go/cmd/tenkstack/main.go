@@ -167,6 +167,12 @@ func main() {
 	defer stop()
 	// Sampling starts with the process, not the first browser: the chart
 	// should show the last hours on load rather than begin at zero.
+	// Existing instances get the pre-start hook and the Manager flag too,
+	// not only ones made from now on; nothing to do on a machine that has
+	// never had ComfyUI.
+	if _, err := os.Stat(filepath.Join(layout.ComfyDir, "storage-user")); err == nil {
+		srv.Comfy.Seed()
+	}
 	history.Start(ctx)
 	defer history.Stop()
 	containerStats.Start(ctx)

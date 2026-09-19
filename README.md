@@ -108,7 +108,13 @@ AMD cards need the vendor's compute stack already present.
   host sees it (so a language model crowding it is named before Run, not after),
   what its directories weigh, maintenance, and how it is built. The newest
   ComfyUI release is looked up hourly with one call; updates run through
-  ComfyUI-Manager.
+  ComfyUI-Manager. The console also seeds the instance's shared user storage
+  so the Manager's own "Install via Git URL" works out of the box: it sets
+  `allow_git_url_install` and writes the image's `pre-start.sh` hook, which
+  drops the Manager's loopback-listener test on every start -- a test that can
+  never pass in a container, where ComfyUI must bind 0.0.0.0 and the
+  console's login is what actually gates the UI. Remove the
+  `# managed by TenkStack` line to take the hook over.
 - **Files** — the whole disk rather than one application's folders: declared
   roots, a deny list the console cannot be talked out of, and previews for
   images, text, and weights — a GGUF or safetensors header is read in place, so
