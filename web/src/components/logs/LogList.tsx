@@ -98,8 +98,13 @@ export default function LogList({ lines, follow, onFollow, wrap, empty, notice }
     if (!bottom && follow) onFollow(false);
   }, [follow, onFollow]);
 
+  // The whole line, fields included: a Caddy or llama-swap line is mostly
+  // its fields, and a copy that left them behind would paste the headline
+  // of a problem without the problem.
   const copy = async (line: JournalLine) => {
-    const text = `${clock(line.t)} ${line.label} ${LEVEL_SHORT[line.level] ?? line.level} ${line.text}`;
+    const head = `${clock(line.t)} ${line.label} ${LEVEL_SHORT[line.level] ?? line.level} ${line.text}`;
+    const fields = (line.fields ?? []).map(([k, v]) => `  ${k}: ${v}`);
+    const text = [head, ...fields].join('\n');
     try {
       await navigator.clipboard.writeText(text);
       message.success({ content: '已複製這一行', duration: 1.5 });

@@ -153,9 +153,13 @@ export default function Logs() {
     });
   };
 
+  // Fields go with their line here too, indented under it, so a saved log
+  // holds what the expander showed.
   const download = () => {
-    const text = lines.map((l) =>
-      `${dayjs(l.t * 1000).format('YYYY-MM-DD HH:mm:ss')} ${l.label} ${l.level.toUpperCase()} ${l.text}`).join('\n');
+    const text = lines.map((l) => [
+      `${dayjs(l.t * 1000).format('YYYY-MM-DD HH:mm:ss')} ${l.label} ${l.level.toUpperCase()} ${l.text}`,
+      ...(l.fields ?? []).map(([k, v]) => `  ${k}: ${v}`),
+    ].join('\n')).join('\n');
     const blob = new Blob([text + '\n'], { type: 'text/plain;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
