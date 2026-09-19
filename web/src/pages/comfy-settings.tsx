@@ -71,8 +71,8 @@ export function joinArgs(device: number, extra: string, cardCount: number): stri
 
 /** How wide an editable control gets. The value column runs the width of
  *  the card, and a card list or a flag box stretched across all of it is
- *  mostly empty; this is enough for a card's name or a long flag. */
-const CONTROL_WIDTH = 520;
+ *  mostly empty; this leaves the action column its own room. */
+const CONTROL_WIDTH = 760;
 
 /** system_stats says "0.36.0"; the release list says "v0.36.0". */
 const tagged = (v: unknown) => (typeof v === 'string' && v ? 'v' + v.replace(/^v/, '') : null);
@@ -242,6 +242,42 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
         <Space size={8}>
           <span style={{ fontSize: 12, opacity: 0.75 }}>容器</span>
           <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>{name ?? ''}</Text>
+        </Space>
+      }
+      // The container as a whole -- restart, stop, remove -- up in the
+      // header, apart from the rows, which are about its parts. What stop
+      // and remove cost is asked on the click, since both are the kind of
+      // thing to be sure about.
+      extra={
+        <Space size={8}>
+          <Button size="small" icon={<ReloadOutlined />} danger={busy} loading={working}
+                  onClick={() => void run('重啟', async () => { await restartComfy(instance.port); onRestarted(); }, '已送出重啟')}>
+            重啟
+          </Button>
+          <Popconfirm
+            // Stopping keeps the container, and `--restart unless-stopped`
+            // means a container stopped by hand stays stopped across a
+            // reboot. That is the difference from 移除, and the reason both
+            // exist: one parks it, the other ends it.
+            title={`停止 ${name ?? '這個容器'}？`}
+            description="容器留著，之後可以再啟動；重開機也不會自己起來。"
+            okText="停止" cancelText="取消"
+            disabled={!name}
+            onConfirm={() => void run('停止', () => controlContainer(name!, 'stop'), '已停止')}
+          >
+            <Button size="small" icon={<PoweroffOutlined />} disabled={!name} loading={working}>停止</Button>
+          </Popconfirm>
+          <Popconfirm
+            title={`移除 ${name ?? '這個容器'}？`}
+            description="容器會被刪掉。output、工作流程與設定都在磁碟上，不會跟著走。"
+            okText="移除" cancelText="取消" okButtonProps={{ danger: true }}
+            disabled={!name}
+            onConfirm={() => void run('移除', () => comfyAction(name!, 'remove'), '已移除')}
+          >
+            <Tooltip title="刪掉容器本身；磁碟上的東西都留著">
+              <Button size="small" danger icon={<DeleteOutlined />} disabled={!name} loading={working}>移除</Button>
+            </Tooltip>
+          </Popconfirm>
         </Space>
       }
       styles={{ body: { paddingTop: 0 } }}
@@ -422,14 +458,15 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
           )}
         </Row>
 
-        {/* Two groups on the last row. Left, the rows above are applied
-            with one rebuild. Right, the container as a whole: restart,
-            stop, remove -- what each costs is asked on the click, since
-            two of them are the kind of thing to be sure about. */}
+        {/* The rows above are applied with one rebuild, from the corner the
+            eye reaches last. */}
         <div style={{
-          display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'flex-end',
           padding: '12px 0 0', borderTop: `1px solid ${LINE.faint}`,
         }}>
+          {changed
+            ? <Button size="small" onClick={() => void loadConfig()}>還原</Button>
+            : <Text type="secondary" style={{ fontSize: 11 }}>{config ? '目前沒有變更' : ''}</Text>}
           <Popconfirm
             title="重建這個容器？"
             description="容器本身會被換掉。輸出目錄與設定檔留在磁碟上。"
@@ -441,40 +478,6 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
               套用並重建
             </Button>
           </Popconfirm>
-          {changed
-            ? <Button size="small" onClick={() => void loadConfig()}>還原</Button>
-            : <Text type="secondary" style={{ fontSize: 11 }}>{config ? '目前沒有變更' : ''}</Text>}
-
-          <Space size={8} style={{ marginLeft: 'auto' }}>
-            <Button size="small" icon={<ReloadOutlined />} danger={busy} loading={working}
-                    onClick={() => void run('重啟', async () => { await restartComfy(instance.port); onRestarted(); }, '已送出重啟')}>
-              重啟
-            </Button>
-            <Popconfirm
-              // Stopping keeps the container, and `--restart unless-stopped`
-              // means a container stopped by hand stays stopped across a
-              // reboot. That is the difference from 移除, and the reason both
-              // exist: one parks it, the other ends it.
-              title={`停止 ${name ?? '這個容器'}？`}
-              description="容器留著，之後可以再啟動；重開機也不會自己起來。"
-              okText="停止" cancelText="取消"
-              disabled={!name}
-              onConfirm={() => void run('停止', () => controlContainer(name!, 'stop'), '已停止')}
-            >
-              <Button size="small" icon={<PoweroffOutlined />} disabled={!name} loading={working}>停止</Button>
-            </Popconfirm>
-            <Popconfirm
-              title={`移除 ${name ?? '這個容器'}？`}
-              description="容器會被刪掉。output、工作流程與設定都在磁碟上，不會跟著走。"
-              okText="移除" cancelText="取消" okButtonProps={{ danger: true }}
-              disabled={!name}
-              onConfirm={() => void run('移除', () => comfyAction(name!, 'remove'), '已移除')}
-            >
-              <Tooltip title="刪掉容器本身；磁碟上的東西都留著">
-                <Button size="small" danger icon={<DeleteOutlined />} disabled={!name} loading={working}>移除</Button>
-              </Tooltip>
-            </Popconfirm>
-          </Space>
         </div>
       </div>
     </Card>
