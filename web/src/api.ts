@@ -722,6 +722,10 @@ export const fetchDownloads = () => get<DownloadStatus[]>('/catalog/downloads');
  *  the only place the current answer exists. */
 export interface ComfyConfig {
   name: string;
+  /** What the container runs, with its size on this disk when docker can
+   *  say -- the thing 更新映像 replaces. */
+  image: string;
+  image_size: string | null;
   cli_args: string;
   /** Where the container publishes on loopback. The outward port is derived
    *  from it, so this is the one that can be chosen. */

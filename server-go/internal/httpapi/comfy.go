@@ -209,6 +209,11 @@ func (s *Server) comfyConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	image, _ := config["Image"].(string)
+	var imageSize *string
+	if size, ok := s.Docker.ImageSizes(ctx)[image]; ok {
+		imageSize = &size
+	}
 	claimed := map[string]bool{}
 	for key, boxes := range held {
 		for _, box := range boxes {
@@ -217,7 +222,8 @@ func (s *Server) comfyConfig(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	out := api.ComfyConfig{Name: name, CLIArgs: cliArgs, Ports: s.Ports.ComfyPorts(), Devices: devs, Cards: []api.ComfyConfigCard{}}
+	out := api.ComfyConfig{Name: name, Image: image, ImageSize: imageSize, CLIArgs: cliArgs, Ports: s.Ports.ComfyPorts(),
+		Devices: devs, Cards: []api.ComfyConfigCard{}}
 	if bindings, _ := hostConfig["PortBindings"].(map[string]any); bindings != nil {
 		for _, list := range bindings {
 			items, _ := list.([]any)

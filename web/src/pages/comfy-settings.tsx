@@ -1,10 +1,9 @@
 /**
- * Everything the container is, in one block.
+ * What the container is made of: the form half of the container card.
  *
- * Kept apart from what the instance is *doing*, which is the left-hand side.
- * These are the two questions an operator has and they do not interleave: one
- * is answered by pressing something and watching, the other by editing a form
- * and rebuilding.
+ * The card itself lives on the page, beside the actions, because both are
+ * things the administrator does to one container. This is only the part
+ * that is edited and then applied with a rebuild.
  *
  * Cards are a list rather than a row of checkboxes. Two cards fit either way;
  * a list is what still reads when a machine has four, and it gives each card
@@ -13,8 +12,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, InputNumber, Popconfirm, Segmented,
-  Space, Tag, Typography,
+  Alert, App as AntApp, Button, InputNumber, Popconfirm, Segmented, Space, Tag,
+  Typography,
 } from 'antd';
 import {
   fetchComfyConfig, saveComfyConfig,
@@ -59,8 +58,11 @@ export function joinArgs(device: number, extra: string, cardCount: number): stri
   return [generated, extra.replace(/\s+/g, ' ').trim()].filter(Boolean).join(' ');
 }
 
-export default function ContainerSettings({ instance, onDone }: {
+export default function ContainerSettings({ instance, onLoaded, onDone }: {
   instance: ComfyInstance;
+  /** The config as read, so the card around this can say what the
+   *  container runs without asking a second time. */
+  onLoaded?: (config: ComfyConfig) => void;
   onDone: () => void;
 }) {
   const { message } = AntApp.useApp();
@@ -78,6 +80,7 @@ export default function ContainerSettings({ instance, onDone }: {
       const held = found.cards.filter((c) => c.held);
       const parts = splitArgs(found.cli_args);
       setConfig(found);
+      onLoaded?.(found);
       setDual(held.length > 1);
       setPrimary(held[Math.min(parts.device, Math.max(held.length - 1, 0))]
         ?.pci_bdf_address ?? '');
@@ -88,7 +91,7 @@ export default function ContainerSettings({ instance, onDone }: {
       // rebuild.
       setConfig(null);
     }
-  }, [instance.port]);
+  }, [instance.port, onLoaded]);
 
   useEffect(() => { void loadConfig(); }, [loadConfig]);
 
@@ -122,166 +125,158 @@ export default function ContainerSettings({ instance, onDone }: {
   };
 
   return (
-    <Card
-      size="small"
-      title={<span style={{ fontSize: 12, opacity: 0.75 }}>容器設定</span>}
-      extra={<Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-        {config.name}
-      </Text>}
-    >
-      <Space direction="vertical" size={18} style={{ width: '100%' }}>
-        <div>
-          <Text style={{ fontSize: 13 }}>顯示卡</Text>
-          <div style={{ marginTop: 8 }}>
-            <Segmented
-              size="small"
-              value={dual ? 'dual' : 'single'}
-              onChange={(v) => {
-                const next = v === 'dual';
-                setDual(next);
-                // Leaving dual, the primary is the one that was doing the work,
-                // so it is the one to keep.
-                if (!next && !primary) setPrimary(addresses[0] ?? '');
-              }}
-              options={[
-                { value: 'single', label: '單卡' },
-                { value: 'dual', label: `${addresses.length} 張卡`,
-                  disabled: addresses.length < 2 },
-              ]}
-            />
-          </div>
+    <Space direction="vertical" size={18} style={{ width: '100%' }}>
+      <div>
+        <Text style={{ fontSize: 13 }}>顯示卡</Text>
+        <div style={{ marginTop: 8 }}>
+          <Segmented
+            size="small"
+            value={dual ? 'dual' : 'single'}
+            onChange={(v) => {
+              const next = v === 'dual';
+              setDual(next);
+              // Leaving dual, the primary is the one that was doing the work,
+              // so it is the one to keep.
+              if (!next && !primary) setPrimary(addresses[0] ?? '');
+            }}
+            options={[
+              { value: 'single', label: '單卡' },
+              { value: 'dual', label: `${addresses.length} 張卡`,
+                disabled: addresses.length < 2 },
+            ]}
+          />
+        </div>
 
-          {/* A list, one row per card, each saying whether it is in and whether
-              it is the one doing the work. */}
-          <div style={{ marginTop: 10, border: `1px solid ${LINE.faint}`, borderRadius: 6 }}>
-            {config.cards.map((card, i) => {
-              const address = card.pci_bdf_address ?? '';
-              const included = chosen.includes(address);
-              const isPrimary = address === primary && included;
-              return (
-                <div
-                  key={address || i}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setPrimary(address)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') setPrimary(address); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '9px 12px', cursor: 'pointer',
-                    borderTop: i === 0 ? 'none' : `1px solid ${LINE.faint}`,
-                    background: isPrimary ? 'rgba(255,255,255,0.04)' : undefined,
-                    opacity: included ? 1 : 0.4,
-                  }}
-                >
-                  <span style={{
-                    width: 8, height: 8, borderRadius: '50%', flex: 'none',
-                    background: isPrimary ? ACCENT.ok
-                      : included ? LINE.medium : 'transparent',
-                    border: included ? 'none' : `1px solid ${LINE.soft}`,
-                  }} />
-                  <Text style={{ fontSize: 13, flex: 'none' }}>卡 {i}</Text>
-                  <Text type="secondary" style={{
-                    fontSize: 11, flex: '1 1 auto', minWidth: 0,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>
-                    {card.name}
-                  </Text>
-                  {isPrimary && (
-                    <Tag color="green" style={{ marginInlineEnd: 0, fontSize: 10 }}>主要</Tag>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Not a disclaimer -- the thing worth knowing before spending twenty
-              minutes here. Only once a second card is actually in. */}
-          {chosen.length > 1 && (
-            <Alert
-              style={{ marginTop: 10 }}
-              type="info"
-              message={
-                <Text style={{ fontSize: 12 }}>
-                  ComfyUI 一次只會在主要那張卡上算圖。另一張要靠 MultiGPU 節點
-                  才用得到，重建時會自動裝進容器裡；之後在工作流程裡用它的
-                  Loader 節點指定哪個部分放哪張卡。
+        {/* A list, one row per card, each saying whether it is in and whether
+            it is the one doing the work. */}
+        <div style={{ marginTop: 10, border: `1px solid ${LINE.faint}`, borderRadius: 6 }}>
+          {config.cards.map((card, i) => {
+            const address = card.pci_bdf_address ?? '';
+            const included = chosen.includes(address);
+            const isPrimary = address === primary && included;
+            return (
+              <div
+                key={address || i}
+                role="button"
+                tabIndex={0}
+                onClick={() => setPrimary(address)}
+                onKeyDown={(e) => { if (e.key === 'Enter') setPrimary(address); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '9px 12px', cursor: 'pointer',
+                  borderTop: i === 0 ? 'none' : `1px solid ${LINE.faint}`,
+                  background: isPrimary ? 'rgba(255,255,255,0.04)' : undefined,
+                  opacity: included ? 1 : 0.4,
+                }}
+              >
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', flex: 'none',
+                  background: isPrimary ? ACCENT.ok
+                    : included ? LINE.medium : 'transparent',
+                  border: included ? 'none' : `1px solid ${LINE.soft}`,
+                }} />
+                <Text style={{ fontSize: 13, flex: 'none' }}>卡 {i}</Text>
+                <Text type="secondary" style={{
+                  fontSize: 11, flex: '1 1 auto', minWidth: 0,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  {card.name}
                 </Text>
-              }
-            />
-          )}
+                {isPrimary && (
+                  <Tag color="green" style={{ marginInlineEnd: 0, fontSize: 10 }}>主要</Tag>
+                )}
+              </div>
+            );
+          })}
         </div>
 
-        <div>
-          <Text style={{ fontSize: 13 }}>對外連接埠</Text>
-          <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center' }}>
-            <InputNumber
-              size="small"
-              value={port}
-              onChange={(v) => setPort(v ?? null)}
-              min={1024}
-              max={65535}
-              style={{ width: 110 }}
-            />
-            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-              → 對外 {port === config.port ? (config.public_port ?? '—')
-                : '重建後決定'}
-            </Text>
-          </div>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            這是容器在本機上的連接埠，對外的那個由它推算。
-            {port !== null && !config.ports.includes(port) && (
-              // Outside the convention the console still finds it, but only by
-              // asking docker what this container publishes -- so a container
-              // that is not running is one it cannot look up.
-              ' 這個號碼在慣例的 ' + config.ports[0] + '-'
-              + config.ports[config.ports.length - 1]
-              + ' 之外，主控台會改用容器實際發佈的埠去找，容器停掉時就找不到。'
-            )}
-          </Text>
-        </div>
+        {/* Not a disclaimer -- the thing worth knowing before spending twenty
+            minutes here. Only once a second card is actually in. */}
+        {chosen.length > 1 && (
+          <Alert
+            style={{ marginTop: 10 }}
+            type="info"
+            message={
+              <Text style={{ fontSize: 12 }}>
+                ComfyUI 一次只會在主要那張卡上算圖。另一張要靠 MultiGPU 節點
+                才用得到，重建時會自動裝進容器裡；之後在工作流程裡用它的
+                Loader 節點指定哪個部分放哪張卡。
+              </Text>
+            }
+          />
+        )}
+      </div>
 
-        <div>
-          <Text style={{ fontSize: 13 }}>額外參數</Text>
-          <div style={{ marginTop: 8 }}>
-            <FlagPicker
-              source={{ kind: 'comfyui', container: config.name }}
-              value={extra}
-              onChange={setExtra}
-              // Written by the console from the card list above; a typed copy
-              // would fight it.
-              reserved={['--default-device']}
-            />
-          </div>
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            一行一個。顯示卡由上面的清單決定，不用寫在這裡。
-          </Text>
-        </div>
-
-        <div>
-          {/* What the container will actually receive. The console writes part
-              of it, so it says which part rather than leaving someone to guess
-              what the list above did. */}
+      <div>
+        <Text style={{ fontSize: 13 }}>對外連接埠</Text>
+        <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center' }}>
+          <InputNumber
+            size="small"
+            value={port}
+            onChange={(v) => setPort(v ?? null)}
+            min={1024}
+            max={65535}
+            style={{ width: 110 }}
+          />
           <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-            CLI_ARGS = {composed || '（空的，用預設）'}
+            → 對外 {port === config.port ? (config.public_port ?? '—')
+              : '重建後決定'}
           </Text>
-          <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
-            <Popconfirm
-              title="重建這個容器？"
-              description="容器本身會被換掉。輸出目錄與設定檔留在磁碟上。"
-              okText="重建" cancelText="取消"
-              disabled={!changed || !chosen.length}
-              onConfirm={() => void save()}
-            >
-              <Button type="primary" loading={saving} disabled={!changed || !chosen.length}>
-                套用並重建
-              </Button>
-            </Popconfirm>
-            {changed
-              ? <Button onClick={() => void loadConfig()}>還原</Button>
-              : <Text type="secondary" style={{ fontSize: 12 }}>目前沒有變更</Text>}
-          </div>
         </div>
-      </Space>
-    </Card>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          這是容器在本機上的連接埠，對外的那個由它推算。
+          {port !== null && !config.ports.includes(port) && (
+            // Outside the convention the console still finds it, but only by
+            // asking docker what this container publishes -- so a container
+            // that is not running is one it cannot look up.
+            ' 這個號碼在慣例的 ' + config.ports[0] + '-'
+            + config.ports[config.ports.length - 1]
+            + ' 之外，主控台會改用容器實際發佈的埠去找，容器停掉時就找不到。'
+          )}
+        </Text>
+      </div>
+
+      <div>
+        <Text style={{ fontSize: 13 }}>額外參數</Text>
+        <div style={{ marginTop: 8 }}>
+          <FlagPicker
+            source={{ kind: 'comfyui', container: config.name }}
+            value={extra}
+            onChange={setExtra}
+            // Written by the console from the card list above; a typed copy
+            // would fight it.
+            reserved={['--default-device']}
+          />
+        </div>
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          一行一個。顯示卡由上面的清單決定，不用寫在這裡。
+        </Text>
+      </div>
+
+      <div>
+        {/* What the container will actually receive. The console writes part
+            of it, so it says which part rather than leaving someone to guess
+            what the list above did. */}
+        <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
+          CLI_ARGS = {composed || '（空的，用預設）'}
+        </Text>
+        <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+          <Popconfirm
+            title="重建這個容器？"
+            description="容器本身會被換掉。輸出目錄與設定檔留在磁碟上。"
+            okText="重建" cancelText="取消"
+            disabled={!changed || !chosen.length}
+            onConfirm={() => void save()}
+          >
+            <Button type="primary" loading={saving} disabled={!changed || !chosen.length}>
+              套用並重建
+            </Button>
+          </Popconfirm>
+          {changed
+            ? <Button onClick={() => void loadConfig()}>還原</Button>
+            : <Text type="secondary" style={{ fontSize: 12 }}>目前沒有變更</Text>}
+        </div>
+      </div>
+    </Space>
   );
 }

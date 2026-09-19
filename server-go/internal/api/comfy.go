@@ -138,7 +138,11 @@ type ComfyConfigCard struct {
 }
 
 type ComfyConfig struct {
-	Name       string            `json:"name"`
+	Name string `json:"name"`
+	// Image is what the container runs, with its size on this disk when
+	// docker can say -- the thing 更新映像 replaces.
+	Image      string            `json:"image"`
+	ImageSize  *string           `json:"image_size"`
 	CLIArgs    string            `json:"cli_args"`
 	Port       *int              `json:"port"`
 	PublicPort *int              `json:"public_port"`
