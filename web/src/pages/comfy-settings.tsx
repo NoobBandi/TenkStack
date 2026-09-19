@@ -19,8 +19,8 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, InputNumber, Popconfirm, Segmented, Space,
-  Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Popconfirm, Segmented, Space, Tag, Tooltip,
+  Typography,
 } from 'antd';
 import {
   CloudDownloadOutlined, DeleteOutlined, PoweroffOutlined, ReloadOutlined,
@@ -68,6 +68,11 @@ export function joinArgs(device: number, extra: string, cardCount: number): stri
   // container wants one line.
   return [generated, extra.replace(/\s+/g, ' ').trim()].filter(Boolean).join(' ');
 }
+
+/** How wide an editable control gets. The value column runs the width of
+ *  the card, and a card list or a flag box stretched across all of it is
+ *  mostly empty; this is enough for a card's name or a long flag. */
+const CONTROL_WIDTH = 520;
 
 /** system_stats says "0.36.0"; the release list says "v0.36.0". */
 const tagged = (v: unknown) => (typeof v === 'string' && v ? 'v' + v.replace(/^v/, '') : null);
@@ -131,7 +136,6 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
   const [dual, setDual] = useState(false);
   /** The card that does the work: the only one in single, the default in dual. */
   const [primary, setPrimary] = useState('');
-  const [port, setPort] = useState<number | null>(null);
   const [extra, setExtra] = useState('');
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -151,7 +155,6 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
       setDual(held.length > 1);
       setPrimary(held[Math.min(parts.device, Math.max(held.length - 1, 0))]
         ?.pci_bdf_address ?? '');
-      setPort(found.port);
       setExtra(parts.extra);
     } catch {
       // A container the console cannot inspect is not one it should offer to
@@ -200,7 +203,9 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
     if (!config) return;
     setSaving(true);
     try {
-      await saveComfyConfig(config.name, chosen, composed, port ?? undefined);
+      // The port is kept as it is: it belongs to the settings page, not to
+      // what the container is made of.
+      await saveComfyConfig(config.name, chosen, composed, config.port ?? undefined);
       message.success('容器已重建');
       await loadConfig();
       onChanged();
@@ -221,7 +226,6 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
   const held = (config?.cards ?? []).filter((c) => c.held).map((c) => c.pci_bdf_address ?? '');
   const changed = !!config && (
     composed !== config.cli_args
-    || port !== config.port
     || chosen.length !== held.length
     || chosen.some((a) => !held.includes(a)));
 
@@ -308,11 +312,28 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
 
         <Row
           label="顯示卡"
+          action={config && (
+            <Segmented
+              size="small"
+              value={dual ? 'dual' : 'single'}
+              onChange={(v) => {
+                const next = v === 'dual';
+                setDual(next);
+                // Leaving dual, the primary is the one that was doing the
+                // work, so it is the one to keep.
+                if (!next && !primary) setPrimary(addresses[0] ?? '');
+              }}
+              options={[
+                { value: 'single', label: '單卡' },
+                { value: 'dual', label: `${addresses.length} 張卡`, disabled: addresses.length < 2 },
+              ]}
+            />
+          )}
           note={chosen.length > 1 ? (
             // Not a disclaimer -- the thing worth knowing before spending twenty
             // minutes here. Only once a second card is actually in.
             <Alert
-              style={{ marginTop: 4 }}
+              style={{ marginTop: 4, maxWidth: CONTROL_WIDTH }}
               type="info"
               message={
                 <Text style={{ fontSize: 12 }}>
@@ -326,24 +347,11 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
         >
           {config ? (
             <>
-              <Segmented
-                size="small"
-                value={dual ? 'dual' : 'single'}
-                onChange={(v) => {
-                  const next = v === 'dual';
-                  setDual(next);
-                  // Leaving dual, the primary is the one that was doing the
-                  // work, so it is the one to keep.
-                  if (!next && !primary) setPrimary(addresses[0] ?? '');
-                }}
-                options={[
-                  { value: 'single', label: '單卡' },
-                  { value: 'dual', label: `${addresses.length} 張卡`, disabled: addresses.length < 2 },
-                ]}
-              />
               {/* A list, one row per card, each saying whether it is in and
-                  whether it is the one doing the work. */}
-              <div style={{ marginTop: 8, border: `1px solid ${LINE.faint}`, borderRadius: 6 }}>
+                  whether it is the one doing the work. Not the full width:
+                  a card's name is short, and a row that runs to the far edge
+                  for it reads as a table with a column missing. */}
+              <div style={{ maxWidth: CONTROL_WIDTH, border: `1px solid ${LINE.faint}`, borderRadius: 6 }}>
                 {config.cards.map((card, i) => {
                   const address = card.pci_bdf_address ?? '';
                   const included = chosen.includes(address);
@@ -389,33 +397,6 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
         </Row>
 
         <Row
-          label="連接埠"
-          note={
-            <>
-              容器在本機上的連接埠，對外的那個由它推算。
-              {port !== null && config && !config.ports.includes(port) && (
-                // Outside the convention the console still finds it, but only
-                // by asking docker what this container publishes -- so a
-                // container that is not running is one it cannot look up.
-                ' 這個號碼在慣例的 ' + config.ports[0] + '-' + config.ports[config.ports.length - 1]
-                + ' 之外，主控台會改用容器實際發佈的埠去找，容器停掉時就找不到。'
-              )}
-            </>
-          }
-        >
-          <Space size={10}>
-            <InputNumber size="small" value={port} disabled={!config}
-                         onChange={(v) => setPort(v ?? null)} min={1024} max={65535}
-                         style={{ width: 110 }} />
-            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-              → 對外 {config
-                ? (port === config.port ? (config.public_port ?? '—') : '重建後決定')
-                : (instance.public_port ?? '—')}
-            </Text>
-          </Space>
-        </Row>
-
-        <Row
           label="額外參數"
           note={
             <>
@@ -425,18 +406,17 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
           }
         >
           {config ? (
-            <FlagPicker
-              source={{ kind: 'comfyui', container: config.name }}
-              value={extra}
-              onChange={setExtra}
-              // Written by the console from the card list above; a typed copy
-              // would fight it.
-              reserved={['--default-device']}
-              // One line to start: this container has run with an empty
-              // field all along, and three empty rows were the tallest thing
-              // on the card. It grows as flags are added.
-              rows={1}
-            />
+            <div style={{ maxWidth: CONTROL_WIDTH }}>
+              <FlagPicker
+                source={{ kind: 'comfyui', container: config.name }}
+                value={extra}
+                onChange={setExtra}
+                // Written by the console from the card list above; a typed
+                // copy would fight it.
+                reserved={['--default-device']}
+                rows={2}
+              />
+            </div>
           ) : (
             <Text style={{ ...mono, opacity: 0.4 }}>讀取中…</Text>
           )}
