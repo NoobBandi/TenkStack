@@ -17,23 +17,37 @@ type ModelSpec struct {
 	// Which cards to run on, as backend:index, one or several. Absent
 	// leaves the entry's card alone; empty clears it; a value pins.
 	Device any `json:"device"`
+	// Runtime is the launcher macro without its braces: llama-sycl,
+	// vllm-intel. Empty keeps the entry's launcher, or the default.
+	Runtime string `json:"runtime"`
+	// vLLM only: online quantisation (fp8, sym_int4) and the share of the
+	// card it pre-allocates.
+	Quantization         string  `json:"quantization"`
+	GpuMemoryUtilization float64 `json:"gpu_memory_utilization"`
 }
 
 // ModelSpecOut is a configured entry parsed back into the editor's fields.
 type ModelSpecOut struct {
-	ID          string            `json:"id"`
-	Env         map[string]string `json:"env"`
-	Wrapper     string            `json:"wrapper"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	ModelFile   string            `json:"model_file"`
-	Mmproj      *string           `json:"mmproj"`
-	CtxSize     int               `json:"ctx_size"`
-	NGpuLayers  int               `json:"n_gpu_layers"`
-	TTL         int               `json:"ttl"`
-	Group       *string           `json:"group"`
-	Sampling    map[string]any    `json:"sampling"`
-	Extra       string            `json:"extra"`
+	ID      string            `json:"id"`
+	Env     map[string]string `json:"env"`
+	Wrapper string            `json:"wrapper"`
+	// Runtime is the wrapper's macro name; Provider which software it is.
+	Runtime  string `json:"runtime"`
+	Provider string `json:"provider"`
+	// Format of the weights the entry names: gguf or safetensors.
+	Format               string         `json:"format"`
+	Quantization         string         `json:"quantization"`
+	GpuMemoryUtilization float64        `json:"gpu_memory_utilization"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description"`
+	ModelFile            string         `json:"model_file"`
+	Mmproj               *string        `json:"mmproj"`
+	CtxSize              int            `json:"ctx_size"`
+	NGpuLayers           int            `json:"n_gpu_layers"`
+	TTL                  int            `json:"ttl"`
+	Group                *string        `json:"group"`
+	Sampling             map[string]any `json:"sampling"`
+	Extra                string         `json:"extra"`
 }
 
 type ModelFile struct {
@@ -53,8 +67,11 @@ type Weight struct {
 	SharedWith []string `json:"shared_with"`
 }
 
+// GGUFFile is one set of weights on disk: a GGUF, or a directory of
+// safetensors as Hugging Face publishes them, which the format says.
 type GGUFFile struct {
 	Filename  string   `json:"filename"`
+	Format    string   `json:"format"`
 	Repo      string   `json:"repo"`
 	SizeBytes int64    `json:"size_bytes"`
 	SizeGiB   float64  `json:"size_gib"`

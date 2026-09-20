@@ -35,3 +35,18 @@ func TestUnknownKey(t *testing.T) {
 		t.Error("expected an error")
 	}
 }
+
+func TestResolveMacro(t *testing.T) {
+	p, vendor, ok := Resolve("vllm-intel")
+	if !ok || p.Key != VLLM || vendor != "intel" {
+		t.Errorf("vllm-intel: %v %q %v", p.Key, vendor, ok)
+	}
+	p, vendor, ok = Resolve("llama-nvidia")
+	if !ok || p.Key != LlamaCpp || vendor != "nvidia" {
+		t.Errorf("llama-nvidia: %v %q %v", p.Key, vendor, ok)
+	}
+	// A hand-registered native build: llama-sycl is no vendor's macro.
+	if _, _, ok := Resolve("llama-sycl"); ok {
+		t.Error("llama-sycl should resolve to nothing")
+	}
+}

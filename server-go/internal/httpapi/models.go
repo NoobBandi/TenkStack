@@ -211,7 +211,17 @@ func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 	if env == nil {
 		env = map[string]string{}
 	}
-	err := s.Config.Upsert(r.Context(), spec, env, managed, s.deviceWrapper(r, chosen))
+	// A named runtime wins over the launcher the card implies: the card
+	// says which llama.cpp build sees it, and the entry may not be one.
+	wrapper := s.deviceWrapper(r, chosen)
+	if spec.Runtime != "" {
+		if _, ok := s.Config.LauncherMacros()[spec.Runtime]; !ok {
+			fail(w, http.StatusBadRequest, "沒有叫 "+spec.Runtime+" 的執行環境，或它已停用")
+			return
+		}
+		wrapper = "${" + spec.Runtime + "}"
+	}
+	err := s.Config.Upsert(r.Context(), spec, env, managed, wrapper)
 	if err != nil {
 		if errors.Is(err, llamaswap.Rejected) {
 			fail(w, http.StatusBadRequest, err.Error())
@@ -302,7 +312,7 @@ func (s *Server) removeFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readModelFiles(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.Models.ListGGUF())
+	writeJSON(w, http.StatusOK, s.Models.ListWeights())
 }
 
 // readRecommended is what one GGUF says its publisher recommends, read on

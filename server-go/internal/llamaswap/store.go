@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 )
 
 // FallbackWrapper is the historical launcher name, used only when nothing
@@ -200,6 +202,24 @@ func (s *Store) Launchers() []string {
 		}
 	}
 	return found
+}
+
+// LlamaLaunchers is Launchers without the ones another provider owns:
+// what may be asked llama-server's questions, --list-devices and --help.
+func (s *Store) LlamaLaunchers() []string {
+	other := map[string]bool{}
+	for macro, path := range s.LauncherMacros() {
+		if p, _, ok := providers.Resolve(macro); ok && p.Key != providers.LlamaCpp {
+			other[path] = true
+		}
+	}
+	var out []string
+	for _, l := range s.Launchers() {
+		if !other[l] {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // firstWord is the first shell word, honouring a quoted path.

@@ -364,8 +364,10 @@ export function subscribe(
 
 export interface ModelFile {
   /** Relative to the models directory. Downloads land under `<owner>/<repo>/`,
-   *  so this is a path; files predating that layout are bare names. */
+   *  so this is a path; files predating that layout are bare names. A
+   *  safetensors model is one entry naming its directory. */
   filename: string;
+  format: 'gguf' | 'safetensors';
   /** The repo it came from, empty for a file put there by hand or downloaded
    *  before the layout existed. Two repos ship the same quant under the same
    *  filename often enough that the name alone does not identify one. */
@@ -429,7 +431,58 @@ export interface ModelSpec {
    *  when reading a spec, so the form can tell which device it corresponds to;
    *  never sent back, because the device choice is what gets written. */
   env?: Record<string, string>;
+  /** The launcher macro the entry starts through: llama-sycl, vllm-intel.
+   *  Empty on save keeps the entry's launcher, or takes the default. */
+  runtime?: string;
+  /** Which software that launcher is, read back with a spec. */
+  provider?: 'llamacpp' | 'vllm' | string;
+  /** What the entry's weights are: a GGUF file or a safetensors directory. */
+  format?: 'gguf' | 'safetensors';
+  /** vLLM only. Empty quantisation serves the weights as published. */
+  quantization?: string;
+  gpu_memory_utilization?: number;
 }
+
+/** One provider on one vendor's cards, and what of it exists here. */
+export interface ProviderBuild {
+  vendor: string;
+  vendor_label: string;
+  macro: string;
+  image: string;
+  requires: string | null;
+  verified: boolean;
+  state: RuntimeCoverage['state'] & object;
+}
+
+/** One inference runtime the store offers. Builds are listed only for the
+ *  vendors with a card in this machine. */
+export interface ProviderCard {
+  key: string;
+  name: string;
+  summary: string;
+  category: string;
+  formats: string[];
+  site: string;
+  builds: ProviderBuild[];
+}
+
+/** A launcher a model entry can be started through. */
+export interface Runtime {
+  macro: string;
+  label: string;
+  provider: string;
+  vendor: string;
+  formats: string[];
+  /** False for a build somebody registered by hand, which the store leaves alone. */
+  managed: boolean;
+}
+
+export interface ProvidersPage {
+  providers: ProviderCard[];
+  runtimes: Runtime[];
+}
+
+export const fetchProviders = () => get<ProvidersPage>('/providers');
 
 /** A card a configured llama-server can actually see -- which is not the same
  *  set as the cards in the machine. The NVIDIA card here is invisible to the

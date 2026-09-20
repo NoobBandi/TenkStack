@@ -97,6 +97,11 @@ type RuntimeTemplate struct {
 	Flags    []string `json:"flags"`
 	Vendor   string   `json:"vendor"`
 	Provider string   `json:"provider"`
+	// Command runs inside the image ahead of the flags, for an image whose
+	// entrypoint is a shell rather than the server.
+	Command []string `json:"command,omitempty"`
+	// CacheDir is the image's kernel cache, mounted from the host.
+	CacheDir string `json:"cache_dir,omitempty"`
 }
 
 // RuntimeState is three independent facts: the script, the macro, the
@@ -161,4 +166,44 @@ type LoadResult struct {
 type JobStarted struct {
 	OK  bool `json:"ok"`
 	Job Job  `json:"job"`
+}
+
+// ProviderBuild is one provider on one vendor's cards: the image and what
+// of it exists here.
+type ProviderBuild struct {
+	Vendor      string       `json:"vendor"`
+	VendorLabel string       `json:"vendor_label"`
+	Macro       string       `json:"macro"`
+	Image       string       `json:"image"`
+	Requires    *string      `json:"requires"`
+	Verified    bool         `json:"verified"`
+	State       RuntimeState `json:"state"`
+}
+
+// ProviderCard is one provider as the store shows it, with a build per
+// vendor that has cards in this machine.
+type ProviderCard struct {
+	Key      string          `json:"key"`
+	Name     string          `json:"name"`
+	Summary  string          `json:"summary"`
+	Category string          `json:"category"`
+	Formats  []string        `json:"formats"`
+	Site     string          `json:"site"`
+	Builds   []ProviderBuild `json:"builds"`
+}
+
+// Runtime is one launcher a model entry can be started through: a
+// provider this console installed, or a build somebody registered by hand.
+type Runtime struct {
+	Macro    string   `json:"macro"`
+	Label    string   `json:"label"`
+	Provider string   `json:"provider"`
+	Vendor   string   `json:"vendor"`
+	Formats  []string `json:"formats"`
+	Managed  bool     `json:"managed"`
+}
+
+type ProvidersPage struct {
+	Providers []ProviderCard `json:"providers"`
+	Runtimes  []Runtime      `json:"runtimes"`
 }

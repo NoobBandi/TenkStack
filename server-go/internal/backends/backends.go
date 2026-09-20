@@ -28,9 +28,11 @@ var probeEnv = "ONEAPI_DEVICE_SELECTOR=level_zero:*"
 // Sourcing oneAPI's setvars.sh is most of this, and it is not fast.
 const probeTimeout = 90 * time.Second
 
-// Launchers is what the probe needs from the config.
+// Launchers is what the probe needs from the config: the launchers that
+// are llama-server. Another provider's launcher answers --list-devices by
+// starting a container to be told there is no such flag.
 type Launchers interface {
-	Launchers() []string
+	LlamaLaunchers() []string
 }
 
 type Probe struct {
@@ -85,7 +87,7 @@ func (p *Probe) Usable(ctx context.Context, refresh bool) []api.BackendDevice {
 		return p.cache
 	}
 	found := []api.BackendDevice{}
-	for _, launcher := range p.launchers.Launchers() {
+	for _, launcher := range p.launchers.LlamaLaunchers() {
 		for _, d := range ask(ctx, launcher) {
 			dup := false
 			for _, f := range found {

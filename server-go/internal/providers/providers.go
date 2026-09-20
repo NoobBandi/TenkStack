@@ -16,7 +16,11 @@
 // anything that reads them.
 package providers
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/NoobBandi/TenkStack/server-go/internal/vendors"
+)
 
 // Build is one provider's container image for one vendor's cards, and what
 // running it needs of the host.
@@ -31,6 +35,12 @@ type Build struct {
 	// Flags are the docker run arguments that hand the cards over. Empty
 	// means the vendor's own passthrough for the whole machine.
 	Flags []string
+	// Command is what the launcher runs inside the image before the flags
+	// llama-swap passes. Empty for an image whose entrypoint is the server.
+	Command []string
+	// CacheDir is where the image keeps compiled kernels between runs, to
+	// be mounted from the host so a restart does not compile again.
+	CacheDir string
 }
 
 // Provider is one piece of inference software.
@@ -56,6 +66,12 @@ type Provider struct {
 	// EnvPrefix names the launcher's own variables: <PREFIX>_IMAGE overrides
 	// the image, <PREFIX>_NAME the container name.
 	EnvPrefix string
+	// ModelFlag names the weights: --model for both, but read from the
+	// record rather than assumed.
+	ModelFlag string
+	// Flags the console's own form writes for this provider, so an entry
+	// read back can tell its fields from what the user typed by hand.
+	Managed []string
 
 	// The macro and script names llama.cpp had before this package existed,
 	// kept so a config written then still resolves. Empty means the key.
@@ -118,12 +134,59 @@ var llamacpp = Provider{
 	},
 	FallbackLabel: "Vulkan（通用備援）",
 	EnvPrefix:     "LLAMA",
+	ModelFlag:     "--model",
 	macroPrefix:   "llama-",
 	scriptPrefix:  "llama-server-",
 }
 
+// vLLM serves safetensors as Hugging Face publishes them, FP16 with online
+// FP8 or INT4 on request, and pre-allocates the card: a vLLM entry belongs
+// in the exclusive group. The Intel image is the one the llm-scaler
+// project publishes for Arc Pro B-series cards; its entrypoint sources
+// oneAPI and runs `vllm serve`, so the flags go straight to it.
+var vllm = Provider{
+	Key: VLLM, Name: "vLLM", Program: "vllm serve",
+	Summary:  "高吞吐的推論伺服器，直接跑 Hugging Face 的 safetensors 模型，多人同時使用時最快",
+	Category: "llm",
+	Formats:  []string{"safetensors"},
+	Site:     "https://github.com/vllm-project/vllm",
+	Builds: map[string]Build{
+		"intel": {
+			Image: "intel/llm-scaler-vllm:0.26.0-b2",
+			// Workers move tensors through shared memory, and Docker's
+			// default 64 MB is too small for a model of any size. OneCCL
+			// scans /dev/dri/by-path to pair cards, and --device hands
+			// over the nodes without that directory. Offline because the
+			// weights are local: a name that is not a path must not turn
+			// into a download inside the container.
+			Flags: []string{"--device", "/dev/dri", "-v", "/dev/dri/by-path:/dev/dri/by-path:ro",
+				"--shm-size", "16g", "-e", "HF_HUB_OFFLINE=1"},
+			// torch.compile takes half a minute per start without it.
+			CacheDir: "/root/.cache/vllm",
+			Verified: true,
+		},
+		"nvidia": {
+			Image: "vllm/vllm-openai:latest", Requires: "nvidia-container-toolkit",
+			Flags:    []string{"--gpus", "all", "--ipc", "host", "-e", "HF_HUB_OFFLINE=1"},
+			CacheDir: "/root/.cache/vllm",
+		},
+		"amd": {
+			Image: "rocm/vllm:latest",
+			Flags: []string{"--device", "/dev/dri", "--device", "/dev/kfd", "--group-add", "video",
+				"--security-opt", "seccomp=unconfined", "--ipc", "host", "-e", "HF_HUB_OFFLINE=1"},
+			// The ROCm image drops into a shell.
+			Command:  []string{"vllm", "serve"},
+			CacheDir: "/root/.cache/vllm",
+		},
+	},
+	EnvPrefix: "VLLM",
+	ModelFlag: "--model",
+	Managed: []string{"--model", "--served-model-name", "--host", "--port", "--max-model-len",
+		"--tensor-parallel-size", "--gpu-memory-utilization", "--quantization"},
+}
+
 // All is every provider, in the order the store shows them.
-func All() []Provider { return []Provider{llamacpp} }
+func All() []Provider { return []Provider{llamacpp, vllm} }
 
 func Get(key string) *Provider {
 	for _, p := range All() {
@@ -132,6 +195,20 @@ func Get(key string) *Provider {
 		}
 	}
 	return nil
+}
+
+// Resolve is the provider and vendor a launcher macro names, for a macro
+// this console wrote: llama-nvidia, vllm-intel. A macro that matches no
+// record -- a native build somebody registered by hand -- is nobody's.
+func Resolve(macro string) (Provider, string, bool) {
+	for _, p := range All() {
+		for _, v := range vendors.All() {
+			if p.Macro(v.Key) == macro {
+				return p, v.Key, true
+			}
+		}
+	}
+	return Provider{}, "", false
 }
 
 // Unknown is the error for a key no record has.

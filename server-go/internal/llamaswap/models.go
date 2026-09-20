@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
+	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 )
 
 // Sampling fields the form owns, in the order they are written.
@@ -180,13 +181,53 @@ func (s *Store) Upsert(ctx context.Context, spec api.ModelSpec, env map[string]s
 		if wrapper == "" {
 			wrapper = s.DefaultWrapper()
 		}
-		entry.Set("cmd", Literal(BuildCmd(spec.ModelFile, spec.CtxSize, spec.NGpuLayers, spec.Extra, spec.Mmproj, wrapper, spec.Sampling)))
+		previous := Scalar(entry.Get("cmd"))
+		p, _, managed := ProviderOf(wrapper)
+		// The container's name is the launcher's business, so its variable
+		// is always this form's to rewrite, whichever launcher it was.
+		owned := map[string]bool{}
+		for k, v := range managedEnv {
+			owned[k] = v
+		}
+		for _, other := range providers.All() {
+			if other.EnvPrefix != "" {
+				owned[other.EnvPrefix+"_NAME"] = true
+			}
+		}
+		env = copyEnv(env)
+		if managed {
+			name := containerName(strings.Trim(wrapper, "${}"), spec.ID)
+			env[p.EnvPrefix+"_NAME"] = name
+			entry.Set("cmdStop", Str("docker stop "+name))
+		} else if strings.HasPrefix(Scalar(entry.Get("cmdStop")), "docker stop ") {
+			// Moved to a native launcher: the stop that reached a container
+			// would now stop nothing, and llama-swap would wait on it.
+			entry.Delete("cmdStop")
+		}
+		switch p.Key {
+		case providers.VLLM:
+			// The card count comes from the selector being written, else
+			// from the one already there.
+			tp := tensorParallel(env)
+			if tp == 0 && managedEnv == nil {
+				tp = tensorParallel(EnvMap(entry.Get("env")))
+			}
+			if tp == 0 {
+				if m := vllmPatterns["tensor_parallel"].FindStringSubmatch(previous); m != nil {
+					tp, _ = strconv.Atoi(m[1])
+				}
+			}
+			entry.Set("cmd", Literal(BuildVLLMCmd(spec.ID, spec.ModelFile, spec.CtxSize, tp,
+				spec.GpuMemoryUtilization, spec.Quantization, spec.Extra, wrapper)))
+		default:
+			entry.Set("cmd", Literal(BuildCmd(spec.ModelFile, spec.CtxSize, spec.NGpuLayers, spec.Extra, spec.Mmproj, wrapper, spec.Sampling)))
+		}
 		entry.Set("ttl", Int(spec.TTL))
 
 		var merged []string
 		for _, item := range EnvPairs(entry.Get("env")) {
 			name, _, _ := strings.Cut(item, "=")
-			if !managedEnv[name] {
+			if !owned[name] {
 				merged = append(merged, item)
 			}
 		}
@@ -201,6 +242,14 @@ func (s *Store) Upsert(ctx context.Context, spec api.ModelSpec, env map[string]s
 		syncGroupMembership(c, spec.ID, spec.Group)
 		return nil
 	})
+}
+
+func copyEnv(m map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -308,6 +357,73 @@ func fileSize(p string) (int64, bool) {
 	return st.Size(), true
 }
 
+// weightsInCmd is every set of weights an entry names: its GGUF files
+// and, for a vLLM entry, the directory of safetensors.
+func weightsInCmd(cmd string) []string {
+	return append(filesInCmd(cmd), dirsInCmd(cmd)...)
+}
+
+// weightSize is a file's size, or a directory's as the sum of what is in
+// it, which is what deleting or fitting it costs.
+func (m *Models) weightSize(name string) (int64, bool) {
+	p := m.resolve(name)
+	if p == "" {
+		return 0, false
+	}
+	st, err := os.Stat(p)
+	if err != nil {
+		return 0, false
+	}
+	if !st.IsDir() {
+		return st.Size(), st.Mode().IsRegular()
+	}
+	return dirSize(p), true
+}
+
+func dirSize(dir string) int64 {
+	var total int64
+	filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type().IsRegular() {
+			if info, err := d.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total
+}
+
+// removeWeights deletes one file, or one directory of weights with
+// everything in it. Never the models directory itself.
+func (m *Models) removeWeights(p string) error {
+	st, err := os.Stat(p)
+	if err != nil {
+		return err
+	}
+	if !st.IsDir() {
+		return os.Remove(p)
+	}
+	if p == m.resolve(".") {
+		return fmt.Errorf("不刪模型目錄本身")
+	}
+	// Only a directory that is a model: a publisher's directory holding
+	// several would take every one of them with it.
+	if !isWeightDir(p) {
+		return fmt.Errorf("這個資料夾不是一個模型")
+	}
+	return os.RemoveAll(p)
+}
+
+// isWeightDir says whether a directory is one model as Hugging Face lays it
+// out: a config.json with at least one safetensors shard beside it.
+func isWeightDir(p string) bool {
+	if _, err := os.Stat(filepath.Join(p, "config.json")); err != nil {
+		return false
+	}
+	shards, _ := filepath.Glob(filepath.Join(p, "*.safetensors"))
+	return len(shards) > 0
+}
+
 type modelEntry struct {
 	id   string
 	spec *Mapping
@@ -342,6 +458,8 @@ func (m *Models) ContextSizes() map[string]int {
 	}
 	for _, e := range entries {
 		if mm := ctxFlag.FindStringSubmatch(e.cmd); mm != nil {
+			out[e.id], _ = strconv.Atoi(mm[1])
+		} else if mm := vllmPatterns["max_model_len"].FindStringSubmatch(e.cmd); mm != nil {
 			out[e.id], _ = strconv.Atoi(mm[1])
 		}
 	}
@@ -397,7 +515,7 @@ func (m *Models) Weights() map[string][]api.Weight {
 	}
 	references := map[string][]string{}
 	for _, e := range entries {
-		for _, name := range filesInCmd(e.cmd) {
+		for _, name := range weightsInCmd(e.cmd) {
 			references[name] = append(references[name], e.id)
 		}
 	}
@@ -407,8 +525,8 @@ func (m *Models) Weights() map[string][]api.Weight {
 			projectors[macroPrefix.ReplaceAllString(mm[1], "")] = true
 		}
 		list := []api.Weight{}
-		for _, name := range filesInCmd(e.cmd) {
-			size, exists := fileSize(m.resolve(name))
+		for _, name := range weightsInCmd(e.cmd) {
+			size, exists := m.weightSize(name)
 			shared := []string{}
 			for _, other := range references[name] {
 				if other != e.id {
@@ -461,20 +579,20 @@ func (m *Models) FilesForModel(modelID string) ([]api.ModelFile, bool) {
 		return nil, false
 	}
 	out := []api.ModelFile{}
-	for _, name := range filesInCmd(target.cmd) {
+	for _, name := range weightsInCmd(target.cmd) {
 		others := []string{}
 		for _, e := range entries {
 			if e.id == modelID {
 				continue
 			}
-			for _, n := range filesInCmd(e.cmd) {
+			for _, n := range weightsInCmd(e.cmd) {
 				if n == name {
 					others = append(others, e.id)
 				}
 			}
 		}
 		sort.Strings(others)
-		size, exists := fileSize(m.resolve(name))
+		size, exists := m.weightSize(name)
 		out = append(out, api.ModelFile{Filename: name, Exists: exists, SizeBytes: size, SharedWith: others})
 	}
 	return out, true
@@ -528,7 +646,7 @@ func (m *Models) Delete(ctx context.Context, modelID string, deleteFiles bool) (
 			result.Kept = append(result.Kept, api.KeptFile{Filename: f.Filename, Reason: "路徑不在模型目錄底下"})
 			continue
 		}
-		if err := os.Remove(p); err != nil {
+		if err := m.removeWeights(p); err != nil {
 			reason := err.Error()
 			if os.IsNotExist(err) {
 				reason = "檔案不存在"
@@ -549,13 +667,14 @@ type Refused struct{ Reason string }
 
 func (r *Refused) Error() string { return r.Reason }
 
-// DeleteFile removes one GGUF, refusing if a model still points at it.
+// DeleteFile removes one set of weights -- a GGUF, or a directory of
+// safetensors -- refusing if a model still points at it.
 func (m *Models) DeleteFile(filename string) (*api.FileDeleted, error) {
 	p := m.resolve(filename)
 	if p == "" {
 		return nil, &Refused{"路徑不在模型目錄底下"}
 	}
-	size, exists := fileSize(p)
+	size, exists := m.weightSize(filename)
 	if !exists {
 		return nil, &Refused{"檔案不存在"}
 	}
@@ -565,7 +684,7 @@ func (m *Models) DeleteFile(filename string) (*api.FileDeleted, error) {
 	}
 	var users []string
 	for _, e := range entries {
-		for _, n := range filesInCmd(e.cmd) {
+		for _, n := range weightsInCmd(e.cmd) {
 			if n == filename {
 				users = append(users, e.id)
 			}
@@ -575,7 +694,7 @@ func (m *Models) DeleteFile(filename string) (*api.FileDeleted, error) {
 		sort.Strings(users)
 		return nil, &Refused{"仍被 " + strings.Join(users, ", ") + " 使用"}
 	}
-	if err := os.Remove(p); err != nil {
+	if err := m.removeWeights(p); err != nil {
 		return nil, &Refused{err.Error()}
 	}
 	m.pruneEmpty(filepath.Dir(p))
@@ -631,6 +750,50 @@ func (m *Models) ListGGUF() []api.GGUFFile {
 			IsMmproj: strings.HasPrefix(lower, "mmproj"), Role: role, UsedBy: used,
 		})
 	}
+	return out
+}
+
+// ListWeights is ListGGUF and every directory of safetensors beside them,
+// one entry per directory: a config.json with at least one shard next to
+// it is how Hugging Face lays a model out.
+func (m *Models) ListWeights() []api.GGUFFile {
+	out := m.ListGGUF()
+	for i := range out {
+		out[i].Format = "gguf"
+	}
+	if st, err := os.Stat(m.Dir); err != nil || !st.IsDir() {
+		return out
+	}
+	entries, _, _ := m.entries()
+	references := map[string][]string{}
+	for _, e := range entries {
+		for _, name := range dirsInCmd(e.cmd) {
+			references[name] = append(references[name], e.id)
+		}
+	}
+	filepath.WalkDir(m.Dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		if !isWeightDir(p) {
+			return nil
+		}
+		config, _ := os.Stat(filepath.Join(p, "config.json"))
+		rel, _ := filepath.Rel(m.Dir, p)
+		rel = filepath.ToSlash(rel)
+		used := append([]string{}, references[rel]...)
+		sort.Strings(used)
+		size := dirSize(p)
+		// The directory is the repo: <owner>/<name> as Hugging Face has it,
+		// and the one entry under it is the whole model.
+		out = append(out, api.GGUFFile{
+			Filename: rel, Format: "safetensors", Repo: rel, SizeBytes: size, SizeGiB: gib(size),
+			Modified: float64(config.ModTime().Unix()) + float64(config.ModTime().Nanosecond())*1e-9,
+			Role:     "weights", UsedBy: used,
+		})
+		// A model directory holds nothing that is another model.
+		return fs.SkipDir
+	})
 	return out
 }
 
@@ -725,8 +888,13 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 	if e == nil || e.spec == nil {
 		return nil
 	}
+	p, _, _ := ProviderOf(e.cmd)
+	patterns, owns := argPatterns, managed
+	if p.Key == providers.VLLM {
+		patterns, owns = vllmPatterns, p.Managed
+	}
 	values := map[string]string{}
-	for field, pat := range argPatterns {
+	for field, pat := range patterns {
 		if mm := pat.FindStringSubmatch(e.cmd); mm != nil {
 			values[field] = mm[1]
 		}
@@ -738,7 +906,7 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 			continue
 		}
 		owned := false
-		for _, flag := range managed {
+		for _, flag := range owns {
 			if strings.HasPrefix(t, flag) {
 				owned = true
 				break
@@ -763,6 +931,9 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 		ID:          modelID,
 		Env:         EnvMap(e.spec.Get("env")),
 		Wrapper:     WrapperIn(e.cmd),
+		Runtime:     strings.Trim(WrapperIn(e.cmd), "${}"),
+		Provider:    p.Key,
+		Format:      "gguf",
 		Name:        Scalar(e.spec.Get("name")),
 		Description: Scalar(e.spec.Get("description")),
 		ModelFile:   values["model_file"],
@@ -773,6 +944,16 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 	}
 	if out.Name == "" {
 		out.Name = modelID
+	}
+	if p.Key == providers.VLLM {
+		out.Format = "safetensors"
+		out.ModelFile = values["model_dir"]
+		out.Sampling = map[string]any{}
+		out.Quantization = values["quantization"]
+		out.GpuMemoryUtilization, _ = strconv.ParseFloat(values["gpu_memory_utilization"], 64)
+		if v, ok := values["max_model_len"]; ok {
+			out.CtxSize, _ = strconv.Atoi(v)
+		}
 	}
 	if v, ok := values["mmproj"]; ok {
 		out.Mmproj = &v

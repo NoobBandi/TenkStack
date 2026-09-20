@@ -36,7 +36,7 @@ var allowed = map[string][]string{
 	"gpuhistory":       {"api"},
 	"journal":          {"api"},
 	"activity":         {"api"},
-	"llamaswap":        {"api"},
+	"llamaswap":        {"api", "providers"},
 	"containers":       {"api", "vendors"},
 	"containerhistory": {"api"},
 	"backends":         {"api", "vendors", "providers"},

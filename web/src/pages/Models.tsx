@@ -10,11 +10,11 @@ import {
 import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
-  fetchModelSpec, fetchPartials, fetchRecommendedSampling, loadModel,
+  fetchModelSpec, fetchPartials, fetchProviders, fetchRecommendedSampling, loadModel,
   modelFileRefs, saveModel, unloadAll,
   unloadModel,
   type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo,
-  type ModelSpec, type ModelWeight, type PartialFile,
+  type ModelSpec, type ModelWeight, type PartialFile, type Runtime,
 } from '../api';
 import { MONO } from '../theme';
 import FlagPicker from '../components/FlagPicker';
@@ -32,7 +32,17 @@ const EMPTY: ModelSpec = {
   // different (and real) for four of the six.
   sampling: {},
   device: [] as string[],
+  runtime: '',
+  // vLLM's own: as published, and most of the card. Ignored by llama.cpp.
+  quantization: '', gpu_memory_utilization: 0.85,
 };
+
+/** vLLM's online quantisations, in the order they cost accuracy. */
+const QUANTIZATIONS = [
+  { value: '', label: '不量化 — 照模型發布的精度' },
+  { value: 'fp8', label: 'fp8 — 顯存減半，品質幾乎不變' },
+  { value: 'sym_int4', label: 'int4 — 顯存四分之一，品質略降' },
+];
 
 /**
  * The six sampling defaults the form owns.
@@ -150,6 +160,16 @@ export default function Models() {
    * configured, with nobody having to remember to switch it on.
    */
   const [devices, setDevices] = useState<BackendDevice[]>([]);
+  /**
+   * The launchers a model can be started through. One is no question and the
+   * picker stays hidden; a second -- vLLM beside llama.cpp -- decides which
+   * files are offered and which fields the rest of the form shows.
+   */
+  const [runtimes, setRuntimes] = useState<Runtime[]>([]);
+  const runtime = Form.useWatch('runtime', form);
+  const provider = runtimes.find((r) => r.macro === runtime)?.provider
+    ?? runtimes[0]?.provider ?? 'llamacpp';
+  const vllm = provider === 'vllm';
 
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
@@ -166,7 +186,19 @@ export default function Models() {
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
     fetchBackendDevices().then(setDevices).catch(() => setDevices([]));
+    fetchProviders().then((p) => setRuntimes(p.runtimes)).catch(() => setRuntimes([]));
   }, []);
+
+  // The runtime decides which format the file list shows, so a change of one
+  // clears a file the new one could not run.
+  const onRuntime = (macro: string) => {
+    const next = runtimes.find((r) => r.macro === macro);
+    const chosen: string | undefined = form.getFieldValue('model_file');
+    const format = files.find((f) => f.filename === chosen)?.format;
+    if (next && format && !next.formats.includes(format)) {
+      form.setFieldValue('model_file', '');
+    }
+  };
 
   /** Which device entries a model's stored environment corresponds to. Matched
    *  on the variables themselves rather than on a name written beside them, so
@@ -206,6 +238,9 @@ export default function Models() {
         ...values,
         name: values.name || values.id,
         device: devices.length > 1 ? values.device ?? [] : undefined,
+        // The only launcher is sent too: the entry then says which it uses,
+        // rather than falling back to whatever the config's default is.
+        runtime: values.runtime || runtimes[0]?.macro || '',
       });
       message.success('已寫入設定，llama-swap 會自動重載');
       setOpen(false);
@@ -336,7 +371,8 @@ export default function Models() {
     }
   };
 
-  const ggufFiles = files.filter((f) => !f.is_mmproj);
+  const wanted = vllm ? 'safetensors' : 'gguf';
+  const ggufFiles = files.filter((f) => !f.is_mmproj && (f.format ?? 'gguf') === wanted);
   const mmprojFiles = files.filter((f) => f.is_mmproj);
   const orphans = files.filter((f) => f.used_by.length === 0);
   const orphanBytes = orphans.reduce((sum, f) => sum + f.size_bytes, 0);
@@ -393,7 +429,7 @@ export default function Models() {
             </Button>
             <Button size="small" type="primary" icon={<PlusOutlined />}
                     onClick={() => {
-                      form.setFieldsValue(EMPTY);
+                      form.setFieldsValue({ ...EMPTY, runtime: runtimes[0]?.macro ?? '' });
                       setEditing(null);
                       setOpen(true);
                     }}>
@@ -821,10 +857,24 @@ export default function Models() {
           </Form.Item>
           <Form.Item name="name" label="顯示名稱"><Input /></Form.Item>
           <Form.Item name="description" label="說明"><Input.TextArea rows={2} /></Form.Item>
-          <Form.Item name="model_file" label="模型檔" rules={[{ required: true }]}>
+          {runtimes.length > 1 && (
+            <Form.Item name="runtime" label="執行環境"
+                       extra={vllm
+                         ? 'vLLM 跑 Hugging Face 的 safetensors 模型，載入時預先佔滿顯存，同時多人使用最快。'
+                         : 'llama.cpp 跑 GGUF 模型，可以只放一部分進顯存。'}>
+              <Select
+                onChange={onRuntime}
+                options={runtimes.map((r) => ({ value: r.macro, label: r.label }))}
+              />
+            </Form.Item>
+          )}
+          <Form.Item name="model_file" label={vllm ? '模型資料夾' : '模型檔'} rules={[{ required: true }]}
+                     extra={vllm && !ggufFiles.length
+                       ? '模型目錄裡沒有 safetensors 模型。到「模型目錄」下載一個，或把 Hugging Face 的整個 repo 放進 ~/ai/models/<作者>/<名稱>/。'
+                       : undefined}>
             <Select
               showSearch
-              placeholder="從 ~/ai/models 選擇"
+              placeholder={vllm ? '從 ~/ai/models 選一個資料夾' : '從 ~/ai/models 選擇'}
               // The basename first, the repo after it: with weights under
               // <owner>/<repo>/ the path leads with a directory, and a list of
               // twenty quants would sort and read by publisher rather than by
@@ -835,6 +885,7 @@ export default function Models() {
               }))}
             />
           </Form.Item>
+          {!vllm && (
           <Form.Item name="mmproj" label="視覺投影檔（選用）"
                      extra="視覺模型才需要，會額外佔用顯存">
             <Select
@@ -845,6 +896,7 @@ export default function Models() {
               }))}
             />
           </Form.Item>
+          )}
           {devices.length > 1 && (
             <Form.Item
               label="顯示卡"
@@ -852,7 +904,9 @@ export default function Models() {
               // picked here. A segmented control asking it first was a second place
               // for the same answer to live, and one that could disagree with the
               // list right underneath it.
-              extra="選到的卡就是這個模型會用到的卡，不選就是不指定、由 llama-server 自己挑。選一張以上時模型會分攤過去，預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但限制較多：必須開 flash attention、KV 快取不能是量化的（-ctk/-ctv 要 f16），而且部分模型架構不支援。要試就在額外參數寫 --split-mode tensor。"
+              extra={vllm
+                ? '選到的卡就是這個模型會用到的卡；選幾張，tensor-parallel 就是幾。不選就是第一張。'
+                : '選到的卡就是這個模型會用到的卡，不選就是不指定、由 llama-server 自己挑。選一張以上時模型會分攤過去，預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但限制較多：必須開 flash attention、KV 快取不能是量化的（-ctk/-ctv 要 f16），而且部分模型架構不支援。要試就在額外參數寫 --split-mode tensor。'}
             >
               <Form.Item name="device" noStyle>
                 <Select
@@ -877,7 +931,9 @@ export default function Models() {
               value they will find in the file, and whoever is not reads past
               it to the part that answers the question. */}
           <Form.Item name="group" label="載入策略"
-                     extra="獨佔在載入時會把其他模型卸下來，共存不會。前面的名字就是寫進設定檔的值，在設定頁看得到。">
+                     extra={vllm
+                       ? 'vLLM 一啟動就把整張卡的顯存佔走，所以要獨佔：載入時會把其他模型卸下來。'
+                       : '獨佔在載入時會把其他模型卸下來，共存不會。前面的名字就是寫進設定檔的值，在設定頁看得到。'}>
             <Select
               allowClear
               options={[
@@ -894,8 +950,8 @@ export default function Models() {
               one field and none under the other left the pair with different
               heights and no bottom edge to share. */}
           <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-            <Form.Item name="ctx_size" label="Context 長度" style={{ flex: 1 }}
-                       extra="每個 slot 分到的是這個數字除以 --parallel">
+            <Form.Item name="ctx_size" label={vllm ? '最大長度（max-model-len）' : 'Context 長度'} style={{ flex: 1 }}
+                       extra={vllm ? '一個請求的輸入加輸出上限，也決定 KV 快取要留多少' : '每個 slot 分到的是這個數字除以 --parallel'}>
               <InputNumber min={512} max={1048576} step={1024} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="ttl" label="閒置卸載（秒）" style={{ flex: 1 }}
@@ -903,10 +959,23 @@ export default function Models() {
               <InputNumber min={0} step={60} style={{ width: '100%' }} />
             </Form.Item>
           </div>
+          {vllm ? (
+            <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+              <Form.Item name="quantization" label="量化" style={{ flex: 1 }}
+                         extra="載入時線上量化，模型檔不變。">
+                <Select options={QUANTIZATIONS} />
+              </Form.Item>
+              <Form.Item name="gpu_memory_utilization" label="顯存佔用比例" style={{ flex: 1 }}
+                         extra="模型加 KV 快取最多用到卡的幾成；卡上還有別的東西在跑就調低。">
+                <InputNumber min={0.3} max={0.98} step={0.05} style={{ width: '100%' }} />
+              </Form.Item>
+            </div>
+          ) : (
           <Form.Item name="n_gpu_layers" label="GPU 層數"
                      extra="0 表示不指定，讓 llama.cpp 自行決定。放不進顯存的模型必須用 0，否則 llama.cpp 會拒絕自動調整而直接失敗。">
             <InputNumber min={0} max={999} style={{ width: '100%' }} />
           </Form.Item>
+          )}
           {/* The sampling defaults, as fields.
               They were reachable only by typing them into 額外參數, which put
               the six settings people most often want to change behind the one
@@ -914,6 +983,7 @@ export default function Models() {
               machine's own config spells them three different ways. Blank means
               the flag is not written at all, which is not the same as writing
               llama.cpp's current default and staying wrong when it moves. */}
+          {!vllm && (
           <Form.Item
             label={(
               <Space size={8}>
@@ -943,6 +1013,13 @@ export default function Models() {
               ))}
             </div>
           </Form.Item>
+          )}
+          {vllm ? (
+            <Form.Item name="extra" label="額外參數"
+                       extra="vllm serve 的其他旗標，一行一個，例如 --enable-prefix-caching、--kv-cache-dtype fp8。模型、長度、卡數、量化和佔用比例由上面的欄位負責。">
+              <Input.TextArea rows={3} style={{ fontFamily: MONO, fontSize: 12 }} />
+            </Form.Item>
+          ) : (
           <Form.Item name="extra" label="額外參數"
                      extra="要細調的參數從這裡加，一行一個 —— 上面沒有的旗標都寫在這，例如 --parallel、--flash-attn、--split-mode 的細節。模型檔、context、GPU 層數、顯示卡和上面的取樣值由各自的欄位負責，不用重複寫。">
             {/* The list used to be a sentence of examples. Asked of the binary
@@ -964,6 +1041,7 @@ export default function Models() {
                          ]), '--temp']}
             />
           </Form.Item>
+          )}
         </Form>
       </Drawer>
     </Space>

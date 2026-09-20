@@ -88,7 +88,7 @@ func (s *Server) readLlamaFlags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fallback := filepath.Join(s.Layout.LlamaCppDir, "builds", "current", "bin", "llama-server")
-	found := s.Flags.LlamaServer(r.Context(), s.Config.Launchers(), fallback)
+	found := s.Flags.LlamaServer(r.Context(), s.Config.LlamaLaunchers(), fallback)
 	writeJSON(w, http.StatusOK, api.FlagsPage{Flags: flags.Configurable(found)})
 }
 
