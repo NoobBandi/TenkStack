@@ -37,12 +37,7 @@ const EMPTY: ModelSpec = {
   quantization: '', gpu_memory_utilization: 0.85,
 };
 
-/** vLLM's online quantisations, in the order they cost accuracy. */
-const QUANTIZATIONS = [
-  { value: '', label: '不量化 — 照模型發布的精度' },
-  { value: 'fp8', label: 'fp8 — 顯存減半，品質幾乎不變' },
-  { value: 'sym_int4', label: 'int4 — 顯存四分之一，品質略降' },
-];
+
 
 /**
  * The six sampling defaults the form owns.
@@ -68,7 +63,15 @@ const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 /** Basename first, then which repo it came from -- which is the only thing
  *  separating two files that are otherwise identically named. */
 const fileLabel = (f: ModelFile) =>
-  `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''} (${f.size_gib} GiB)`;
+  `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''} (${f.size_gib} GiB${f.precision ? ` · ${PRECISION[f.precision] ?? f.precision.toUpperCase()}` : ''})`;
+
+/** How a safetensors model is stored, as the label reads. */
+const PRECISION: Record<string, string> = {
+  bf16: 'BF16', fp16: 'FP16', fp32: 'FP32', fp8: 'FP8', awq: 'AWQ 4-bit', gptq: 'GPTQ 4-bit',
+  int4: 'Int4', int8: 'Int8', mxfp4: 'MXFP4', compressed: '已壓縮',
+};
+
+
 
 /**
  * What one entry is made of.
@@ -170,6 +173,15 @@ export default function Models() {
   const provider = runtimes.find((r) => r.macro === runtime)?.provider
     ?? runtimes[0]?.provider ?? 'llamacpp';
   const vllm = provider === 'vllm';
+  const chosenFile = Form.useWatch('model_file', form);
+  const chosenQuant = Form.useWatch('quantization', form) ?? '';
+  const folder = vllm ? files.find((f) => f.filename === chosenFile) : undefined;
+  // The online quantisations come from the runtime's own image, not from a
+  // list written here; the first option is always to load as published.
+  const online = runtimes.find((r) => r.macro === runtime)?.quantizations ?? [];
+  const quantOptions = [{ value: '', label: '照原精度載入', note: '', shrink: 1 }, ...online];
+  const chosenOption = quantOptions.find((q) => q.value === chosenQuant);
+  const shrink = chosenOption?.shrink ?? 1;
 
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
@@ -241,6 +253,7 @@ export default function Models() {
         // The only launcher is sent too: the entry then says which it uses,
         // rather than falling back to whatever the config's default is.
         runtime: values.runtime || runtimes[0]?.macro || '',
+        quantization: folder?.quantized ? '' : values.quantization,
       });
       message.success('已寫入設定，llama-swap 會自動重載');
       setOpen(false);
@@ -961,10 +974,24 @@ export default function Models() {
           </div>
           {vllm ? (
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-              <Form.Item name="quantization" label="量化" style={{ flex: 1 }}
-                         extra="載入時線上量化，模型檔不變。">
-                <Select options={QUANTIZATIONS} />
-              </Form.Item>
+              {/* The precision is the folder's, not the entry's. A repo the
+                  publisher quantised says so in its config.json and vLLM
+                  applies it by itself; the choice here exists only for a
+                  bf16 repo, where the weights can be compressed on the way
+                  in at the cost of a slower start. */}
+              {folder?.quantized ? (
+                <Form.Item label="精度" style={{ flex: 1 }}
+                           extra="模型檔已經是量化過的，vLLM 載入時自動套用，不用再設。">
+                  <Input value={`${PRECISION[folder.precision ?? ''] ?? folder.precision}（模型檔已量化）`} disabled />
+                </Form.Item>
+              ) : (
+                <Form.Item name="quantization" label="精度" style={{ flex: 1 }}
+                           extra={folder
+                             ? `模型檔是 ${PRECISION[folder.precision ?? ''] ?? folder.precision ?? '未知精度'}，約 ${folder.size_gib} GiB；${chosenQuant ? `線上量化後權重約 ${(folder.size_gib * shrink).toFixed(1)} GiB，${chosenOption?.note ?? ''}，載入時多花些時間壓縮` : '照原精度載入就是這個大小'}，再加 KV 快取。`
+                             : '載入時線上量化，模型檔本身不變。'}>
+                  <Select options={quantOptions.map(({ value, label }) => ({ value, label }))} />
+                </Form.Item>
+              )}
               <Form.Item name="gpu_memory_utilization" label="顯存佔用比例" style={{ flex: 1 }}
                          extra="模型加 KV 快取最多用到卡的幾成；卡上還有別的東西在跑就調低。">
                 <InputNumber min={0.3} max={0.98} step={0.05} style={{ width: '100%' }} />

@@ -138,9 +138,53 @@ type key struct {
 type Cache struct {
 	mu    sync.Mutex
 	items map[key][]api.Flag
+	// Quantisation methods per image id, from the image itself.
+	quant map[string][]string
 }
 
-func NewCache() *Cache { return &Cache{items: map[key][]api.Flag{}} }
+func NewCache() *Cache { return &Cache{items: map[key][]api.Flag{}, quant: map[string][]string{}} }
+
+// vLLM's own list of what --quantization accepts. Asked of the image rather
+// than written here, because the list moves with every release and the
+// Intel build adds methods the upstream one has not got. Nothing in it says
+// which methods apply to plain weights on the way in and which only name a
+// checkpoint format, so the caller still decides what to offer.
+const quantListing = "from vllm.model_executor.layers.quantization import QUANTIZATION_METHODS\n" +
+	"print('\\n'.join(QUANTIZATION_METHODS))"
+
+// Quantizations is the methods one vLLM image accepts, cached by image id
+// so a rolling tag re-asked after an update gets a fresh answer. Empty when
+// the image cannot say, which the caller treats as "offer the record's".
+func (c *Cache) Quantizations(ctx context.Context, image, imageID string) []string {
+	if imageID == "" {
+		imageID = image
+	}
+	c.mu.Lock()
+	cached, ok := c.quant[imageID]
+	c.mu.Unlock()
+	if ok {
+		return cached
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", "python3", image, "-c", quantListing).Output()
+	if err != nil {
+		log.Printf("could not ask %s for its quantization methods: %v", image, err)
+		return nil
+	}
+	var methods []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.ContainsAny(t, " :[") {
+			methods = append(methods, t)
+		}
+	}
+	if len(methods) > 0 {
+		c.mu.Lock()
+		c.quant[imageID] = methods
+		c.mu.Unlock()
+	}
+	return methods
+}
 
 // LlamaServer asks a launcher for its flags. Run through the wrapper
 // llama-swap uses, because a SYCL build needs oneAPI's runtime on its

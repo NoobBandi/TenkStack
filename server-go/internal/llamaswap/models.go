@@ -784,10 +784,12 @@ func (m *Models) ListWeights() []api.GGUFFile {
 		used := append([]string{}, references[rel]...)
 		sort.Strings(used)
 		size := dirSize(p)
+		precision, quantized := precisionOf(p)
 		// The directory is the repo: <owner>/<name> as Hugging Face has it,
 		// and the one entry under it is the whole model.
 		out = append(out, api.GGUFFile{
 			Filename: rel, Format: "safetensors", Repo: rel, SizeBytes: size, SizeGiB: gib(size),
+			Precision: precision, Quantized: quantized,
 			Modified: float64(config.ModTime().Unix()) + float64(config.ModTime().Nanosecond())*1e-9,
 			Role:     "weights", UsedBy: used,
 		})

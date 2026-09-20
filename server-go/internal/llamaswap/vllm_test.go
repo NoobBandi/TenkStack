@@ -145,3 +145,30 @@ func TestDeleteWeightDirectory(t *testing.T) {
 		t.Error("empty parent left behind")
 	}
 }
+
+func TestPrecisionOf(t *testing.T) {
+	dir := t.TempDir()
+	write := func(cfg string) {
+		os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o644)
+	}
+	for _, c := range []struct {
+		cfg       string
+		precision string
+		quantized bool
+	}{
+		{`{"torch_dtype": "bfloat16"}`, "bf16", false},
+		{`{"dtype": "float16"}`, "fp16", false},
+		{`{"torch_dtype": "bfloat16", "quantization_config": {"quant_method": "fp8", "activation_scheme": "dynamic"}}`, "fp8", true},
+		{`{"quantization_config": {"quant_method": "awq", "bits": 4}}`, "awq", true},
+		{`{"quantization_config": {"quant_method": "gptq", "bits": 4}}`, "gptq", true},
+		{`{"quantization_config": {"quant_method": "compressed-tensors", "config_groups": {"group_0": {"weights": {"type": "int", "num_bits": 4}}}}}`, "int4", true},
+		{`{"quantization_config": {"quant_method": "compressed-tensors", "config_groups": {"group_0": {"weights": {"type": "float", "num_bits": 8}}}}}`, "fp8", true},
+		{`{"quantization_config": {"quant_method": "mxfp4"}}`, "mxfp4", true},
+	} {
+		write(c.cfg)
+		p, q := precisionOf(dir)
+		if p != c.precision || q != c.quantized {
+			t.Errorf("%s: got %q %v, want %q %v", c.cfg, p, q, c.precision, c.quantized)
+		}
+	}
+}

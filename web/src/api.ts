@@ -368,6 +368,11 @@ export interface ModelFile {
    *  safetensors model is one entry naming its directory. */
   filename: string;
   format: 'gguf' | 'safetensors';
+  /** What a safetensors model is stored as, from its config.json: bf16, fp16,
+   *  fp8, awq, gptq, int4, mxfp4. `quantized` means the publisher did it, and
+   *  the runtime must not be asked to do it again. */
+  precision?: string;
+  quantized?: boolean;
   /** The repo it came from, empty for a file put there by hand or downloaded
    *  before the layout existed. Two repos ship the same quant under the same
    *  filename often enough that the name alone does not identify one. */
@@ -475,6 +480,9 @@ export interface Runtime {
   formats: string[];
   /** False for a build somebody registered by hand, which the store leaves alone. */
   managed: boolean;
+  /** Quantisations the runtime applies to bf16 weights as it loads them,
+   *  from its own image. Empty for llama.cpp, whose quantisation is the file. */
+  quantizations: { value: string; label: string; note: string; shrink: number }[];
 }
 
 export interface ProvidersPage {

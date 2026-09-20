@@ -1,7 +1,10 @@
 package llamaswap
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -104,4 +107,74 @@ func dirsInCmd(cmd string) []string {
 		out = append(out, name)
 	}
 	return out
+}
+
+// precisionOf reads what a safetensors model is stored as, from its
+// config.json. A publisher's quantisation is recorded there under
+// quantization_config, and vLLM applies it on its own; asking for online
+// quantisation on top would be refused or wrong. Everything else is the
+// dtype the weights were saved in.
+func precisionOf(dir string) (precision string, quantized bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return "", false
+	}
+	var cfg struct {
+		TorchDtype string `json:"torch_dtype"`
+		Dtype      string `json:"dtype"`
+		Quant      struct {
+			Method string `json:"quant_method"`
+			Bits   int    `json:"bits"`
+			// compressed-tensors: the first group's weight scheme.
+			Groups map[string]struct {
+				Weights struct {
+					Type    string `json:"type"`
+					NumBits int    `json:"num_bits"`
+				} `json:"weights"`
+			} `json:"config_groups"`
+		} `json:"quantization_config"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return "", false
+	}
+	if q := cfg.Quant; q.Method != "" {
+		switch q.Method {
+		case "fp8":
+			return "fp8", true
+		case "awq", "gptq":
+			return q.Method, true
+		case "mxfp4":
+			return "mxfp4", true
+		case "compressed-tensors":
+			for _, g := range q.Groups {
+				if g.Weights.Type == "float" && g.Weights.NumBits == 8 {
+					return "fp8", true
+				}
+				if g.Weights.NumBits == 4 {
+					return "int4", true
+				}
+				if g.Weights.NumBits == 8 {
+					return "int8", true
+				}
+			}
+			return "compressed", true
+		}
+		if q.Bits == 4 {
+			return "int4", true
+		}
+		return q.Method, true
+	}
+	dtype := cfg.TorchDtype
+	if dtype == "" {
+		dtype = cfg.Dtype
+	}
+	switch dtype {
+	case "bfloat16":
+		return "bf16", false
+	case "float16":
+		return "fp16", false
+	case "float32":
+		return "fp32", false
+	}
+	return dtype, false
 }

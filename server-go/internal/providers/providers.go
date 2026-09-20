@@ -43,6 +43,16 @@ type Build struct {
 	CacheDir string
 }
 
+// Quant is one quantisation a provider can apply to plain weights as it
+// loads them. Shrink is the weights' footprint against bf16.
+type Quant struct {
+	Value string
+	Label string
+	// Note is what it costs and saves, for the help under the field.
+	Note   string
+	Shrink float64
+}
+
 // Provider is one piece of inference software.
 type Provider struct {
 	Key  string
@@ -72,6 +82,9 @@ type Provider struct {
 	// Flags the console's own form writes for this provider, so an entry
 	// read back can tell its fields from what the user typed by hand.
 	Managed []string
+	// Online are the quantisations worth offering for a model published in
+	// bf16. The image is asked which of them it actually has.
+	Online []Quant
 
 	// The macro and script names llama.cpp had before this package existed,
 	// kept so a config written then still resolves. Empty means the key.
@@ -183,6 +196,14 @@ var vllm = Provider{
 	ModelFlag: "--model",
 	Managed: []string{"--model", "--served-model-name", "--host", "--port", "--max-model-len",
 		"--tensor-parallel-size", "--gpu-memory-utilization", "--quantization"},
+	// The rest of vLLM's list names checkpoint formats -- awq, gptq,
+	// compressed-tensors -- which a repo declares in its config.json and
+	// vLLM applies unasked. These two are the ones that take bf16 weights
+	// and compress them on the way in.
+	Online: []Quant{
+		{Value: "fp8", Label: "FP8（線上量化）", Note: "顯存減半，品質幾乎不變", Shrink: 0.5},
+		{Value: "sym_int4", Label: "Int4（線上量化）", Note: "顯存四分之一，品質略降", Shrink: 0.25},
+	},
 }
 
 // All is every provider, in the order the store shows them.

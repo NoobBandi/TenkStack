@@ -70,8 +70,13 @@ type Weight struct {
 // GGUFFile is one set of weights on disk: a GGUF, or a directory of
 // safetensors as Hugging Face publishes them, which the format says.
 type GGUFFile struct {
-	Filename  string   `json:"filename"`
-	Format    string   `json:"format"`
+	Filename string `json:"filename"`
+	Format   string `json:"format"`
+	// Precision of a safetensors model from its config.json: bf16, fp16,
+	// fp8, awq, gptq, int4, mxfp4. Quantized says the publisher already
+	// quantised it, so the runtime must not be asked to again.
+	Precision string   `json:"precision,omitempty"`
+	Quantized bool     `json:"quantized,omitempty"`
 	Repo      string   `json:"repo"`
 	SizeBytes int64    `json:"size_bytes"`
 	SizeGiB   float64  `json:"size_gib"`

@@ -201,6 +201,16 @@ type Runtime struct {
 	Vendor   string   `json:"vendor"`
 	Formats  []string `json:"formats"`
 	Managed  bool     `json:"managed"`
+	// Quantizations the runtime can apply to plain weights as it loads
+	// them: the record's, kept to those its image reports having.
+	Quantizations []Quantization `json:"quantizations"`
+}
+
+type Quantization struct {
+	Value  string  `json:"value"`
+	Label  string  `json:"label"`
+	Note   string  `json:"note"`
+	Shrink float64 `json:"shrink"`
 }
 
 type ProvidersPage struct {

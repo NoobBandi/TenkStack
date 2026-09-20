@@ -85,6 +85,13 @@ func (d *Docker) ImageSizes(ctx context.Context) map[string]string {
 	return found
 }
 
+// ImageID is the content id behind a tag, or "" when the image is not
+// here: what tells one pull of a rolling tag from the next.
+func (d *Docker) ImageID(ctx context.Context, image string) string {
+	out, _ := d.run(ctx, "images", "--no-trunc", "-q", image)
+	return strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
+}
+
 var verbs = map[string]bool{"restart": true, "start": true, "stop": true}
 
 // Control starts, stops or restarts one container that exists. Both
