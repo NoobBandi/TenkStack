@@ -1832,3 +1832,57 @@ export async function uploadFsFile(
     onProgress(offset);
   }
 }
+
+// Quantisation: a bf16 safetensors directory turned into a smaller one on
+// disk, by auto-round in a container derived from the vLLM image.
+export interface QuantTool {
+  vendor: string;
+  base: string;
+  image: string;
+  /** absent, building, ready, error, no-base (vLLM not installed), unsupported */
+  state: string;
+  message: string;
+}
+
+export interface QuantScheme {
+  key: string;
+  label: string;
+  family: 'safetensors' | 'gguf';
+  suffix: string;
+  /** The output's size against the bf16 source. */
+  shrink: number;
+  /** Runs the calibration-driven optimisation, which is where the time goes. */
+  tuned: boolean;
+  note: string;
+}
+
+export interface QuantJob {
+  id: string;
+  source: string;
+  output: string;
+  scheme: string;
+  family: string;
+  speed: string;
+  card: number;
+  state: 'running' | 'done' | 'error' | 'cancelled';
+  blocks_done: number;
+  blocks_total: number;
+  message: string;
+  log: string[];
+  source_bytes: number;
+  started_at: number;
+  finished_at: number;
+}
+
+export interface QuantPage {
+  tools: QuantTool[];
+  schemes: QuantScheme[];
+  speeds: string[];
+  jobs: QuantJob[];
+}
+
+export const fetchQuant = () => get<QuantPage>('/quant');
+export const buildQuantTool = (vendor: string) => send<QuantTool>('/quant/tool', 'POST', { vendor });
+export const startQuant = (source: string, scheme: string, speed: string, card: number) =>
+  send<QuantJob>('/quant', 'POST', { source, scheme, speed, card });
+export const cancelQuant = (id: string) => send<{ ok: boolean }>(`/quant/${id}/cancel`, 'POST', {});

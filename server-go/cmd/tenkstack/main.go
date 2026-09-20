@@ -39,12 +39,14 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/network"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
+	"github.com/NoobBandi/TenkStack/server-go/internal/quant"
 	"github.com/NoobBandi/TenkStack/server-go/internal/release"
 	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/store"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
+	"github.com/NoobBandi/TenkStack/server-go/internal/vendors"
 	"github.com/NoobBandi/TenkStack/server-go/internal/visioncache"
 	"github.com/NoobBandi/TenkStack/server-go/internal/webdist"
 )
@@ -155,6 +157,18 @@ func main() {
 			[]string{"tenkstack-console.service", "ai-console.service"}),
 		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
+		Quant: quant.New(docker, models, layout.ModelsDir, filepath.Join(layout.StateDir, "quant"),
+			func(ctx context.Context) []vendors.Card {
+				var out []vendors.Card
+				for _, d := range cards.Discover(ctx) {
+					address := ""
+					if d.PCIBDFAddress != nil {
+						address = *d.PCIBDFAddress
+					}
+					out = append(out, vendors.Card{PCIBDFAddress: address, Name: d.Name, Vendor: d.Vendor})
+				}
+				return out
+			}),
 		Version:    version,
 		WebDist:    *webDist,
 		Embedded:   webdist.FS(),

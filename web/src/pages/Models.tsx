@@ -10,14 +10,15 @@ import {
 import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
-  fetchModelSpec, fetchPartials, fetchProviders, fetchRecommendedSampling, loadModel,
+  fetchModelSpec, fetchPartials, fetchProviders, fetchQuant, fetchRecommendedSampling, loadModel,
   modelFileRefs, saveModel, unloadAll,
   unloadModel,
   type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo,
-  type ModelSpec, type ModelWeight, type PartialFile, type Runtime,
+  type ModelSpec, type ModelWeight, type PartialFile, type QuantJob, type Runtime,
 } from '../api';
 import { MONO } from '../theme';
 import FlagPicker from '../components/FlagPicker';
+import { QuantJobs, QuantizeModal } from '../components/Quantize';
 
 const { Text, Paragraph } = Typography;
 
@@ -142,7 +143,7 @@ interface RepoGroup {
 
 export default function Models() {
   const { message } = AntApp.useApp();
-  const { models, refreshModels } = useStream();
+  const { models, refreshModels, gpus } = useStream();
   const [files, setFiles] = useState<ModelFile[]>([]);
   const [partials, setPartials] = useState<PartialFile[]>([]);
   const [open, setOpen] = useState(false);
@@ -183,6 +184,21 @@ export default function Models() {
   const chosenOption = quantOptions.find((q) => q.value === chosenQuant);
   const shrink = chosenOption?.shrink ?? 1;
 
+  // Quantising: which directory the modal is open for, and the jobs above
+  // the file list. Polled while one runs, so the bar moves and the output
+  // appears without anybody pressing anything.
+  const [quantSource, setQuantSource] = useState<ModelFile | null>(null);
+  const [quantJobs, setQuantJobs] = useState<QuantJob[]>([]);
+  const refreshQuant = useCallback(() => {
+    fetchQuant().then((p) => setQuantJobs(p.jobs)).catch(() => undefined);
+  }, []);
+  useEffect(() => { refreshQuant(); }, [refreshQuant]);
+  const quantRunning = quantJobs.some((j) => j.state === 'running');
+  useEffect(() => {
+    if (!quantRunning) return;
+    const timer = setInterval(refreshQuant, 3000);
+    return () => clearInterval(timer);
+  }, [quantRunning, refreshQuant]);
   // Deletion is a two-step dialogue: what would go, then whether to take it.
   const [pending, setPending] = useState<ModelInfo | null>(null);
   const [pendingFiles, setPendingFiles] = useState<ModelFileRef[]>([]);
@@ -196,6 +212,9 @@ export default function Models() {
   }, [refreshModels]);
 
   useEffect(() => { refresh(); }, [refresh]);
+  // A finished quantisation left a new directory behind.
+  const quantDone = quantJobs.filter((j) => j.state !== 'running').length;
+  useEffect(() => { if (quantDone) refresh(); }, [quantDone, refresh]);
   useEffect(() => {
     fetchBackendDevices().then(setDevices).catch(() => setDevices([]));
     fetchProviders().then((p) => setRuntimes(p.runtimes)).catch(() => setRuntimes([]));
@@ -621,6 +640,7 @@ export default function Models() {
 
             Sorted by size, since the question this table answers is what is
             taking the space. */}
+        <QuantJobs jobs={quantJobs} onChange={refreshQuant} />
         <Table<RepoGroup>
           dataSource={repos}
           rowKey="repo"
@@ -739,16 +759,38 @@ export default function Models() {
               ),
             },
             {
-              title: '', width: 90, align: 'right',
-              render: (_, group) => (group.unused > 0 ? (
-                <Tag color="warning" style={{ marginInlineEnd: 0 }}>
-                  {group.unused} 個未使用
-                </Tag>
-              ) : null),
+              title: '', width: 170, align: 'right',
+              render: (_, group) => {
+                // A bf16 safetensors model can be made smaller here; a GGUF
+                // or an already-quantised repo cannot.
+                const bf16 = group.files.find((f) => f.format === 'safetensors' && !f.quantized);
+                return (
+                  <Space size={8}>
+                    {group.unused > 0 && (
+                      <Tag color="warning" style={{ marginInlineEnd: 0 }}>
+                        {group.unused} 個未使用
+                      </Tag>
+                    )}
+                    {bf16 && (
+                      <Button size="small" onClick={(e) => { e.stopPropagation(); setQuantSource(bf16); }}>
+                        量化
+                      </Button>
+                    )}
+                  </Space>
+                );
+              },
             },
           ]}
         />
       </Card>
+
+      <QuantizeModal
+        source={quantSource}
+        gpus={gpus}
+        open={!!quantSource}
+        onClose={() => setQuantSource(null)}
+        onStarted={refreshQuant}
+      />
 
       {partials.length > 0 && (
         <Card

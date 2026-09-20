@@ -129,3 +129,48 @@ type Capabilities struct {
 	Tools  bool   `json:"tools"`
 	Source string `json:"source"` // live or config
 }
+
+// QuantTool is the quantisation image for one vendor and whether it is here.
+type QuantTool struct {
+	Vendor string `json:"vendor"`
+	Base   string `json:"base"`
+	Image  string `json:"image"`
+	// absent, building, ready, error, no-base (vLLM not installed), unsupported
+	State   string `json:"state"`
+	Message string `json:"message"`
+}
+
+type QuantScheme struct {
+	Key    string  `json:"key"`
+	Label  string  `json:"label"`
+	Family string  `json:"family"`
+	Suffix string  `json:"suffix"`
+	Shrink float64 `json:"shrink"`
+	Tuned  bool    `json:"tuned"`
+	Note   string  `json:"note"`
+}
+
+type QuantJob struct {
+	ID          string   `json:"id"`
+	Source      string   `json:"source"`
+	Output      string   `json:"output"`
+	Scheme      string   `json:"scheme"`
+	Family      string   `json:"family"`
+	Speed       string   `json:"speed"`
+	Card        int      `json:"card"`
+	State       string   `json:"state"` // running, done, error, cancelled
+	BlocksDone  int      `json:"blocks_done"`
+	BlocksTotal int      `json:"blocks_total"`
+	Message     string   `json:"message"`
+	Log         []string `json:"log"`
+	SourceBytes int64    `json:"source_bytes"`
+	StartedAt   int64    `json:"started_at"`
+	FinishedAt  int64    `json:"finished_at"`
+}
+
+type QuantPage struct {
+	Tools   []QuantTool   `json:"tools"`
+	Schemes []QuantScheme `json:"schemes"`
+	Speeds  []string      `json:"speeds"`
+	Jobs    []QuantJob    `json:"jobs"`
+}

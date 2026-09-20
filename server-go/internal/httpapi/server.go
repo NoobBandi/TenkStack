@@ -33,6 +33,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
+	"github.com/NoobBandi/TenkStack/server-go/internal/quant"
 	"github.com/NoobBandi/TenkStack/server-go/internal/release"
 	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
@@ -63,6 +64,7 @@ type Server struct {
 	ComfyProbe *comfy.Probe
 	Comfy      *comfy.Manager
 	Installer  *backends.Installer
+	Quant      *quant.Manager
 	Chats      *chats.Store
 	Blobs      *blobs.Store
 	Vision     *visioncache.Cache
@@ -179,6 +181,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/comfyui/stop", s.comfyStop)
 	mux.HandleFunc("POST /api/comfyui/interrupt", s.comfyInterrupt)
 	mux.HandleFunc("GET /api/providers", s.readProviders)
+	mux.HandleFunc("GET /api/quant", s.readQuant)
+	mux.HandleFunc("POST /api/quant/tool", s.buildQuantTool)
+	mux.HandleFunc("POST /api/quant", s.startQuant)
+	mux.HandleFunc("POST /api/quant/{id}/cancel", s.cancelQuant)
 	mux.HandleFunc("GET /api/runtimes", s.readRuntimes)
 	mux.HandleFunc("POST /api/runtimes/card", s.setCardRole)
 	mux.HandleFunc("POST /api/runtimes/comfy", s.comfyAction)
