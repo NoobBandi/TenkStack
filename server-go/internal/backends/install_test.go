@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 )
 
 // The goldens were written by the Python module on this machine; the
@@ -19,7 +21,7 @@ func TestWrapperTextMatchesPython(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got := WrapperText(c.vendor, "/home/someone/tenkstack/models", c.variant)
+		got := WrapperText(*providers.Get(providers.LlamaCpp), c.vendor, "/home/someone/tenkstack/models", c.variant)
 		if got != string(want) {
 			t.Errorf("%s differs from the Python output:\n--- want\n%s\n--- got\n%s", c.file, want, got)
 		}
@@ -44,6 +46,7 @@ func TestRuntimesTableMatchesPython(t *testing.T) {
 		var gm map[string]any
 		json.Unmarshal(gb, &gm)
 		delete(gm, "vendor")
+		delete(gm, "provider")
 		eb, _ := json.Marshal(e)
 		gb, _ = json.Marshal(gm)
 		if string(eb) != string(gb) {

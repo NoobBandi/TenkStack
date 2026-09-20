@@ -23,6 +23,9 @@ var allowed = map[string][]string{
 	"store":   {},
 	"vendors": {},
 	"webdist": {},
+	// Data about software rather than cards; a leaf like vendors, and it
+	// may name vendors because a build is per vendor.
+	"providers": {"api", "vendors"},
 
 	// Domain packages: only the leaves, never each other.
 	"auth":             {"api"},
@@ -36,7 +39,7 @@ var allowed = map[string][]string{
 	"llamaswap":        {"api"},
 	"containers":       {"api", "vendors"},
 	"containerhistory": {"api"},
-	"backends":         {"api", "vendors"},
+	"backends":         {"api", "vendors", "providers"},
 	"flags":            {"api"},
 	"gguf":             {},
 	"channels":         {"api"},
@@ -53,7 +56,7 @@ var allowed = map[string][]string{
 	"release":          {"api"},
 
 	// The HTTP surface may reach every domain package.
-	"httpapi": {"api", "paths", "ports", "vendors", "auth", "users", "settings", "system", "gpu", "gpuhistory",
+	"httpapi": {"api", "paths", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",
 		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release"},
 	"boundary": {},
 }

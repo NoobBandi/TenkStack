@@ -20,10 +20,10 @@ and they all answer it differently — `nvidia-smi` in one CSV, `xpu-smi` in JSO
 across two sources, `rocm-smi` in its own. This is `gpu.Provider`, three
 methods, and it has been vendor-neutral since before there was a second vendor.
 
-**How does the rest of the platform use it?** Which llama.cpp image drives it,
-which environment variable pins one of its devices, how a container is given
-one, and how to read back which card a container got. This is
-`vendors.Vendor`, and it exists because those four answers used to be scattered
+**How does the rest of the platform use it?** Which environment variable pins
+one of its devices, how a container is given one, how to read back which card
+a container got, and which ComfyUI image runs on it. This is
+`vendors.Vendor`, and it exists because those answers used to be scattered
 through four files as `if vendor == "nvidia"`.
 
 Read the `nvidia` record first — it is the vendor whose mechanisms are least
@@ -108,13 +108,19 @@ var musa = Vendor{
     Key: "musa", Label: "Moore Threads (MUSA)",     // Key must equal GpuSample.Vendor
     Backends:    []string{"MUSA"},                  // what --list-devices prints, upper case
     SelectorVar: "MUSA_VISIBLE_DEVICES", SelectorTemplate: "{}",
-    Llama: &Image{Image: "…", Requires: "…"},        // Verified stays false
     Comfy: &Image{Image: "…"},                       // or nil
     DeviceFlags: func(card Card, cards []Card) []string { … },
     Claims:      func(host map[string]any, cards []Card) ([]string, bool) { … },
     Slot:        func(index int) string { return fmt.Sprintf("musa%d", index) },
 }
 ```
+
+The llama.cpp image that drives the card is not on this record. It is a
+`Build` under the `llamacpp` provider in
+`server-go/internal/providers/providers.go`, keyed by the vendor's `Key`, and
+any other inference runtime that supports the card is a `Build` on its own
+record there. The vendor says how a card is reached; a provider says what
+runs on it.
 
 Notes on the parts that are easy to get subtly wrong:
 

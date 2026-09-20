@@ -15,6 +15,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/backends"
 	"github.com/NoobBandi/TenkStack/server-go/internal/comfy"
 	"github.com/NoobBandi/TenkStack/server-go/internal/containers"
+	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/vendors"
 )
 
@@ -418,13 +419,13 @@ func (s *Server) setCardRole(w http.ResponseWriter, r *http.Request) {
 	case "llm":
 		vendor := cards[i].Vendor
 		if backends.RuntimeFor(vendor) != nil {
-			st := s.Installer.State(ctx, vendor)
+			st := s.Installer.State(ctx, providers.LlamaCpp, vendor)
 			if in.On && !st.Managed {
 				variant := in.Variant
 				if variant == "" {
 					variant = "vendor"
 				}
-				rec, err := s.Installer.Install(ctx, vendor, variant)
+				rec, err := s.Installer.Install(ctx, providers.LlamaCpp, vendor, variant)
 				if err != nil {
 					installError(w, err)
 					return
@@ -433,7 +434,7 @@ func (s *Server) setCardRole(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if err := s.Installer.Enable(ctx, vendor, in.On); err != nil {
+		if err := s.Installer.Enable(ctx, providers.LlamaCpp, vendor, in.On); err != nil {
 			installError(w, err)
 			return
 		}
@@ -502,6 +503,7 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
+		Provider    string `json:"provider"`
 		Vendor      string `json:"vendor"`
 		Action      string `json:"action"`
 		Variant     string `json:"variant"`
@@ -511,6 +513,10 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnprocessableEntity, "invalid JSON body")
 		return
 	}
+	// The per-card view only ever meant llama.cpp; the store names others.
+	if in.Provider == "" {
+		in.Provider = providers.LlamaCpp
+	}
 	ctx := r.Context()
 	var err error
 	switch in.Action {
@@ -519,7 +525,7 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		if variant == "" {
 			variant = "vendor"
 		}
-		rec, err := s.Installer.Install(ctx, in.Vendor, variant)
+		rec, err := s.Installer.Install(ctx, in.Provider, in.Vendor, variant)
 		if err != nil {
 			installError(w, err)
 			return
@@ -527,7 +533,7 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, rec)
 		return
 	case "update":
-		rec, err := s.Installer.Update(ctx, in.Vendor)
+		rec, err := s.Installer.Update(ctx, in.Provider, in.Vendor)
 		if err != nil {
 			installError(w, err)
 			return
@@ -535,9 +541,9 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, rec)
 		return
 	case "enable", "disable":
-		err = s.Installer.Enable(ctx, in.Vendor, in.Action == "enable")
+		err = s.Installer.Enable(ctx, in.Provider, in.Vendor, in.Action == "enable")
 	case "remove":
-		err = s.Installer.Remove(ctx, in.Vendor, in.DeleteImage)
+		err = s.Installer.Remove(ctx, in.Provider, in.Vendor, in.DeleteImage)
 	default:
 		err = &backends.Invalid{Msg: "不認識的動作：" + in.Action}
 	}

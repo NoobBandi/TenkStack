@@ -80,6 +80,7 @@ type ComfyState struct {
 
 // Install is one runtime being added.
 type Install struct {
+	Provider    string `json:"provider"`
 	Vendor      string `json:"vendor"`
 	Image       string `json:"image"`
 	State       string `json:"state"` // pulling, writing, done, error
@@ -95,6 +96,7 @@ type RuntimeTemplate struct {
 	Verified bool     `json:"verified"`
 	Flags    []string `json:"flags"`
 	Vendor   string   `json:"vendor"`
+	Provider string   `json:"provider"`
 }
 
 // RuntimeState is three independent facts: the script, the macro, the

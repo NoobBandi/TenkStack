@@ -40,7 +40,8 @@ type Vendor struct {
 	SelectorVar      string
 	SelectorTemplate string
 
-	Llama *Image
+	// Comfy is the ComfyUI image for this vendor's cards. The inference
+	// runtimes live in internal/providers, one image per vendor each.
 	Comfy *Image
 
 	// DeviceFlags are the docker run arguments that hand one card over.
@@ -62,7 +63,6 @@ var intel = Vendor{
 	// level_zero:N rather than a bare index: without the prefix SYCL can pick
 	// the CPU OpenCL device and run everything on the CPU.
 	SelectorVar: "ONEAPI_DEVICE_SELECTOR", SelectorTemplate: "level_zero:{}",
-	Llama: &Image{Image: "ghcr.io/ggml-org/llama.cpp:server-intel"},
 	Comfy: &Image{Image: "yanwk/comfyui-boot:xpu", Verified: true},
 	DeviceFlags: func(card Card, _ []Card) []string {
 		return []string{"--device", RenderPath(card.PCIBDFAddress)}
@@ -83,7 +83,6 @@ var amd = Vendor{
 	Key: "amd", Label: "AMD (ROCm)",
 	Backends:    []string{"ROCM", "HIP"},
 	SelectorVar: "HIP_VISIBLE_DEVICES", SelectorTemplate: "{}",
-	Llama: &Image{Image: "ghcr.io/ggml-org/llama.cpp:server-rocm"},
 	Comfy: &Image{Image: "yanwk/comfyui-boot:rocm"},
 	DeviceFlags: func(card Card, _ []Card) []string {
 		return []string{"--device", RenderPath(card.PCIBDFAddress),
@@ -99,7 +98,6 @@ var nvidia = Vendor{
 	Key: "nvidia", Label: "NVIDIA (CUDA)",
 	Backends:    []string{"CUDA"},
 	SelectorVar: "CUDA_VISIBLE_DEVICES", SelectorTemplate: "{}",
-	Llama: &Image{Image: "ghcr.io/ggml-org/llama.cpp:server-cuda", Requires: "nvidia-container-toolkit", Verified: true},
 	Comfy: &Image{Image: "yanwk/comfyui-boot:cu130-slim-v2", Requires: "nvidia-container-toolkit", Verified: true},
 	DeviceFlags: func(card Card, cards []Card) []string {
 		return []string{"--gpus", fmt.Sprintf("device=%d", nvidiaOrdinal(card, cards))}
