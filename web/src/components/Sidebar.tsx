@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { Layout, Menu, Tooltip, Typography } from 'antd';
 import {
   ApiOutlined, AppstoreOutlined, CloudDownloadOutlined, ContainerOutlined,
-  DashboardOutlined, FileTextOutlined, FolderOpenOutlined, MessageOutlined,
-  PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
+  DashboardOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined,
+  MessageOutlined, PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  fetchConsoleVersion, type GpuSample, type ModelInfo, type SystemSample,
+  fetchConsoleVersion, fetchRelease, type GpuSample, type ModelInfo, type SystemSample,
 } from '../api';
-import { LINE, MONO } from '../theme';
+import { ACCENT, LINE, MONO } from '../theme';
 import { deviceTag } from '../hardware';
 
 const { Sider } = Layout;
@@ -40,6 +40,7 @@ export const NAV_GROUPS = [
       { key: '/logs', icon: <FileTextOutlined />, label: '日誌' },
       { key: '/users', icon: <TeamOutlined />, label: '使用者' },
       { key: '/settings', icon: <SettingOutlined />, label: '設定' },
+      { key: '/about', icon: <InfoCircleOutlined />, label: '關於' },
     ],
   },
 ];
@@ -75,12 +76,19 @@ function Meter({ label, value, percent, warn }: {
 
 export default function Sidebar({ collapsed, onCollapse, gpus, models, system }: Props) {
   const [version, setVersion] = useState('');
+  const [newer, setNewer] = useState<string | null>(null);
   useEffect(() => {
     // Once, and from the endpoint that only answers this. The full version
     // report probes every moving part on the machine, which is two thirds of a
     // second of subprocesses to render five characters that cannot change while
     // the process runs.
     fetchConsoleVersion().then(setVersion).catch(() => undefined);
+    // Whether GitHub has a newer one, from the backend's cache: the mark
+    // beside the version is how an installation learns of a release.
+    const ask = () => fetchRelease().then((r) => setNewer(r.newer && r.latest ? r.latest : null)).catch(() => undefined);
+    void ask();
+    const timer = setInterval(ask, 6 * 3600 * 1000);
+    return () => clearInterval(timer);
   }, []);
 
   const location = useLocation();
@@ -228,13 +236,13 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
           itself, so the children box ends exactly where the trigger begins.
           Adding a margin here reserved the same 48px a second time, which is
           the gap that kept this from reaching the floor. */}
-      <Tooltip title={`建置 ${__BUILD__}`} placement="right">
-        <div style={{
-          flexShrink: 0, paddingBottom: 4,
-          textAlign: 'center', cursor: 'default', lineHeight: 1,
+      <Tooltip title={newer ? `有新版 v${newer}，到「關於」更新` : `建置 ${__BUILD__}`} placement="right">
+        <Link to="/about" style={{
+          flexShrink: 0, paddingBottom: 4, display: 'flex', justifyContent: 'center',
+          alignItems: 'center', gap: 6, lineHeight: 1, textDecoration: 'none',
         }}>
           <Text style={{
-            fontSize: 10, opacity: 0.3, fontFamily: MONO, letterSpacing: 0.6,
+            fontSize: 10, opacity: newer ? 0.7 : 0.3, fontFamily: MONO, letterSpacing: 0.6,
           }}>
             {/* From the API, not from a build-time copy of package.json.
                 That copy was the version's third home and it broke the moment
@@ -242,7 +250,10 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
                 vundefined, printed here in place of a number. */}
             {version ? `v${version}` : ''}
           </Text>
-        </div>
+          {newer && (
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: ACCENT.warn, display: 'inline-block' }} />
+          )}
+        </Link>
       </Tooltip>
     </Sider>
   );

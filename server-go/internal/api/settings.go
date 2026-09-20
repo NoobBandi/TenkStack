@@ -50,3 +50,40 @@ type SystemSample struct {
 	Disks         []SystemDisk `json:"disks"`
 	UptimeSeconds *float64     `json:"uptime_seconds"`
 }
+
+// Release is the newest TenkStack on GitHub against this installation.
+type Release struct {
+	Current string `json:"current"`
+	Repo    string `json:"repo"`
+	Arch    string `json:"arch"`
+	// Latest is the tag without its v; nil when the ask failed, with why
+	// in Error.
+	Latest      *string        `json:"latest"`
+	Newer       bool           `json:"newer"`
+	Name        string         `json:"name"`
+	Body        string         `json:"body"`
+	URL         string         `json:"url"`
+	PublishedAt *float64       `json:"published_at"`
+	Assets      []ReleaseAsset `json:"assets"`
+	CheckedAt   *float64       `json:"checked_at"`
+	Error       string         `json:"error,omitempty"`
+	// CanApply is whether this process could replace itself with the
+	// release; ApplyNote says what is in the way, or what to do after.
+	CanApply  bool   `json:"can_apply"`
+	ApplyNote string `json:"apply_note,omitempty"`
+}
+
+type ReleaseAsset struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+	Size int64  `json:"size"`
+}
+
+type ReleaseApply struct {
+	OK         bool   `json:"ok"`
+	Version    string `json:"version"`
+	Path       string `json:"path"`
+	Restarting bool   `json:"restarting"`
+	Unit       string `json:"unit,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+}

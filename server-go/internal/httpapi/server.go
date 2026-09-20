@@ -33,6 +33,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
+	"github.com/NoobBandi/TenkStack/server-go/internal/release"
 	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
@@ -69,6 +70,7 @@ type Server struct {
 	Catalog    *catalog.Catalog
 	Remote     *gguf.Remote
 	Files      *files.Files
+	Release    *release.Client
 	// One eviction at a time: two requests arriving together would both
 	// decide to clear the card and both wait for it.
 	vramMu  sync.Mutex
@@ -196,6 +198,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/network", s.readNetwork)
 	mux.HandleFunc("GET /api/machine", s.readMachine)
 	mux.HandleFunc("GET /api/versions", s.readVersions)
+	mux.HandleFunc("GET /api/release", s.readRelease)
+	mux.HandleFunc("POST /api/release/check", s.checkRelease)
+	mux.HandleFunc("POST /api/release/apply", s.applyRelease)
 
 	mux.HandleFunc("GET /api/settings", s.readSettings)
 	mux.HandleFunc("PUT /api/settings", s.writeSettings)

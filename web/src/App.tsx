@@ -18,6 +18,7 @@ import Gpu from './pages/Gpu';
 import Connections from './pages/Connections';
 import Logs from './pages/Logs';
 import Runtime from './pages/Runtime';
+import About from './pages/About';
 import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
 import { IdentityProvider } from './identity';
@@ -43,6 +44,7 @@ const ROUTES = [
   { path: '/connections', element: <Connections /> },
   { path: '/logs', element: <Logs /> },
   { path: '/settings', element: <Settings /> },
+  { path: '/about', element: <About /> },
 ];
 
 const TITLES: Record<string, string> = Object.fromEntries(

@@ -133,6 +133,14 @@ AMD cards need the vendor's compute stack already present.
   at all". The console's own polling of llama-swap and Caddy is flagged and
   hidden by default.
 - **Users** — accounts, roles and API keys for the API below.
+- **About** — what this is and where it comes from, and whether there is a
+  newer one: each installation asks GitHub for the latest release itself, a
+  few times a day, and marks the version in the sidebar when there is. The
+  administrator updates with one press: the release's binary for this
+  architecture is fetched, checked against the release's SHA256SUMS, swapped
+  in under the running process and the service restarted — the same file the
+  installer would fetch, in the same place, with the old one kept beside it as
+  `tenkstack.prev`. Nothing phones home.
 - **Connections** — one row per way in: the address, who may reach it, whether
   it is open, and a client configuration example. `/v1/chat/completions` speaks
   OpenAI and `/v1/messages` speaks Anthropic, both proxied to the same models,

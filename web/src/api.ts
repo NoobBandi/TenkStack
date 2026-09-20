@@ -1406,6 +1406,31 @@ export const fetchVersions = () => get<VersionReport>('/versions');
 export const fetchConsoleVersion = () =>
   get<{ version: string }>('/version').then((d) => d.version);
 
+/** The newest TenkStack on GitHub against this installation. Every
+ *  installation asks for itself; `error` is why it could not. */
+export interface Release {
+  current: string;
+  repo: string;
+  arch: string;
+  latest: string | null;
+  newer: boolean;
+  name: string;
+  body: string;
+  url: string;
+  published_at: number | null;
+  assets: { name: string; url: string; size: number }[];
+  checked_at: number | null;
+  error?: string;
+  can_apply: boolean;
+  apply_note?: string;
+}
+
+export const fetchRelease = () => get<Release>('/release');
+export const checkRelease = () => send<Release>('/release/check', 'POST');
+export const applyRelease = () =>
+  send<{ ok: boolean; version: string; path: string; restarting: boolean; unit?: string; detail?: string }>(
+    '/release/apply', 'POST');
+
 // ---------------------------------------------------------------------------
 // The console's own settings, and the machine it is installed on
 // ---------------------------------------------------------------------------

@@ -39,6 +39,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/network"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
 	"github.com/NoobBandi/TenkStack/server-go/internal/ports"
+	"github.com/NoobBandi/TenkStack/server-go/internal/release"
 	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
 	"github.com/NoobBandi/TenkStack/server-go/internal/store"
@@ -148,6 +149,10 @@ func main() {
 		Files: &files.Files{ComfyDir: layout.ComfyDir, StateDir: layout.StateDir, Home: home,
 			Roots: os.Getenv("CONSOLE_FILE_ROOTS"), ExtraDeny: os.Getenv("CONSOLE_FILE_DENY")},
 		Remote: gguf.NewRemote(),
+		// TENKSTACK_REPO and TENKSTACK_RELEASE_API exist for a fork and for
+		// testing against a stand-in; an ordinary install sets neither.
+		Release: release.New(os.Getenv("TENKSTACK_REPO"), os.Getenv("TENKSTACK_RELEASE_API"), version,
+			[]string{"tenkstack-console.service", "ai-console.service"}),
 		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
 		Version:    version,
