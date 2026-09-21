@@ -13,6 +13,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
+	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 	"github.com/NoobBandi/TenkStack/server-go/internal/vendors"
 )
 
@@ -37,9 +38,12 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 	props := map[string]map[string]any{}
 	slots := map[string][]api.Slot{}
 	var mu sync.Mutex
+	providerOf := s.Models.ProviderKeys()
 	for id, entry := range byID {
 		proxy, _ := entry["proxy"].(string)
-		if proxy == "" {
+		// /props and /slots are llama-server's; another provider answers
+		// 404 twice a poll, which is noise in its log for nothing.
+		if proxy == "" || providerOf[id] != providers.LlamaCpp {
 			continue
 		}
 		wg.Add(1)
@@ -98,6 +102,11 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 			row["slots"] = sl
 		}
 		caps := api.Capabilities{Source: "config", Vision: declared[id]}
+		// vLLM has no /props to ask. Tool calling is a launch flag the
+		// form writes for every vLLM entry, so it is declared here.
+		if providerOf[id] == providers.VLLM {
+			caps.Tools = true
+		}
 		if live != nil {
 			caps.Source = "live"
 			caps.Vision, _ = modalities["vision"].(bool)

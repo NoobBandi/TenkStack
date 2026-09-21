@@ -373,6 +373,8 @@ export interface ModelFile {
    *  the runtime must not be asked to do it again. */
   precision?: string;
   quantized?: boolean;
+  /** The model class from config.json (Qwen3_5ForConditionalGeneration…). */
+  architecture?: string;
   /** The repo it came from, empty for a file put there by hand or downloaded
    *  before the layout existed. Two repos ship the same quant under the same
    *  filename often enough that the name alone does not identify one. */

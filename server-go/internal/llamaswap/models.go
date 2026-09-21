@@ -483,6 +483,27 @@ func (m *Models) DeclaredVision() map[string]bool {
 	}
 	for _, e := range entries {
 		out[e.id] = mmprojFlag.MatchString(e.cmd)
+		// A vLLM entry names a directory; whether it sees images is in
+		// the architecture its config.json declares.
+		for _, dir := range dirsInCmd(e.cmd) {
+			if p := m.resolve(dir); p != "" && seesImages(architectureOf(p)) {
+				out[e.id] = true
+			}
+		}
+	}
+	return out
+}
+
+// ProviderKeys is which provider each entry starts through.
+func (m *Models) ProviderKeys() map[string]string {
+	out := map[string]string{}
+	entries, _, err := m.entries()
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		p, _, _ := ProviderOf(e.cmd)
+		out[e.id] = p.Key
 	}
 	return out
 }
@@ -789,7 +810,7 @@ func (m *Models) ListWeights() []api.GGUFFile {
 		// and the one entry under it is the whole model.
 		out = append(out, api.GGUFFile{
 			Filename: rel, Format: "safetensors", Repo: rel, SizeBytes: size, SizeGiB: gib(size),
-			Precision: precision, Quantized: quantized,
+			Precision: precision, Quantized: quantized, Architecture: architectureOf(p),
 			Modified: float64(config.ModTime().Unix()) + float64(config.ModTime().Nanosecond())*1e-9,
 			Role:     "weights", UsedBy: used,
 		})

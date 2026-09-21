@@ -158,6 +158,7 @@ func TestPrecisionOf(t *testing.T) {
 	}{
 		{`{"torch_dtype": "bfloat16"}`, "bf16", false},
 		{`{"dtype": "float16"}`, "fp16", false},
+		{`{"architectures": ["Qwen3_5ForConditionalGeneration"], "text_config": {"dtype": "bfloat16"}}`, "bf16", false},
 		{`{"torch_dtype": "bfloat16", "quantization_config": {"quant_method": "fp8", "activation_scheme": "dynamic"}}`, "fp8", true},
 		{`{"quantization_config": {"quant_method": "awq", "bits": 4}}`, "awq", true},
 		{`{"quantization_config": {"quant_method": "gptq", "bits": 4}}`, "gptq", true},

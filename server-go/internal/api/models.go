@@ -75,15 +75,18 @@ type GGUFFile struct {
 	// Precision of a safetensors model from its config.json: bf16, fp16,
 	// fp8, awq, gptq, int4, mxfp4. Quantized says the publisher already
 	// quantised it, so the runtime must not be asked to again.
-	Precision string   `json:"precision,omitempty"`
-	Quantized bool     `json:"quantized,omitempty"`
-	Repo      string   `json:"repo"`
-	SizeBytes int64    `json:"size_bytes"`
-	SizeGiB   float64  `json:"size_gib"`
-	Modified  float64  `json:"modified"`
-	IsMmproj  bool     `json:"is_mmproj"`
-	Role      string   `json:"role"`
-	UsedBy    []string `json:"used_by"`
+	Precision string `json:"precision,omitempty"`
+	Quantized bool   `json:"quantized,omitempty"`
+	// Architecture is the first entry of config.json's architectures, which
+	// is what decides a runtime's flags and whether the model sees images.
+	Architecture string   `json:"architecture,omitempty"`
+	Repo         string   `json:"repo"`
+	SizeBytes    int64    `json:"size_bytes"`
+	SizeGiB      float64  `json:"size_gib"`
+	Modified     float64  `json:"modified"`
+	IsMmproj     bool     `json:"is_mmproj"`
+	Role         string   `json:"role"`
+	UsedBy       []string `json:"used_by"`
 }
 
 type Partial struct {

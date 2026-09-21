@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/images"
+	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 )
 
 // logRequestShape reports the shape of a completion request, never the
@@ -139,6 +140,8 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	body = s.fitForProvider(path, body)
+
 	target := s.LlamaSwap.Base + "/v1/" + path
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
@@ -186,4 +189,39 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// fitForProvider bends a request to what the model's runtime accepts.
+// llama-server treats max_tokens as a ceiling and stops at the context;
+// vLLM refuses the request outright when it exceeds the context, and the
+// console's chat -- and any client that says "as much as you can" the
+// llama-server way -- sends numbers far above it. For a vLLM entry the
+// field goes when it is over the context, and vLLM then uses what is left.
+func (s *Server) fitForProvider(path string, body []byte) []byte {
+	if !strings.HasSuffix(path, "completions") || len(body) == 0 {
+		return body
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil || payload == nil {
+		return body
+	}
+	model, _ := payload["model"].(string)
+	if model == "" || s.Models.ProviderKeys()[s.Config.CanonicalModel(model)] != providers.VLLM {
+		return body
+	}
+	ctx := s.Models.ContextSizes()[s.Config.CanonicalModel(model)]
+	changed := false
+	for _, key := range []string{"max_tokens", "max_completion_tokens"} {
+		if n, ok := payload[key].(float64); ok && ctx > 0 && int(n) >= ctx {
+			delete(payload, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	if b, err := json.Marshal(payload); err == nil {
+		return b
+	}
+	return body
 }

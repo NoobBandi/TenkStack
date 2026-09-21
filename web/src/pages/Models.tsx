@@ -66,6 +66,24 @@ const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 const fileLabel = (f: ModelFile) =>
   `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''} (${f.size_gib} GiB${f.precision ? ` · ${PRECISION[f.precision] ?? f.precision.toUpperCase()}` : ''})`;
 
+/**
+ * The vLLM flags a model family needs, offered when its folder is picked.
+ *
+ * Reasoning and tool-call parsers are per family: without them the
+ * thinking arrives inline in the answer and tool calls come back as text.
+ * The Qwen3.5/3.8 hybrid models also corrupt their output under
+ * torch.compile on the Intel build, so they run eager.
+ */
+function recommendedFlags(architecture?: string): string[] {
+  if (!architecture) return [];
+  const flags: string[] = [];
+  if (/^Qwen3_5/i.test(architecture)) flags.push('--enforce-eager');
+  if (/^Qwen3/i.test(architecture)) {
+    flags.push('--reasoning-parser qwen3', '--enable-auto-tool-choice', '--tool-call-parser hermes');
+  }
+  return flags;
+}
+
 /** How a safetensors model is stored, as the label reads. */
 const PRECISION: Record<string, string> = {
   bf16: 'BF16', fp16: 'FP16', fp32: 'FP32', fp8: 'FP8', awq: 'AWQ 4-bit', gptq: 'GPTQ 4-bit',
@@ -222,6 +240,17 @@ export default function Models() {
 
   // The runtime decides which format the file list shows, so a change of one
   // clears a file the new one could not run.
+  // Picking a folder fills in the flags its family needs, when the box is
+  // still empty: what is there was typed on purpose.
+  const onFolder = (name: string) => {
+    if (!vllm) return;
+    const picked = files.find((f) => f.filename === name);
+    const current: string = form.getFieldValue('extra') ?? '';
+    if (picked && !current.trim()) {
+      form.setFieldValue('extra', recommendedFlags(picked.architecture).join('\n'));
+    }
+  };
+
   const onRuntime = (macro: string) => {
     const next = runtimes.find((r) => r.macro === macro);
     const chosen: string | undefined = form.getFieldValue('model_file');
@@ -929,6 +958,7 @@ export default function Models() {
                        : undefined}>
             <Select
               showSearch
+              onChange={onFolder}
               placeholder={vllm ? '從 ~/ai/models 選一個資料夾' : '從 ~/ai/models 選擇'}
               // The basename first, the repo after it: with weights under
               // <owner>/<repo>/ the path leads with a directory, and a list of
@@ -1085,7 +1115,7 @@ export default function Models() {
           )}
           {vllm ? (
             <Form.Item name="extra" label="額外參數"
-                       extra="vllm serve 的其他旗標，一行一個，例如 --enable-prefix-caching、--kv-cache-dtype fp8。模型、長度、卡數、量化和佔用比例由上面的欄位負責。">
+                       extra="vllm serve 的其他旗標，一行一個。選資料夾時會依模型家族帶入需要的（思考、工具呼叫的解析器，Qwen3.5/3.8 要 --enforce-eager），可以改。模型、長度、卡數、量化和佔用比例由上面的欄位負責。">
               <Input.TextArea rows={3} style={{ fontFamily: MONO, fontSize: 12 }} />
             </Form.Item>
           ) : (

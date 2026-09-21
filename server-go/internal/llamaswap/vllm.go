@@ -122,7 +122,12 @@ func precisionOf(dir string) (precision string, quantized bool) {
 	var cfg struct {
 		TorchDtype string `json:"torch_dtype"`
 		Dtype      string `json:"dtype"`
-		Quant      struct {
+		// A multimodal model keeps the language model's config nested.
+		Text struct {
+			TorchDtype string `json:"torch_dtype"`
+			Dtype      string `json:"dtype"`
+		} `json:"text_config"`
+		Quant struct {
 			Method string `json:"quant_method"`
 			Bits   int    `json:"bits"`
 			// compressed-tensors: the first group's weight scheme.
@@ -165,8 +170,10 @@ func precisionOf(dir string) (precision string, quantized bool) {
 		return q.Method, true
 	}
 	dtype := cfg.TorchDtype
-	if dtype == "" {
-		dtype = cfg.Dtype
+	for _, alt := range []string{cfg.Dtype, cfg.Text.TorchDtype, cfg.Text.Dtype} {
+		if dtype == "" {
+			dtype = alt
+		}
 	}
 	switch dtype {
 	case "bfloat16":
@@ -177,4 +184,30 @@ func precisionOf(dir string) (precision string, quantized bool) {
 		return "fp32", false
 	}
 	return dtype, false
+}
+
+// architectureOf is the model class a safetensors directory declares.
+func architectureOf(dir string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Architectures []string `json:"architectures"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Architectures) == 0 {
+		return ""
+	}
+	return cfg.Architectures[0]
+}
+
+// seesImages says whether an architecture takes images: the multimodal
+// classes are named for it, one way or another.
+func seesImages(architecture string) bool {
+	for _, mark := range []string{"ConditionalGeneration", "VL", "Vision", "Omni", "Image"} {
+		if strings.Contains(architecture, mark) {
+			return true
+		}
+	}
+	return false
 }
