@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
-  InputNumber, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
+  InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
@@ -19,12 +19,9 @@ import {
 import { MONO } from '../theme';
 import FlagPicker from '../components/FlagPicker';
 import { QuantJobs, QuantizeModal } from '../components/Quantize';
+import { STATE_COLOURS, stateLabel } from '../modelState';
 
 const { Text, Paragraph } = Typography;
-
-const STATE_COLOURS: Record<string, string> = {
-  ready: 'green', starting: 'processing', stopping: 'orange', stopped: 'default',
-};
 
 const EMPTY: ModelSpec = {
   id: '', name: '', description: '', model_file: '',
@@ -503,7 +500,26 @@ export default function Models() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card
-        title="已設定的模型"
+        title={
+          <Space size={12}>
+            <span>已設定的模型</span>
+            {/* Which engine's models to list, once there is more than one
+                engine. A dropdown rather than a bar of buttons: the list of
+                engines grows with the store, and a bar does not. */}
+            {engines.length > 1 && (
+              <Select
+                size="small"
+                value={shownEngine}
+                onChange={setEngine}
+                style={{ minWidth: 170, fontWeight: 400 }}
+                options={[
+                  { value: 'all', label: `全部推論引擎（${models.length}）` },
+                  ...engines.map((e) => ({ value: e.key, label: `${e.name}（${e.count}）` })),
+                ]}
+              />
+            )}
+          </Space>
+        }
         size="small"
         extra={
           <Space>
@@ -523,18 +539,6 @@ export default function Models() {
           </Space>
         }
       >
-        {engines.length > 1 && (
-          <Segmented
-            size="small"
-            style={{ marginBottom: 12 }}
-            value={shownEngine}
-            onChange={(v) => setEngine(String(v))}
-            options={[
-              { value: 'all', label: `全部（${models.length}）` },
-              ...engines.map((e) => ({ value: e.key, label: `${e.name}（${e.count}）` })),
-            ]}
-          />
-        )}
         <Table<ModelInfo>
           dataSource={shown}
           rowKey="id"
@@ -633,7 +637,7 @@ export default function Models() {
             },
             {
               title: '狀態', dataIndex: 'state', width: 110,
-              render: (state: string) => <Tag color={STATE_COLOURS[state] ?? 'default'}>{state}</Tag>,
+              render: (state: string) => <Tag color={STATE_COLOURS[state] ?? 'default'}>{stateLabel(state)}</Tag>,
             },
             {
               title: 'TTL', dataIndex: 'ttl', width: 90,

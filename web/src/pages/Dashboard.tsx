@@ -10,12 +10,9 @@ import { useStream } from '../stream';
 import { unloadAll, type GpuSample, type ModelInfo } from '../api';
 import { ACCENT, LINE, MONO, VRAM_AMBER, VRAM_RED, meterFill } from '../theme';
 import { clockCeiling, deviceTag, powerCeiling, tempCeiling } from '../hardware';
+import { STATE_COLOURS, stateLabel } from '../modelState';
 
 const { Text } = Typography;
-
-const STATE_COLOURS: Record<string, string> = {
-  ready: 'green', starting: 'processing', stopping: 'orange', stopped: 'default',
-};
 
 
 
@@ -416,7 +413,7 @@ export default function Dashboard() {
                 {
                   title: '狀態', dataIndex: 'state', width: 100,
                   render: (state: string) => (
-                    <Tag color={STATE_COLOURS[state] ?? 'default'}>{state}</Tag>
+                    <Tag color={STATE_COLOURS[state] ?? 'default'}>{stateLabel(state)}</Tag>
                   ),
                 },
                 {
