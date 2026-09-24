@@ -69,3 +69,25 @@ func TestSeedKeepsAFlagSomebodySetOff(t *testing.T) {
 		t.Fatalf("a flag set off was changed: %q", got)
 	}
 }
+
+// The extension lands whole -- __init__.py included, which embed would skip
+// without all: -- and a second seed rewrites nothing.
+func TestSeedFetchNode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "tenkstack_fetch")
+	if err := seedFetchNode(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"__init__.py", "web/fetch.js"} {
+		if st, err := os.Stat(filepath.Join(dir, filepath.FromSlash(f))); err != nil || st.Size() == 0 {
+			t.Errorf("%s missing: %v", f, err)
+		}
+	}
+	before, _ := os.Stat(filepath.Join(dir, "__init__.py"))
+	if err := seedFetchNode(dir); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(filepath.Join(dir, "__init__.py"))
+	if !before.ModTime().Equal(after.ModTime()) {
+		t.Error("unchanged file was rewritten")
+	}
+}

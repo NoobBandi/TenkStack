@@ -1,11 +1,26 @@
 package comfy
 
 import (
+	"bytes"
+	"embed"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// fetchNode is the model-fetch extension: a panel beside the frontend's
+// missing-models dialog that has this server, not the browser, download
+// what a workflow needs. all: because a Python package's __init__.py
+// starts with an underscore, which embed otherwise skips.
+//
+//go:embed all:fetchnode
+var fetchNode embed.FS
+
+// fetchNodeDir is where the extension lives in the shared user storage, and
+// the name it is linked under in custom_nodes.
+const fetchNodeDir = "tenkstack-nodes/tenkstack_fetch"
 
 // Two files under the shared user storage make a fresh instance usable from
 // ComfyUI-Manager's own interface. Both are written for every instance on
@@ -76,6 +91,17 @@ except SystemExit:
 except Exception as exc:
     print(f"[pre-start] comfy_kitchen: nothing to do ({exc})")
 PY
+
+# TenkStack model fetch: missing models downloaded by this server rather than
+# by the browser. The console writes it into the shared user storage; linked
+# rather than copied so a console update reaches the instance on its next
+# start. A directory of that name somebody put there by hand is left alone.
+FETCH=/root/user-scripts/tenkstack-nodes/tenkstack_fetch
+LINK=/root/ComfyUI/custom_nodes/tenkstack_fetch
+if [ -d "$FETCH" ] && { [ -L "$LINK" ] || [ ! -e "$LINK" ]; }; then
+    ln -sfn "$FETCH" "$LINK"
+    echo "[pre-start] TenkStack model fetch linked"
+fi
 `
 
 // Seed writes the pre-start hook and the Manager flag into the shared user
@@ -88,6 +114,29 @@ func (m *Manager) Seed() {
 	if err := seedManagerFlag(filepath.Join(user, "user-profile", "__manager", "config.ini")); err != nil {
 		log.Printf("could not set allow_git_url_install for ComfyUI-Manager: %v", err)
 	}
+	if err := seedFetchNode(filepath.Join(user, "user-scripts", filepath.FromSlash(fetchNodeDir))); err != nil {
+		log.Printf("could not write the ComfyUI model-fetch extension: %v", err)
+	}
+}
+
+// seedFetchNode writes the extension's files, each only when it differs, so
+// a start that changes nothing touches nothing ComfyUI is watching.
+func seedFetchNode(dir string) error {
+	return fs.WalkDir(fetchNode, "fetchnode", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		content, err := fetchNode.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(p, "fetchnode/")
+		target := filepath.Join(dir, filepath.FromSlash(rel))
+		if current, err := os.ReadFile(target); err == nil && bytes.Equal(current, content) {
+			return nil
+		}
+		return writeFile(target, content, 0o644)
+	})
 }
 
 func (m *Manager) seedPreStart(path string) error {
