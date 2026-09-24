@@ -7,6 +7,7 @@ import {
   createApiKey, createUser, deleteApiKey, deleteUser, fetchApiKeys, fetchUsers, setPassword,
   type ApiKey, type User,
 } from '../api';
+import { useAuthState, useIsOwner } from '../identity';
 
 const { Text, Paragraph } = Typography;
 
@@ -15,6 +16,10 @@ const formatTime = (seconds: number | null) =>
 
 export default function Users() {
   const { message } = AntApp.useApp();
+  // The administrator manages everyone; a member sees their own account --
+  // their password and their keys -- and nothing of anyone else's.
+  const owner = useIsOwner();
+  const me = useAuthState()?.identity ?? null;
   const [users, setUsers] = useState<User[]>([]);
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [userOpen, setUserOpen] = useState(false);
@@ -26,9 +31,9 @@ export default function Users() {
   const [pwForm] = Form.useForm();
 
   const refresh = useCallback(() => {
-    fetchUsers().then(setUsers).catch(() => undefined);
+    if (owner) fetchUsers().then(setUsers).catch(() => undefined);
     fetchApiKeys().then(setKeys).catch(() => undefined);
-  }, []);
+  }, [owner]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -49,17 +54,34 @@ export default function Users() {
       <Alert
         type="info"
         showIcon
-        message="驗證已啟用"
+        message={owner ? '誰能做什麼' : '你的帳號'}
         description={
           <span>
-            所有 <code>/api</code> 與 <code>/v1</code> 路由都需要登入 session 或 API key。
-            驗證會在建立第一個帳號後自動開啟——若刪除全部帳號，系統會退回開放狀態，
-            以免把自己鎖在外面。
+            成員可以對話、載入與卸載模型、中斷 ComfyUI 正在跑的工作，也能改自己的密碼、管理自己的 API key。
+            新增或刪除帳號與模型、下載模型、刪除檔案、更新 ComfyUI、開放對外連線與改設定，都只有管理員能做。
+            API key 只能用在 <code>/v1</code> 的模型 API（給 Claude Code、Pi 這類工具），不能拿來操作主控台。
           </span>
         }
       />
 
-      <Card
+      {!owner && me && (
+        <Card title="我的帳號" size="small">
+          <Space size={16} wrap>
+            <div>
+              <div>{me.username}</div>
+              <Text type="secondary" style={{ fontSize: 12 }}>{me.role === 'admin' ? '管理員' : '成員'}</Text>
+            </div>
+            <Button size="small" onClick={() => {
+              pwForm.resetFields();
+              setPwOpen({ id: me.user_id, username: me.username } as User);
+            }}>
+              改密碼
+            </Button>
+          </Space>
+        </Card>
+      )}
+
+      {owner && <Card
         title="使用者"
         size="small"
         extra={
@@ -113,13 +135,13 @@ export default function Users() {
             },
           ]}
         />
-      </Card>
+      </Card>}
 
       <Card
-        title="API Key"
+        title={owner ? 'API Key' : '我的 API Key'}
         size="small"
         extra={
-          <Button size="small" icon={<KeyOutlined />} disabled={users.length === 0}
+          <Button size="small" icon={<KeyOutlined />} disabled={owner ? users.length === 0 : !me}
                   onClick={() => { keyForm.resetFields(); setKeyOpen(true); }}>
             建立 Key
           </Button>
@@ -137,7 +159,7 @@ export default function Users() {
           locale={{ emptyText: '尚未建立 API key' }}
           columns={[
             { title: '名稱', dataIndex: 'name' },
-            { title: '所屬', dataIndex: 'username', width: 120 },
+            ...(owner ? [{ title: '所屬', dataIndex: 'username', width: 120 }] : []),
             {
               title: '前綴', dataIndex: 'prefix', width: 180,
               render: (p: string) => <code>{p}…</code>,
@@ -192,7 +214,7 @@ export default function Users() {
         onOk={async () => {
           const values = await keyForm.validateFields();
           try {
-            const created = await createApiKey(values.user_id, values.name);
+            const created = await createApiKey(owner ? values.user_id : me!.user_id, values.name);
             setKeyOpen(false);
             setRevealed(created.secret);
             refresh();
@@ -204,9 +226,11 @@ export default function Users() {
         cancelText="取消"
       >
         <Form form={keyForm} layout="vertical">
-          <Form.Item name="user_id" label="所屬使用者" rules={[{ required: true }]}>
-            <Select options={users.map((u) => ({ value: u.id, label: `${u.display_name} (${u.username})` }))} />
-          </Form.Item>
+          {owner && (
+            <Form.Item name="user_id" label="所屬使用者" rules={[{ required: true }]}>
+              <Select options={users.map((u) => ({ value: u.id, label: `${u.display_name} (${u.username})` }))} />
+            </Form.Item>
+          )}
           <Form.Item name="name" label="用途名稱" rules={[{ required: true }]}>
             <Input placeholder="例如：手機 App" />
           </Form.Item>

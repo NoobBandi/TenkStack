@@ -67,6 +67,9 @@ func (s *Server) catalogEstimate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) catalogDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	var in struct {
 		RepoID   string `json:"repo_id"`
 		Filename string `json:"filename"`
@@ -87,6 +90,9 @@ func (s *Server) catalogDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) catalogCancel(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	var in struct {
 		RepoID   string `json:"repo_id"`
 		Filename string `json:"filename"`

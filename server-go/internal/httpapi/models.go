@@ -205,6 +205,9 @@ func chosenDevices(v any) (list []string, present bool) {
 }
 
 func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	var raw map[string]json.RawMessage
 	if err := readJSON(r, &raw); err != nil {
 		fail(w, http.StatusUnprocessableEntity, "invalid JSON body")
@@ -279,6 +282,9 @@ func (s *Server) modelFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeModel(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	q := r.URL.Query().Get("delete_files")
 	result, err := s.Models.Delete(r.Context(), r.PathValue("id"), q == "true" || q == "1")
 	if err != nil {
@@ -314,6 +320,9 @@ func refused(w http.ResponseWriter, err error) bool {
 }
 
 func (s *Server) removePartial(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	result, err := s.Models.DeletePartial(r.PathValue("filename"))
 	if refused(w, err) {
 		return
@@ -322,6 +331,9 @@ func (s *Server) removePartial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeFile(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	result, err := s.Models.DeleteFile(r.PathValue("filename"))
 	if refused(w, err) {
 		return

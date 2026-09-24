@@ -196,6 +196,25 @@ func (s *Store) ListAPIKeys() ([]api.APIKey, error) {
 	return out, rows.Err()
 }
 
+// Role is a user's role as it is now, and ok false for a user that no
+// longer exists: a session outlives neither a deletion nor a demotion.
+func (s *Store) Role(id int64) (role string, ok bool, err error) {
+	err = s.db.QueryRow("SELECT role FROM users WHERE id = ?", id).Scan(&role)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	return role, err == nil, err
+}
+
+// APIKeyOwner is the user a key belongs to, and ok false for no such key.
+func (s *Store) APIKeyOwner(id int64) (userID int64, ok bool, err error) {
+	err = s.db.QueryRow("SELECT user_id FROM api_keys WHERE id = ?", id).Scan(&userID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	return userID, err == nil, err
+}
+
 func (s *Store) DeleteAPIKey(id int64) (bool, error) {
 	return affected(s.db.Exec("DELETE FROM api_keys WHERE id = ?", id))
 }

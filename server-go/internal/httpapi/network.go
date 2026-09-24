@@ -29,6 +29,9 @@ func channelError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) writeChannel(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	var in struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -45,6 +48,9 @@ func (s *Server) writeChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeChannelScopes(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	var in struct {
 		Scopes *[]string `json:"scopes"`
 	}

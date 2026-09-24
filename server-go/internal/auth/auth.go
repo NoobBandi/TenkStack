@@ -37,6 +37,8 @@ var publicPaths = map[string]bool{
 type Accounts interface {
 	VerifyAPIKey(secret string) (*api.Identity, error)
 	Any() (bool, error)
+	// Role is a user's role now; ok is false once the user is gone.
+	Role(id int64) (role string, ok bool, err error)
 }
 
 type Auth struct {
@@ -139,7 +141,18 @@ func (a *Auth) read(token string) *claims {
 func (a *Auth) Identify(r *http.Request) *api.Identity {
 	if c, err := r.Cookie(CookieName); err == nil {
 		if cl := a.read(c.Value); cl != nil {
-			return &api.Identity{UserID: cl.UID, Username: cl.Username, Role: cl.Role, Via: "session"}
+			// The cookie says who signed in and lasts a month; what they
+			// may do is read now, so deleting or demoting someone takes
+			// effect on their next request rather than when it expires.
+			role, ok, err := a.accounts.Role(cl.UID)
+			if err != nil {
+				log.Printf("could not read the role of user %d; refusing the session: %v", cl.UID, err)
+				return nil
+			}
+			if !ok {
+				return nil
+			}
+			return &api.Identity{UserID: cl.UID, Username: cl.Username, Role: role, Via: "session"}
 		}
 	}
 	key := ""
@@ -192,6 +205,15 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				json.NewEncoder(w).Encode(api.Error{Detail: "authentication required"})
+				return
+			}
+			// A key is pasted into a chat client and travels. It opens the
+			// model API and nothing of the console's own: not accounts,
+			// not models, not the files.
+			if id != nil && id.Via == "api-key" && strings.HasPrefix(path, "/api/") {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(api.Error{Detail: "API 金鑰只能用在 /v1 的模型 API，主控台的功能要登入後使用"})
 				return
 			}
 		}

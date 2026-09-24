@@ -71,6 +71,9 @@ func (s *Server) readComfyInstances(w http.ResponseWriter, r *http.Request) {
 // to offer, which asked GitHub once for each of forty custom nodes to
 // answer a question the update button answers on its way through anyway.
 func (s *Server) comfyVersionCheck(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	port, ok := s.comfyPort(w, r)
 	if !ok {
 		return
@@ -130,6 +133,9 @@ func queryBool(r *http.Request, name string, fallback bool) bool {
 }
 
 func (s *Server) comfyUpdate(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	port, ok := s.comfyPort(w, r)
 	if !ok {
 		return
@@ -242,6 +248,9 @@ func (s *Server) restartAfterUpdate(port int, name string, results <-chan map[st
 }
 
 func (s *Server) comfyRestart(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
 	port, ok := s.comfyPort(w, r)
 	if !ok {
 		return
