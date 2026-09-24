@@ -38,8 +38,17 @@ jobs:
           sha256sum tenkstack-linux-* > SHA256SUMS
       - name: Checks
         run: cd server-go && go vet ./... && go test ./...
+      # The release text is the tag's own message, which the about page
+      # shows under 說明. checkout can leave the tag lightweight, so it is
+      # fetched again as the annotated object before it is read.
+      - name: Release notes
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > release-notes.md
+          cat release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
+          body_path: release-notes.md
           files: |
             tenkstack-linux-amd64
             tenkstack-linux-arm64
