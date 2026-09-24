@@ -24,7 +24,7 @@ import (
 // names anything but a name it was started with.
 
 var vllmPatterns = map[string]*regexp.Regexp{
-	"model_dir":              regexp.MustCompile(`--model\s+(?:\$\{[^}]+\}/)?(\S+)`),
+	"model_dir":              regexp.MustCompile(`--model\s+(\S+)`),
 	"max_model_len":          regexp.MustCompile(`--max-model-len\s+(\d+)`),
 	"tensor_parallel":        regexp.MustCompile(`--tensor-parallel-size\s+(\d+)`),
 	"quantization":           regexp.MustCompile(`--quantization\s+(\S+)`),
@@ -33,7 +33,7 @@ var vllmPatterns = map[string]*regexp.Regexp{
 
 // BuildVLLMCmd is the command line for one vLLM entry.
 func BuildVLLMCmd(id, modelDir string, maxLen, tp int, util float64, quant, extra, wrapper string) string {
-	lines := []string{wrapper, "--model ${models-dir}/" + modelDir, "--served-model-name " + id, "--host 127.0.0.1 --port ${PORT}"}
+	lines := []string{wrapper, "--model " + cmdPath(modelDir), "--served-model-name " + id, "--host 127.0.0.1 --port ${PORT}"}
 	if maxLen > 0 {
 		lines = append(lines, fmt.Sprintf("--max-model-len %d", maxLen))
 	}
@@ -100,7 +100,7 @@ func containerName(macro, id string) string {
 func dirsInCmd(cmd string) []string {
 	var out []string
 	for _, m := range vllmPatterns["model_dir"].FindAllStringSubmatch(cmd, -1) {
-		name := strings.TrimRight(m[1], "/")
+		name := strings.TrimRight(relativeName(m[1]), "/")
 		if strings.HasSuffix(strings.ToLower(name), ".gguf") || name == "" || name == "." {
 			continue
 		}

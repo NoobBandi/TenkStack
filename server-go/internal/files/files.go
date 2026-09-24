@@ -67,6 +67,15 @@ type Files struct {
 	// Reclaim gives a directory the ComfyUI container wrote back to the
 	// console's user, recursively. Nil where there is no container side.
 	Reclaim func(dir string) error
+	// ModelRoots is the model locations llama.cpp and vLLM load from, each
+	// offered as a root of its own.
+	ModelRoots func() []ModelRoot
+}
+
+// ModelRoot is one model location as the file page needs it.
+type ModelRoot struct {
+	Key, Label, Path string
+	Primary          bool
 }
 
 func resolveQuiet(p string) string {
@@ -106,6 +115,27 @@ func under(p string, banned []string) bool {
 		}
 	}
 	return false
+}
+
+// modelRoots are the model locations, keyed llm-<macro> so they can never
+// collide with a ComfyUI root.
+func (f *Files) modelRoots() []Root {
+	if f.ModelRoots == nil {
+		return nil
+	}
+	var out []Root
+	for _, loc := range f.ModelRoots() {
+		label := loc.Label
+		if label == "" {
+			label = loc.Path
+			if loc.Primary {
+				label = "主要位置"
+			}
+		}
+		out = append(out, Root{"llm-" + loc.Key, label, loc.Path,
+			"llama.cpp 與 vLLM 的模型，" + loc.Path + "。", false, "llm"})
+	}
+	return out
 }
 
 func (f *Files) comfyRoots() []Root {
@@ -193,7 +223,7 @@ func (f *Files) roots() []Root {
 	if wide == nil {
 		wide = f.defaultRoots()
 	}
-	return append(f.comfyRoots(), wide...)
+	return append(append(f.modelRoots(), f.comfyRoots()...), wide...)
 }
 
 func (f *Files) root(key string) (Root, error) {

@@ -11,6 +11,19 @@ set -euo pipefail
 IMAGE="${LLAMA_IMAGE:-ghcr.io/ggml-org/llama.cpp:server-vulkan}"
 MODELS_DIR="/home/someone/tenkstack/models"
 
+# Every model location, one path per line, written by the console beside
+# this script. Each is mounted read-only at its own path; MODELS_DIR is
+# mounted even when the list is missing.
+MOUNTS=(-v "$MODELS_DIR:$MODELS_DIR:ro")
+LOCATIONS="$(dirname "$(readlink -f "$0")")/model-locations"
+if [[ -f "$LOCATIONS" ]]; then
+  while IFS= read -r dir; do
+    if [[ -n "$dir" && "$dir" != "$MODELS_DIR" && -d "$dir" ]]; then
+      MOUNTS+=(-v "$dir:$dir:ro")
+    fi
+  done < "$LOCATIONS"
+fi
+
 # Named so `cmdStop` can reach it. llama-swap signals this script, and a
 # `docker run` that is killed leaves its container running -- the signal has to
 # arrive at the container instead, which is what `docker stop` does.
@@ -29,5 +42,5 @@ exec docker run --rm --init \
   --device /dev/dri --gpus all -e NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility \
   --network host \
   "${SELECT[@]}" \
-  -v "$MODELS_DIR:$MODELS_DIR:ro" \
+  "${MOUNTS[@]}" \
   "$IMAGE" "$@"

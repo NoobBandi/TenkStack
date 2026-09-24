@@ -80,13 +80,13 @@ func BuildCmd(modelFile string, ctxSize, nGpuLayers int, extra string, mmproj *s
 	if wrapper == "" {
 		wrapper = FallbackWrapper
 	}
-	lines := []string{wrapper, "--model ${models-dir}/" + modelFile, "--host 127.0.0.1 --port ${PORT}"}
+	lines := []string{wrapper, "--model " + cmdPath(modelFile), "--host 127.0.0.1 --port ${PORT}"}
 	if nGpuLayers != 0 {
 		lines = append(lines, fmt.Sprintf("--n-gpu-layers %d", nGpuLayers))
 	}
 	lines = append(lines, fmt.Sprintf("--ctx-size %d", ctxSize), "--jinja")
 	if mmproj != nil && *mmproj != "" {
-		lines = append(lines, "--mmproj ${models-dir}/"+*mmproj)
+		lines = append(lines, "--mmproj "+cmdPath(*mmproj))
 	}
 	for _, field := range Sampling {
 		if v, ok := sampling[field]; ok {
@@ -280,12 +280,27 @@ var roleOrder = map[string]int{"weights": 0, "draft": 1, "projector": 2, "lora":
 // ${models-dir}/…, llama-swap's macro for the models directory.
 var macroPrefix = regexp.MustCompile(`^\$\{[^}]+\}/`)
 
+// relativeName is how the console names a file a cmd points at: a model
+// location's macro becomes that location's name for it, any other macro is
+// dropped, and an absolute path is known by its base name alone.
 func relativeName(raw string) string {
+	if m := refPattern.FindStringSubmatch(raw); m != nil {
+		return Ref(m[1], m[2])
+	}
 	rel := macroPrefix.ReplaceAllString(raw, "")
 	if strings.HasPrefix(rel, "/") {
 		return path.Base(rel)
 	}
 	return rel
+}
+
+// specName is relativeName for the editor, which keeps an absolute path
+// as written: it is somebody's own and goes back unchanged.
+func specName(raw string) string {
+	if m := refPattern.FindStringSubmatch(raw); m != nil {
+		return Ref(m[1], m[2])
+	}
+	return macroPrefix.ReplaceAllString(raw, "")
 }
 
 // filesInCmd is every GGUF a model entry references, relative to the
@@ -350,27 +365,23 @@ func rolesInCmd(cmd string) map[string]string {
 // says about them.
 type Models struct {
 	Store *Store
-	Dir   string
+	// Dir is the primary model location, CONSOLE_MODELS_DIR.
+	Dir string
+	// Prefs is the file of location labels and download defaults.
+	Prefs string
+	// Avoid is directories a location may not overlap: the ComfyUI storage
+	// and the console's own state.
+	Avoid []string
 }
 
-// resolve is Dir/relative, or "" if that escapes the directory. Checked on
-// the resolved path, since two repos may publish the same name.
-func (m *Models) resolve(relative string) string {
-	base, err := filepath.Abs(m.Dir)
-	if err != nil {
+// resolve is where a name is on disk, or "" if its location is unknown or
+// the path escapes it.
+func (m *Models) resolve(name string) string {
+	abs, _, ok := m.Place(name)
+	if !ok {
 		return ""
 	}
-	if real, err := filepath.EvalSymlinks(base); err == nil {
-		base = real
-	}
-	candidate := filepath.Clean(filepath.Join(base, relative))
-	if real, err := filepath.EvalSymlinks(candidate); err == nil {
-		candidate = real
-	}
-	if candidate != base && !strings.HasPrefix(candidate, base+string(filepath.Separator)) {
-		return ""
-	}
-	return candidate
+	return abs
 }
 
 func fileSize(p string) (int64, bool) {
@@ -427,7 +438,7 @@ func (m *Models) removeWeights(p string) error {
 	if !st.IsDir() {
 		return os.Remove(p)
 	}
-	if p == m.resolve(".") {
+	if p == m.rootOf(p) {
 		return fmt.Errorf("不刪模型目錄本身")
 	}
 	// Only a directory that is a model: a publisher's directory holding
@@ -567,7 +578,7 @@ func (m *Models) Weights() map[string][]api.Weight {
 	for _, e := range entries {
 		projectors := map[string]bool{}
 		for _, mm := range mmprojFiles.FindAllStringSubmatch(e.cmd, -1) {
-			projectors[macroPrefix.ReplaceAllString(mm[1], "")] = true
+			projectors[relativeName(mm[1])] = true
 		}
 		list := []api.Weight{}
 		dirs := map[string]bool{}
@@ -609,14 +620,15 @@ func (m *Models) Weights() map[string][]api.Weight {
 			if projectors[name] {
 				role = "mmproj"
 			}
-			repo := repoOf(name)
+			key, rel := SplitRef(name)
+			repo := repoOf(rel)
 			if dirs[name] {
 				// A safetensors model is its folder: <owner>/<name> is the repo.
-				repo = name
+				repo = rel
 			}
 			list = append(list, api.Weight{
-				Filename: name, Basename: path.Base(name), Repo: repo, Role: role,
-				Exists: exists, SizeBytes: size, SharedWith: shared, Parts: parts,
+				Filename: name, Basename: path.Base(rel), Repo: repo, Role: role,
+				Exists: exists, SizeBytes: size, SharedWith: shared, Parts: parts, Location: key,
 			})
 		}
 		sort.SliceStable(list, func(i, j int) bool {
@@ -677,7 +689,10 @@ func (m *Models) FilesForModel(modelID string) ([]api.ModelFile, bool) {
 // pruneEmpty removes the repo directories a deleted file leaves behind,
 // never the models directory itself.
 func (m *Models) pruneEmpty(dir string) {
-	base := m.resolve(".")
+	base := m.rootOf(dir)
+	if base == "" {
+		return
+	}
 	cur := dir
 	for cur != base && strings.HasPrefix(cur, base+string(filepath.Separator)) {
 		if err := os.Remove(cur); err != nil {
@@ -784,9 +799,6 @@ func gib(size int64) float64 { return math.RoundToEven(float64(size)/(1<<30)*100
 // it; an empty used_by is what identifies an orphan.
 func (m *Models) ListGGUF() []api.GGUFFile {
 	out := []api.GGUFFile{}
-	if st, err := os.Stat(m.Dir); err != nil || !st.IsDir() {
-		return out
-	}
 	entries, _, err := m.entries()
 	if err != nil {
 		log.Printf("could not read the config while listing files: %v", err)
@@ -801,32 +813,40 @@ func (m *Models) ListGGUF() []api.GGUFFile {
 			}
 		}
 	}
-	for _, p := range m.glob("*.gguf") {
-		st, err := os.Stat(p)
-		if err != nil {
-			continue
+	for _, loc := range m.Locations() {
+		for _, p := range glob(loc.Path, "*.gguf") {
+			out = append(out, ggufRow(loc, p, fileRoles, references)...)
 		}
-		rel, _ := filepath.Rel(m.Dir, p)
-		rel = filepath.ToSlash(rel)
-		lower := strings.ToLower(filepath.Base(p))
-		role, ok := fileRoles[rel]
-		if !ok {
-			role = "weights"
-			if strings.HasPrefix(lower, "mmproj") {
-				role = "projector"
-			}
-		}
-		used := append([]string{}, references[rel]...)
-		sort.Strings(used)
-		out = append(out, api.GGUFFile{
-			Filename: rel, Repo: repoOf(rel), SizeBytes: st.Size(), SizeGiB: gib(st.Size()),
-			// sec + nsec*1e-9, the arithmetic Python's st_mtime uses, so the
-			// two agree to the last digit.
-			Modified: float64(st.ModTime().Unix()) + float64(st.ModTime().Nanosecond())*1e-9,
-			IsMmproj: strings.HasPrefix(lower, "mmproj"), Role: role, UsedBy: used,
-		})
 	}
 	return out
+}
+
+// ggufRow is one GGUF in one location, or nil when it cannot be read.
+func ggufRow(loc Location, p string, fileRoles map[string]string, references map[string][]string) []api.GGUFFile {
+	st, err := os.Stat(p)
+	if err != nil {
+		return nil
+	}
+	rel, _ := filepath.Rel(loc.Path, p)
+	rel = filepath.ToSlash(rel)
+	ref := Ref(loc.Key, rel)
+	lower := strings.ToLower(filepath.Base(p))
+	role, ok := fileRoles[ref]
+	if !ok {
+		role = "weights"
+		if strings.HasPrefix(lower, "mmproj") {
+			role = "projector"
+		}
+	}
+	used := append([]string{}, references[ref]...)
+	sort.Strings(used)
+	return []api.GGUFFile{{
+		Filename: ref, Location: loc.Key, Repo: repoOf(rel), SizeBytes: st.Size(), SizeGiB: gib(st.Size()),
+		// sec + nsec*1e-9, the arithmetic Python's st_mtime uses, so the
+		// two agree to the last digit.
+		Modified: float64(st.ModTime().Unix()) + float64(st.ModTime().Nanosecond())*1e-9,
+		IsMmproj: strings.HasPrefix(lower, "mmproj"), Role: role, UsedBy: used,
+	}}
 }
 
 // ListWeights is ListGGUF and every directory of safetensors beside them,
@@ -837,9 +857,6 @@ func (m *Models) ListWeights() []api.GGUFFile {
 	for i := range out {
 		out[i].Format = "gguf"
 	}
-	if st, err := os.Stat(m.Dir); err != nil || !st.IsDir() {
-		return out
-	}
 	entries, _, _ := m.entries()
 	references := map[string][]string{}
 	for _, e := range entries {
@@ -847,7 +864,19 @@ func (m *Models) ListWeights() []api.GGUFFile {
 			references[name] = append(references[name], e.id)
 		}
 	}
-	filepath.WalkDir(m.Dir, func(p string, d fs.DirEntry, err error) error {
+	for _, loc := range m.Locations() {
+		out = append(out, weightDirs(loc, references)...)
+	}
+	return out
+}
+
+// weightDirs is every directory of safetensors in one location.
+func weightDirs(loc Location, references map[string][]string) []api.GGUFFile {
+	out := []api.GGUFFile{}
+	if st, err := os.Stat(loc.Path); err != nil || !st.IsDir() {
+		return out
+	}
+	filepath.WalkDir(loc.Path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return nil
 		}
@@ -855,16 +884,17 @@ func (m *Models) ListWeights() []api.GGUFFile {
 			return nil
 		}
 		config, _ := os.Stat(filepath.Join(p, "config.json"))
-		rel, _ := filepath.Rel(m.Dir, p)
+		rel, _ := filepath.Rel(loc.Path, p)
 		rel = filepath.ToSlash(rel)
-		used := append([]string{}, references[rel]...)
+		ref := Ref(loc.Key, rel)
+		used := append([]string{}, references[ref]...)
 		sort.Strings(used)
 		size := dirSize(p)
 		precision, quantized := precisionOf(p)
 		// The directory is the repo: <owner>/<name> as Hugging Face has it,
 		// and the one entry under it is the whole model.
 		out = append(out, api.GGUFFile{
-			Filename: rel, Format: "safetensors", Repo: rel, SizeBytes: size, SizeGiB: gib(size),
+			Filename: ref, Location: loc.Key, Format: "safetensors", Repo: rel, SizeBytes: size, SizeGiB: gib(size),
 			Precision: precision, Quantized: quantized, Architecture: architectureOf(p),
 			Modified: float64(config.ModTime().Unix()) + float64(config.ModTime().Nanosecond())*1e-9,
 			Role:     "weights", UsedBy: used,
@@ -875,10 +905,13 @@ func (m *Models) ListWeights() []api.GGUFFile {
 	return out
 }
 
-// glob walks the models directory for a suffix, sorted by path.
-func (m *Models) glob(pattern string) []string {
+// glob walks one location for a suffix, sorted by path.
+func glob(dir, pattern string) []string {
 	var found []string
-	filepath.WalkDir(m.Dir, func(p string, d fs.DirEntry, err error) error {
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return found
+	}
+	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -894,16 +927,16 @@ func (m *Models) glob(pattern string) []string {
 // ListPartials is the interrupted downloads: resumable, but real disk.
 func (m *Models) ListPartials() []api.Partial {
 	out := []api.Partial{}
-	if st, err := os.Stat(m.Dir); err != nil || !st.IsDir() {
-		return out
-	}
-	for _, p := range m.glob("*.part") {
-		st, err := os.Stat(p)
-		if err != nil {
-			continue
+	for _, loc := range m.Locations() {
+		for _, p := range glob(loc.Path, "*.part") {
+			st, err := os.Stat(p)
+			if err != nil {
+				continue
+			}
+			rel, _ := filepath.Rel(loc.Path, p)
+			out = append(out, api.Partial{Filename: Ref(loc.Key, filepath.ToSlash(rel)), Location: loc.Key,
+				SizeBytes: st.Size(), SizeGiB: gib(st.Size())})
 		}
-		rel, _ := filepath.Rel(m.Dir, p)
-		out = append(out, api.Partial{Filename: filepath.ToSlash(rel), SizeBytes: st.Size(), SizeGiB: gib(st.Size())})
 	}
 	return out
 }
@@ -930,8 +963,8 @@ func (m *Models) DeletePartial(filename string) (*api.FileDeleted, error) {
 }
 
 var argPatterns = map[string]*regexp.Regexp{
-	"model_file":   regexp.MustCompile(`--model\s+(?:\$\{[^}]+\}/)?(\S+\.gguf)`),
-	"mmproj":       regexp.MustCompile(`--mmproj\s+(?:\$\{[^}]+\}/)?(\S+\.gguf)`),
+	"model_file":   regexp.MustCompile(`--model\s+(\S+\.gguf)`),
+	"mmproj":       regexp.MustCompile(`--mmproj\s+(\S+\.gguf)`),
 	"ctx_size":     regexp.MustCompile(`--ctx-size\s+(\d+)`),
 	"n_gpu_layers": regexp.MustCompile(`--n-gpu-layers\s+(\d+)`),
 }
@@ -975,6 +1008,11 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 	for field, pat := range patterns {
 		if mm := pat.FindStringSubmatch(e.cmd); mm != nil {
 			values[field] = mm[1]
+		}
+	}
+	for _, field := range []string{"model_file", "mmproj", "model_dir"} {
+		if v, ok := values[field]; ok {
+			values[field] = specName(v)
 		}
 	}
 	var extra []string

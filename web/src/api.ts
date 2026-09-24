@@ -62,7 +62,8 @@ export interface ModelInfo {
 }
 
 export interface ModelWeight {
-  /** Relative to the models directory: `<owner>/<repo>/<name>`. */
+  /** As the entry names it: `<owner>/<repo>/<name>` in the primary location,
+   *  `${models-dir-N}/<owner>/<repo>/<name>` in another. */
   filename: string;
   basename: string;
   repo: string;
@@ -77,6 +78,8 @@ export interface ModelWeight {
   shared_with: string[];
   /** A split GGUF: how many shards, named by the first, sized together. */
   parts?: number;
+  /** The key of the model location it is in. */
+  location: string;
 }
 
 export interface ModelCapabilities {
@@ -376,10 +379,14 @@ export function subscribe(
 // ---------------------------------------------------------------------------
 
 export interface ModelFile {
-  /** Relative to the models directory. Downloads land under `<owner>/<repo>/`,
-   *  so this is a path; files predating that layout are bare names. A
+  /** How a model entry names it. In the primary location that is the path
+   *  relative to it -- downloads land under `<owner>/<repo>/`, files predating
+   *  that layout are bare names -- and in another location it is
+   *  `${models-dir-N}/…`, which is also what the entry's cmd says. A
    *  safetensors model is one entry naming its directory. */
   filename: string;
+  /** The key of the model location it is in. */
+  location: string;
   format: 'gguf' | 'safetensors';
   /** What a safetensors model is stored as, from its config.json: bf16, fp16,
    *  fp8, awq, gptq, int4, mxfp4. `quantized` means the publisher did it, and
@@ -416,6 +423,7 @@ export interface ModelFileRef {
 
 export interface PartialFile {
   filename: string;
+  location: string;
   size_bytes: number;
   size_gib: number;
 }
@@ -681,8 +689,8 @@ export interface CatalogFile {
    *  Checked under this repo's own directory, so another repo's file of the
    *  same name no longer reads as this one already being here. */
   on_disk: boolean;
-  /** Where it will land, relative to the models directory. Also what a model
-   *  entry's --model has to point at. */
+  /** Where it is when on disk, else where it would land in the GGUF default
+   *  location, named the way a model entry's --model points at it. */
   local_path: string;
   /** Copies of this filename already on disk from somewhere else. Not a
    *  refusal -- they cannot collide any more -- but downloading a second copy
@@ -693,6 +701,10 @@ export interface CatalogFile {
 export interface DownloadStatus {
   repo_id: string;
   filename: string;
+  /** The model location it is written to, and the result as a model entry
+   *  names it. */
+  location: string;
+  local_path: string;
   total_bytes: number;
   downloaded_bytes: number;
   percent: number;
@@ -783,8 +795,9 @@ export const searchCatalog = (q: string) =>
   get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20`);
 export const catalogFiles = (repoId: string) =>
   get<CatalogFile[]>(`/catalog/files?repo_id=${encodeURIComponent(repoId)}`);
-export const startDownload = (repo_id: string, filename: string) =>
-  send<DownloadStatus>('/catalog/download', 'POST', { repo_id, filename });
+/** `location` is a model location's key; left out, the GGUF default. */
+export const startDownload = (repo_id: string, filename: string, location?: string) =>
+  send<DownloadStatus>('/catalog/download', 'POST', { repo_id, filename, location });
 export const cancelDownload = (repo_id: string, filename: string) =>
   send<{ ok: boolean }>('/catalog/cancel', 'POST', { repo_id, filename });
 export const fetchDownloads = () => get<DownloadStatus[]>('/catalog/downloads');
@@ -1541,6 +1554,60 @@ export interface MachineUnit {
 }
 
 export const fetchSettings = () => get<Setting[]>('/settings');
+
+// ---------------------------------------------------------------------------
+// Model locations
+// ---------------------------------------------------------------------------
+
+/** A download format, and the runtime that loads it. */
+export type ModelFormat = 'gguf' | 'safetensors';
+
+/** One directory models are downloaded to and read from, at most `max`. The
+ *  key is the llama-swap macro model entries name it by: models-dir for the
+ *  primary, which cannot be removed, models-dir-2 to models-dir-5 for the
+ *  rest. */
+export interface ModelLocation {
+  key: string;
+  path: string;
+  label: string;
+  primary: boolean;
+  /** The formats new downloads of which land here. Each format has one. */
+  default_for: ModelFormat[];
+  exists: boolean;
+  writable: boolean;
+  free_bytes: number;
+  total_bytes: number;
+  models: number;
+  used_bytes: number;
+  /** Model entries loading from here, which stops it being removed. */
+  in_use: string[];
+}
+
+export interface ModelLocations {
+  locations: ModelLocation[];
+  max: number;
+}
+
+export const fetchModelLocations = () => get<ModelLocations>('/model-locations');
+export const addModelLocation = (path: string, label: string) =>
+  send<ModelLocation>('/model-locations', 'POST', { path, label });
+export const labelModelLocation = (key: string, label: string) =>
+  send<ModelLocations>(`/model-locations/${encodeURIComponent(key)}`, 'PATCH', { label });
+export const removeModelLocation = (key: string) =>
+  send<ModelLocations>(`/model-locations/${encodeURIComponent(key)}`, 'DELETE');
+export const setModelLocationDefaults = (defaults: Partial<Record<ModelFormat, string>>) =>
+  send<ModelLocations>('/model-locations/defaults', 'PUT', defaults);
+
+/** A location's name for people: its label, else 主要位置 for the primary,
+ *  else its path. */
+export function locationName(loc: Pick<ModelLocation, 'label' | 'primary' | 'path'>): string {
+  return loc.label || (loc.primary ? '主要位置' : loc.path);
+}
+
+/** A model file's name without the location macro in front, for display. */
+export function withinLocation(filename: string): string {
+  return filename.replace(/^\$\{models-dir(?:-[2-5])?\}\//, '');
+}
 export const saveSettings = (values: Record<string, number>) =>
   send<Setting[]>('/settings', 'PUT', values);
 export const fetchMachine = () =>
@@ -1611,7 +1678,7 @@ export interface FsRoot {
   exists: boolean;
   /** Which strip of the picker this belongs on: ComfyUI's trees, or the
    *  machine's own directories. Six buttons in one row read as one list. */
-  group: 'comfy' | 'other';
+  group: 'llm' | 'comfy' | 'other';
   /** Not assumed: ComfyUI's directories are created by a container running as
    *  root while the console is not, and a root may be declared read-only. An
    *  interface that offers an upload button over a directory it cannot write

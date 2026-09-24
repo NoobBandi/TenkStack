@@ -307,7 +307,7 @@ this was first built on.
 |---|---|---|
 | `CONSOLE_AI_DIR` | `~/ai` (installer: `~/tenkstack`) | Everything below is derived from this |
 | `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | Session key and SQLite; the only thing the console writes |
-| `CONSOLE_MODELS_DIR` | `$CONSOLE_AI_DIR/models` | GGUF weights |
+| `CONSOLE_MODELS_DIR` | `$CONSOLE_AI_DIR/models` | The primary model location: GGUF and safetensors weights |
 | `CONSOLE_LLAMA_SWAP_DIR` | `$CONSOLE_AI_DIR/llama-swap` | |
 | `CONSOLE_LLAMA_SWAP_CONFIG` | `$CONSOLE_LLAMA_SWAP_DIR/config.yaml` | |
 | `CONSOLE_LLAMA_SWAP_BIN` | `$CONSOLE_LLAMA_SWAP_DIR/llama-swap` | Read for its version |
@@ -320,6 +320,14 @@ this was first built on.
 Only a layout that differs from that one needs any of them set. Nothing is
 created — a missing directory is reported as missing, because turning "not set
 up" into "set up and empty" hides the difference.
+
+Models can live in up to five directories. The primary is
+`CONSOLE_MODELS_DIR`; the others are added under Settings → 模型存放位置, and
+each becomes a llama-swap macro, `models-dir-2` to `models-dir-5`, so an entry
+names a file in one as `${models-dir-2}/owner/repo/file.gguf`. GGUF and
+safetensors each have a default location new downloads land in, which lets
+llama.cpp and vLLM weights live on different disks. Container launchers mount
+every location, read at start from `model-locations` beside them.
 
 Three more live with the code that reads them rather than in `paths`, because
 none of them names a single location: `CONSOLE_FILE_ROOTS` declares what the file

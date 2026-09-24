@@ -68,12 +68,19 @@ type Weight struct {
 	// Parts is how many shards a split GGUF is, the first of which names
 	// it; the size is theirs together. Omitted for one file.
 	Parts int `json:"parts,omitempty"`
+	// Location is the model location the file is in, by its key.
+	Location string `json:"location"`
 }
 
 // GGUFFile is one set of weights on disk: a GGUF, or a directory of
 // safetensors as Hugging Face publishes them, which the format says.
+//
+// Filename is how a model entry names it: relative to the primary model
+// location, or ${models-dir-N}/… in another, which is also what the entry's
+// cmd says. Repo is <owner>/<repo> within its location either way.
 type GGUFFile struct {
 	Filename string `json:"filename"`
+	Location string `json:"location"`
 	Format   string `json:"format"`
 	// Precision of a safetensors model from its config.json: bf16, fp16,
 	// fp8, awq, gptq, int4, mxfp4. Quantized says the publisher already
@@ -94,6 +101,7 @@ type GGUFFile struct {
 
 type Partial struct {
 	Filename  string  `json:"filename"`
+	Location  string  `json:"location"`
 	SizeBytes int64   `json:"size_bytes"`
 	SizeGiB   float64 `json:"size_gib"`
 }
@@ -179,4 +187,32 @@ type QuantPage struct {
 	Schemes []QuantScheme `json:"schemes"`
 	Speeds  []string      `json:"speeds"`
 	Jobs    []QuantJob    `json:"jobs"`
+}
+
+// ModelLocation is one directory models are downloaded to and read from,
+// at most five. Its key is the llama-swap macro model entries name it by:
+// models-dir for the primary, which cannot be removed, and models-dir-2 to
+// models-dir-5 for the rest.
+type ModelLocation struct {
+	Key     string `json:"key"`
+	Path    string `json:"path"`
+	Label   string `json:"label"`
+	Primary bool   `json:"primary"`
+	// DefaultFor is the formats new downloads of which land here: gguf for
+	// llama.cpp, safetensors for vLLM. Each format has exactly one.
+	DefaultFor []string `json:"default_for"`
+	Exists     bool     `json:"exists"`
+	Writable   bool     `json:"writable"`
+	FreeBytes  int64    `json:"free_bytes"`
+	TotalBytes int64    `json:"total_bytes"`
+	Models     int      `json:"models"`
+	UsedBytes  int64    `json:"used_bytes"`
+	// InUse is the model entries that load something from here, which is
+	// what stops it being removed.
+	InUse []string `json:"in_use"`
+}
+
+type ModelLocations struct {
+	Locations []ModelLocation `json:"locations"`
+	Max       int             `json:"max"`
 }

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
+	"github.com/NoobBandi/TenkStack/server-go/internal/locations"
 )
 
 const (
@@ -36,17 +37,24 @@ const (
 	parallel    = 8        // past this the gain flattens while throttling odds rise
 )
 
+// Places is where models live: every location, and which one a new
+// download of a format goes to.
+type Places interface {
+	Locations() []locations.Location
+	DefaultLocation(format string) locations.Location
+}
+
 type Catalog struct {
-	ModelsDir string
-	http      *http.Client
+	Places Places
+	http   *http.Client
 
 	mu        sync.Mutex
 	downloads map[string]*download
 	order     []string
 }
 
-func New(modelsDir string) *Catalog {
-	return &Catalog{ModelsDir: modelsDir, http: &http.Client{Timeout: 20 * time.Second}, downloads: map[string]*download{}}
+func New(places Places) *Catalog {
+	return &Catalog{Places: places, http: &http.Client{Timeout: 20 * time.Second}, downloads: map[string]*download{}}
 }
 
 // safe keeps a repo or file segment usable as a directory name: traversal
@@ -60,9 +68,15 @@ func safe(segment string) string {
 	return cleaned
 }
 
-// LocalPath is where a repo's file lands: <models>/<owner>/<repo>/<name>,
-// the repo's own directories kept, since a filename is not an identity.
-func (c *Catalog) LocalPath(repoID, filename string) string {
+// LocalPath is where a repo's file lands in a location:
+// <location>/<owner>/<repo>/<name>, the repo's own directories kept, since
+// a filename is not an identity.
+func LocalPath(loc locations.Location, repoID, filename string) string {
+	return filepath.Join(loc.Path, relPath(repoID, filename))
+}
+
+// relPath is that path within the location.
+func relPath(repoID, filename string) string {
 	var segments []string
 	for _, s := range strings.Split(repoID, "/") {
 		if s != "" {
@@ -74,7 +88,7 @@ func (c *Catalog) LocalPath(repoID, filename string) string {
 			segments = append(segments, safe(s))
 		}
 	}
-	return filepath.Join(append([]string{c.ModelsDir}, segments...)...)
+	return filepath.Join(segments...)
 }
 
 // Search lists GGUF repos, sorted by downloads, a hundred at a time since
@@ -134,19 +148,23 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int) []api.Cat
 // A model too large for one file is uploaded as …-00001-of-00003.gguf.
 var split = regexp.MustCompile(`(?i)^(.+)-(\d{5})-of-(\d{5})\.gguf$`)
 
+// indexByName is every GGUF in every location by base name, each as a
+// model entry would name it.
 func (c *Catalog) indexByName() map[string][]string {
 	index := map[string][]string{}
-	if st, err := os.Stat(c.ModelsDir); err != nil || !st.IsDir() {
-		return index
-	}
-	filepath.WalkDir(c.ModelsDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".gguf") {
-			return nil
+	for _, loc := range c.Places.Locations() {
+		if st, err := os.Stat(loc.Path); err != nil || !st.IsDir() {
+			continue
 		}
-		rel, _ := filepath.Rel(c.ModelsDir, p)
-		index[d.Name()] = append(index[d.Name()], filepath.ToSlash(rel))
-		return nil
-	})
+		filepath.WalkDir(loc.Path, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".gguf") {
+				return nil
+			}
+			rel, _ := filepath.Rel(loc.Path, p)
+			index[d.Name()] = append(index[d.Name()], locations.Ref(loc.Key, filepath.ToSlash(rel)))
+			return nil
+		})
+	}
 	for _, names := range index {
 		sort.Strings(names)
 	}
@@ -190,20 +208,26 @@ func (c *Catalog) groupSplits(raw [][2]any, repoID string) []api.CatalogFile {
 		g := groups[key]
 		parts := append([]string{}, g.parts...)
 		sort.Strings(parts)
-		local := make([]string, len(parts))
-		for i, p := range parts {
-			local[i] = c.LocalPath(repoID, p)
-		}
-		mine, _ := filepath.Rel(c.ModelsDir, local[0])
-		mine = filepath.ToSlash(mine)
-		all := true
-		for _, p := range local {
-			if _, err := os.Stat(p); err != nil {
-				all = false
+		// On disk when every part is in one location at the path a download
+		// would have given it; otherwise where the default would put it.
+		home := c.Places.DefaultLocation("gguf")
+		all := false
+		for _, loc := range c.Places.Locations() {
+			complete := true
+			for _, p := range parts {
+				if _, err := os.Stat(LocalPath(loc, repoID, p)); err != nil {
+					complete = false
+					break
+				}
+			}
+			if complete {
+				home, all = loc, true
+				break
 			}
 		}
+		mine := locations.Ref(home.Key, filepath.ToSlash(relPath(repoID, parts[0])))
 		elsewhere := []string{}
-		for _, where := range onDisk[filepath.Base(local[0])] {
+		for _, where := range onDisk[filepath.Base(relPath(repoID, parts[0]))] {
 			if where != mine {
 				elsewhere = append(elsewhere, where)
 			}
@@ -258,6 +282,7 @@ func (c *Catalog) ListFiles(ctx context.Context, repoID string) []api.CatalogFil
 
 type download struct {
 	repoID, filename string
+	location         locations.Location
 	total, done      int64
 	state            string
 	err              string
@@ -281,7 +306,9 @@ func (d *download) snapshot() api.Download {
 	if d.total > 0 {
 		percent = math.RoundToEven(float64(d.done)/float64(d.total)*1000) / 10
 	}
-	out := api.Download{RepoID: d.repoID, Filename: d.filename, TotalBytes: d.total, DownloadedBytes: d.done,
+	out := api.Download{RepoID: d.repoID, Filename: d.filename, Location: d.location.Key,
+		LocalPath:  locations.Ref(d.location.Key, filepath.ToSlash(relPath(d.repoID, d.filename))),
+		TotalBytes: d.total, DownloadedBytes: d.done,
 		Percent: percent, State: d.state, MiBPerSecond: math.RoundToEven(float64(fresh)/elapsed/1024/1024*10) / 10}
 	if d.err != "" {
 		e := d.err
@@ -292,22 +319,53 @@ func (d *download) snapshot() api.Download {
 
 func key(repoID, filename string) string { return repoID + "/" + filename }
 
-// Start begins a download, or reports the one already running.
-func (c *Catalog) Start(repoID, filename string) api.Download {
+// UnknownLocation is a download asked for a location that is not one.
+type UnknownLocation struct{ Key string }
+
+func (e *UnknownLocation) Error() string { return "沒有這個下載位置：" + e.Key }
+
+// Start begins a download into a location -- the GGUF default when none
+// is named -- or reports the one already running for that file.
+func (c *Catalog) Start(repoID, filename, location string) (api.Download, error) {
+	loc := c.Places.DefaultLocation("gguf")
+	if location != "" {
+		found := false
+		for _, l := range c.Places.Locations() {
+			if l.Key == location {
+				loc, found = l, true
+			}
+		}
+		if !found {
+			return api.Download{}, &UnknownLocation{location}
+		}
+	}
 	k := key(repoID, filename)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if existing, ok := c.downloads[k]; ok && (existing.state == "queued" || existing.state == "downloading") {
-		return existing.snapshot()
+		return existing.snapshot(), nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &download{repoID: repoID, filename: filename, state: "queued", startedAt: time.Now(), cancel: cancel}
+	d := &download{repoID: repoID, filename: filename, location: loc, state: "queued", startedAt: time.Now(), cancel: cancel}
 	if _, ok := c.downloads[k]; !ok {
 		c.order = append(c.order, k)
 	}
 	c.downloads[k] = d
 	go c.run(ctx, d)
-	return d.snapshot()
+	return d.snapshot(), nil
+}
+
+// ActiveIn says whether a download is writing into a location, which is
+// what stops the location being removed.
+func (c *Catalog) ActiveIn(location string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, d := range c.downloads {
+		if d.location.Key == location && (d.state == "queued" || d.state == "downloading") {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) Cancel(repoID, filename string) bool {
@@ -480,7 +538,7 @@ func (c *Catalog) set(d *download, fn func()) {
 
 func (c *Catalog) run(ctx context.Context, d *download) {
 	url := "https://huggingface.co/" + d.repoID + "/resolve/main/" + d.filename
-	target := c.LocalPath(d.repoID, d.filename)
+	target := LocalPath(d.location, d.repoID, d.filename)
 	partial := target + ".part"
 	statePath := partial + ".state"
 	c.set(d, func() { d.state = "downloading"; d.startedAt = time.Now() })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Space, Table,
+  App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Select, Space, Table,
   Tag, Tooltip, Typography,
 } from 'antd';
 import {
@@ -8,9 +8,9 @@ import {
 } from '@ant-design/icons';
 import { LINE, MONO } from '../theme';
 import {
-  cancelDownload, catalogFiles, estimateFile, fetchDownloads, searchCatalog,
-  startDownload, subscribe,
-  type CatalogFile, type CatalogRepo, type DownloadStatus, type FileEstimate,
+  cancelDownload, catalogFiles, estimateFile, fetchDownloads, fetchModelLocations, locationName,
+  searchCatalog, startDownload, subscribe, withinLocation,
+  type CatalogFile, type CatalogRepo, type DownloadStatus, type FileEstimate, type ModelLocation,
 } from '../api';
 
 const { Text } = Typography;
@@ -212,6 +212,24 @@ export default function Catalog() {
     useState<Record<string, FileEstimate | 'loading' | 'error'>>({});
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
+  // Where downloads go: the GGUF default until somebody picks another. The
+  // picker is there only when there is more than one place to pick.
+  const [locations, setLocations] = useState<ModelLocation[]>([]);
+  const [target, setTarget] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    fetchModelLocations().then((l) => {
+      setLocations(l.locations);
+      setTarget((t) => t ?? l.locations.find((x) => x.default_for.includes('gguf'))?.key);
+    }).catch(() => undefined);
+  }, []);
+  /** A name as an entry has it, with the location it is in spelt out. */
+  const placed = (ref: string) => {
+    const key = /^\$\{(models-dir-[2-5])\}\//.exec(ref)?.[1] ?? 'models-dir';
+    const loc = locations.find((l) => l.key === key);
+    return locations.length > 1 && loc
+      ? `${locationName(loc)}：${withinLocation(ref)}`
+      : withinLocation(ref);
+  };
   // Finished rows stay until dismissed, so a download that ended while the user
   // was on another page is still reported when they come back.
   const [dismissed, setDismissed] = useState<Set<string>>(() => new Set());
@@ -287,7 +305,7 @@ export default function Catalog() {
   const onDownload = async (file: CatalogFile) => {
     if (!selected) return;
     try {
-      for (const part of file.parts) await startDownload(selected, part);
+      for (const part of file.parts) await startDownload(selected, part, target);
       message.success(file.part_count > 1
         ? `已開始下載 ${file.part_count} 個分片`
         : '已開始下載');
@@ -503,6 +521,22 @@ export default function Catalog() {
             ? <Slide style={{ fontSize: 13, fontFamily: MONO }}>{selected}</Slide>
             : <span style={{ fontSize: 13 }}>檔案</span>
         }
+        extra={locations.length > 1 && (
+          <Space size={6}>
+            <Text type="secondary" style={{ fontSize: 12 }}>下載到</Text>
+            <Select
+              size="small"
+              style={{ width: 180 }}
+              value={target}
+              onChange={setTarget}
+              options={locations.map((l) => ({
+                value: l.key,
+                label: locationName(l),
+                title: `${l.path}（剩 ${(l.free_bytes / 1024 ** 3).toFixed(0)} GiB）`,
+              }))}
+            />
+          </Space>
+        )}
       >
         {!selected ? (
           <Empty description="從左邊選一個儲存庫" image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -534,7 +568,11 @@ export default function Catalog() {
                         <Tag style={{ flex: 'none' }}>{row.part_count} 分片</Tag>
                       )}
                       {row.is_mmproj && <Tag color="purple" style={{ flex: 'none' }}>視覺投影</Tag>}
-                      {row.on_disk && <Tag color="green" style={{ flex: 'none' }}>已在磁碟</Tag>}
+                      {row.on_disk && (
+                        <Tooltip title={placed(row.local_path)}>
+                          <Tag color="green" style={{ flex: 'none' }}>已在磁碟</Tag>
+                        </Tooltip>
+                      )}
                       {!row.on_disk && row.elsewhere.length > 0 && (
                         /* Not a warning. The files no longer collide -- each
                            repo has its own directory -- so this only says that
@@ -542,7 +580,7 @@ export default function Catalog() {
                            else, which is sometimes exactly what you are
                            checking and sometimes a download you can skip. */
                         <Tooltip
-                          title={<>已有同名檔案：<br />{row.elsewhere.join('，')}</>}
+                          title={<>已有同名檔案：<br />{row.elsewhere.map(placed).join('，')}</>}
                         >
                           <Tag color="default" style={{ flex: 'none' }}>另有同名</Tag>
                         </Tooltip>

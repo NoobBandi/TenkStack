@@ -70,12 +70,20 @@ func (s *Server) catalogDownload(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		RepoID   string `json:"repo_id"`
 		Filename string `json:"filename"`
+		// Location is the key of the model location to write to; empty is
+		// the GGUF default.
+		Location string `json:"location"`
 	}
 	if err := readJSON(r, &in); err != nil || in.RepoID == "" || in.Filename == "" {
 		fail(w, http.StatusBadRequest, "repo_id and filename are required")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Catalog.Start(in.RepoID, in.Filename))
+	out, err := s.Catalog.Start(in.RepoID, in.Filename, in.Location)
+	if err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) catalogCancel(w http.ResponseWriter, r *http.Request) {

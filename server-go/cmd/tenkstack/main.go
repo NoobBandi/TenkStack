@@ -94,7 +94,9 @@ func main() {
 	history.SetHours(int(prefs.Get("gpu_history_hours")))
 
 	config := llamaswap.NewStore(layout.LlamaSwapConfig)
-	models := &llamaswap.Models{Store: config, Dir: layout.ModelsDir}
+	models := &llamaswap.Models{Store: config, Dir: layout.ModelsDir,
+		Prefs: filepath.Join(layout.StateDir, "model-locations.json"),
+		Avoid: []string{layout.ComfyDir, layout.StateDir}}
 	probe := backends.New(config)
 	llamaSwapBase := fmt.Sprintf("http://127.0.0.1:%d", portTable.LlamaSwap)
 
@@ -147,7 +149,7 @@ func main() {
 		Blobs:   blobStore,
 		Vision:  vision,
 		Search:  search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
-		Catalog: catalog.New(layout.ModelsDir),
+		Catalog: catalog.New(models),
 		Files: &files.Files{ComfyDir: layout.ComfyDir, StateDir: layout.StateDir, Home: home,
 			Roots: os.Getenv("CONSOLE_FILE_ROOTS"), ExtraDeny: os.Getenv("CONSOLE_FILE_DENY")},
 		Remote: gguf.NewRemote(),
@@ -157,7 +159,7 @@ func main() {
 			[]string{"tenkstack-console.service", "ai-console.service"}),
 		Installer: &backends.Installer{Probe: probe, Config: config, Images: docker,
 			ScriptDir: filepath.Dir(layout.LlamaSwapConfig), ModelsDir: layout.ModelsDir},
-		Quant: quant.New(docker, models, layout.ModelsDir, filepath.Join(layout.StateDir, "quant"),
+		Quant: quant.New(docker, models, filepath.Join(layout.StateDir, "quant"),
 			func(ctx context.Context) []vendors.Card {
 				var out []vendors.Card
 				for _, d := range cards.Discover(ctx) {
@@ -191,6 +193,30 @@ func main() {
 	// never had ComfyUI.
 	if _, err := os.Stat(filepath.Join(layout.ComfyDir, "storage-user")); err == nil {
 		srv.Comfy.Seed()
+	}
+	srv.Files.ModelRoots = func() []files.ModelRoot {
+		var out []files.ModelRoot
+		labels := map[string]string{}
+		for _, row := range models.ListLocationLabels() {
+			labels[row[0]] = row[1]
+		}
+		for _, loc := range models.Locations() {
+			out = append(out, files.ModelRoot{Key: loc.Key, Label: labels[loc.Key], Path: loc.Path,
+				Primary: loc.Key == llamaswap.PrimaryLocation})
+		}
+		return out
+	}
+	// Container launchers mount every model location from a list beside
+	// them; it is rewritten here in case config.yaml was edited by hand.
+	if err := models.WriteMountList(); err != nil {
+		log.Printf("could not write the model location list: %v", err)
+	}
+	if changed, err := backends.UpgradeMounts(filepath.Dir(layout.LlamaSwapConfig)); err != nil {
+		log.Printf("could not upgrade the launchers to mount every model location: %v", err)
+	} else {
+		for _, path := range changed {
+			log.Printf("launcher %s now mounts every model location", filepath.Base(path))
+		}
 	}
 	// What the root ComfyUI container writes is taken back for the files
 	// page when the owner is all that stops a delete or a rename.

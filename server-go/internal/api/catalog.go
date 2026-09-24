@@ -18,13 +18,19 @@ type CatalogFile struct {
 	SizeGiB   float64  `json:"size_gib"`
 	IsMmproj  bool     `json:"is_mmproj"`
 	OnDisk    bool     `json:"on_disk"`
+	// LocalPath is where it is, when OnDisk, else where it would land in
+	// the default location, as a model entry names it.
 	LocalPath string   `json:"local_path"`
 	Elsewhere []string `json:"elsewhere"`
 }
 
 type Download struct {
-	RepoID          string  `json:"repo_id"`
-	Filename        string  `json:"filename"`
+	RepoID   string `json:"repo_id"`
+	Filename string `json:"filename"`
+	// Location is the model location it is written to, and LocalPath the
+	// result as a model entry names it.
+	Location        string  `json:"location"`
+	LocalPath       string  `json:"local_path"`
 	TotalBytes      int64   `json:"total_bytes"`
 	DownloadedBytes int64   `json:"downloaded_bytes"`
 	Percent         float64 `json:"percent"`

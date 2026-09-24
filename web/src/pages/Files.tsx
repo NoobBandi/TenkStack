@@ -538,7 +538,7 @@ export default function Files() {
 
   const crumbs = path ? path.split('/') : [];
   const groups: { title: string; key: FsRoot['group'] }[] = [
-    { title: 'ComfyUI', key: 'comfy' }, { title: '其他', key: 'other' },
+    { title: '推論引擎模型', key: 'llm' }, { title: 'ComfyUI', key: 'comfy' }, { title: '其他', key: 'other' },
   ];
 
   const rowStyle = (entry: FsEntry, isSelected: boolean): React.CSSProperties => ({

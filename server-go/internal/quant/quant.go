@@ -99,15 +99,16 @@ type Images interface {
 	ImageID(ctx context.Context, image string) string
 }
 
-// Weights is what this needs from the models directory.
+// Weights is what this needs from the model locations: what is there, and
+// where a name is on disk with the root of its location.
 type Weights interface {
 	ListWeights() []api.GGUFFile
+	Place(name string) (abs, root string, ok bool)
 }
 
 type Manager struct {
-	Docker    Images
-	Models    Weights
-	ModelsDir string
+	Docker Images
+	Models Weights
 	// WorkDir holds the derived image's build context and the container's
 	// home: the calibration set and the compile cache, kept between jobs.
 	WorkDir string
@@ -122,8 +123,8 @@ type Manager struct {
 	seq    int
 }
 
-func New(docker Images, models Weights, modelsDir, workDir string, cards func(context.Context) []vendors.Card) *Manager {
-	return &Manager{Docker: docker, Models: models, ModelsDir: modelsDir, WorkDir: workDir, Cards: cards,
+func New(docker Images, models Weights, workDir string, cards func(context.Context) []vendors.Card) *Manager {
+	return &Manager{Docker: docker, Models: models, WorkDir: workDir, Cards: cards,
 		tools: map[string]*api.QuantTool{}}
 }
 
@@ -246,7 +247,8 @@ type Request struct {
 var name = regexp.MustCompile(`[^A-Za-z0-9._-]`)
 
 // Output is where a scheme's result goes: beside the source, named after
-// it, the way publishers name their own quantised repos.
+// it, the way publishers name their own quantised repos -- and so in the
+// source's location, which is the one disk the job has to write to.
 func Output(source string, s Scheme) string {
 	return source + "-" + s.Suffix
 }
@@ -289,7 +291,11 @@ func (m *Manager) Start(ctx context.Context, req Request) (api.QuantJob, error) 
 		return api.QuantJob{}, &Invalid{"量化工具還沒準備好（" + tool.State + "），先建立它"}
 	}
 	output := Output(req.Source, *s)
-	if _, err := os.Stat(filepath.Join(m.ModelsDir, filepath.FromSlash(output))); err == nil {
+	target, _, ok := m.Models.Place(output)
+	if !ok {
+		return api.QuantJob{}, &Invalid{"輸出路徑不在模型位置裡：" + output}
+	}
+	if _, err := os.Stat(target); err == nil {
 		return api.QuantJob{}, &Invalid{output + " 已經存在"}
 	}
 	m.mu.Lock()
@@ -321,7 +327,7 @@ func (m *Manager) run(ctx context.Context, job *api.QuantJob, s Scheme, speed st
 	home := filepath.Join(m.WorkDir, "home")
 	os.MkdirAll(home, 0o755)
 	v := vendors.Get(card.Vendor)
-	// The models directory is mounted writable, at its own path so the
+	// The source's location is mounted writable, at its own path so the
 	// tool's config.json records nothing that is only true inside. The
 	// container runs as this user: files root left behind could not be
 	// deleted from the file list.
@@ -336,10 +342,12 @@ func (m *Manager) run(ctx context.Context, job *api.QuantJob, s Scheme, speed st
 	}
 	// The tool writes scratch under the working directory, so that is the
 	// mounted one rather than the image's root-owned checkout.
+	src, root, _ := m.Models.Place(job.Source)
+	out, _, _ := m.Models.Place(job.Output)
 	args = append(args, "--workdir", "/work",
 		"-e", "HOME=/work", "-e", "HF_HOME=/work/hf", "-e", "TORCHINDUCTOR_CACHE_DIR=/work/inductor",
 		"-v", home+":/work",
-		"-v", m.ModelsDir+":"+m.ModelsDir,
+		"-v", root+":"+root,
 		"--shm-size", "16g", "--network", "host")
 	if v != nil {
 		// Every card of the vendor goes in; the selector picks one, by the
@@ -368,8 +376,6 @@ func (m *Manager) run(ctx context.Context, job *api.QuantJob, s Scheme, speed st
 			args[i+1] = "all"
 		}
 	}
-	src := path.Join(m.ModelsDir, job.Source)
-	out := path.Join(m.ModelsDir, job.Output)
 	args = append(args, image, "--model", src, "--output_dir", out, "--device", deviceArg[card.Vendor])
 	args = append(args, s.Args...)
 	if s.Tuned {

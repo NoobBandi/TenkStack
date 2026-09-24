@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -337,20 +336,8 @@ func (s *Server) readModelFiles(w http.ResponseWriter, _ *http.Request) {
 // readRecommended is what one GGUF says its publisher recommends, read on
 // demand since the form asks for one file at a time.
 func (s *Server) readRecommended(w http.ResponseWriter, r *http.Request) {
-	file := r.URL.Query().Get("file")
-	base, err := filepath.Abs(s.Layout.ModelsDir)
-	if err != nil {
-		fail(w, http.StatusBadRequest, "路徑不在模型目錄裡")
-		return
-	}
-	if real, err := filepath.EvalSymlinks(base); err == nil {
-		base = real
-	}
-	target := filepath.Clean(filepath.Join(base, file))
-	if real, err := filepath.EvalSymlinks(target); err == nil {
-		target = real
-	}
-	if target != base && !strings.HasPrefix(target, base+string(filepath.Separator)) {
+	target, _, ok := s.Models.Place(r.URL.Query().Get("file"))
+	if !ok {
 		fail(w, http.StatusBadRequest, "路徑不在模型目錄裡")
 		return
 	}

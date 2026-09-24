@@ -10,10 +10,10 @@ import {
 import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
-  fetchModelSpec, fetchPartials, fetchProviders, fetchQuant, fetchRecommendedSampling, loadModel,
-  modelFileRefs, saveModel, unloadAll,
-  unloadModel,
-  type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo,
+  fetchModelLocations, fetchModelSpec, fetchPartials, fetchProviders, fetchQuant,
+  fetchRecommendedSampling, loadModel, locationName, modelFileRefs, saveModel, unloadAll,
+  unloadModel, withinLocation,
+  type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo, type ModelLocation,
   type ModelSpec, type ModelWeight, type PartialFile, type QuantJob, type Runtime,
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -59,9 +59,16 @@ const SAMPLING: { field: string; hint: string; step: number }[] = [
 const gib = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 
 /** Basename first, then which repo it came from -- which is the only thing
- *  separating two files that are otherwise identically named. */
-const fileLabel = (f: ModelFile) =>
-  `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''} (${f.size_gib} GiB${f.precision ? ` · ${PRECISION[f.precision] ?? f.precision.toUpperCase()}` : ''})`;
+ *  separating two files that are otherwise identically named -- and, when
+ *  there is more than one, the location it is in. */
+const fileLabel = (f: ModelFile, where: Where) =>
+  `${f.filename.split('/').pop()}${f.repo ? ` — ${f.repo}` : ''}${where(f.location) ? `｜${where(f.location)}` : ''} (${f.size_gib} GiB${f.precision ? ` · ${PRECISION[f.precision] ?? f.precision.toUpperCase()}` : ''})`;
+
+/** A location's name by key, or '' while there is only one location and
+ *  saying where a file is would be noise -- and for the primary location
+ *  unless `always`, since most files are there and a tag on every row says
+ *  nothing; the tag marks the ones that are somewhere else. */
+type Where = (key?: string, always?: boolean) => string;
 
 /**
  * The vLLM flags a model family needs, offered when its folder is picked.
@@ -99,7 +106,7 @@ const PRECISION: Record<string, string> = {
  * it takes the other's projector with it, which is also exactly what the
  * delete dialog refuses to do.
  */
-function WeightList({ weights }: { weights: ModelWeight[] }) {
+function WeightList({ weights, where }: { weights: ModelWeight[]; where: Where }) {
   if (weights.length === 0) return <Text type="secondary">—</Text>;
   const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
   return (
@@ -110,7 +117,10 @@ function WeightList({ weights }: { weights: ModelWeight[] }) {
                color={w.role === 'mmproj' ? 'purple' : 'default'}>
             {w.role === 'mmproj' ? '視覺投影' : '權重'}
           </Tag>
-          <Text style={{ fontSize: 12, fontFamily: MONO }}>{w.filename}</Text>
+          <Text style={{ fontSize: 12, fontFamily: MONO }}>{withinLocation(w.filename)}</Text>
+          {where(w.location) && (
+            <Tag style={{ fontSize: 10, marginInlineEnd: 0 }}>{where(w.location)}</Tag>
+          )}
           <Text type="secondary" style={{ fontSize: 11 }}>
             {w.exists ? gib(w.size_bytes) : '檔案不存在'}
           </Text>
@@ -139,7 +149,7 @@ function WeightList({ weights }: { weights: ModelWeight[] }) {
  * what the entry is configured to hold -- rather than one wrapped line of
  * path and size run together.
  */
-function ModelFileCard({ row }: { row: ModelInfo }) {
+function ModelFileCard({ row, where }: { row: ModelInfo; where: Where }) {
   const weights = row.weights ?? [];
   const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
   const main = weights.find((w) => w.role === 'model') ?? weights[0];
@@ -154,6 +164,9 @@ function ModelFileCard({ row }: { row: ModelInfo }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 14, rowGap: 6, alignItems: 'baseline' }}>
         {repo && (<><span style={label}>來源</span><span style={value}>{repo}</span></>)}
+        {where(main?.location, true) && (
+          <><span style={label}>位置</span><span style={{ fontSize: 12 }}>{where(main?.location, true)}</span></>
+        )}
         <span style={label}>推論引擎</span>
         <span style={{ fontSize: 12 }}>{row.provider_name ?? 'llama.cpp'}</span>
         {row.ctx_size ? (
@@ -221,6 +234,10 @@ const ROLE_COLOUR: Record<ModelFile['role'], string | undefined> = {
 const LOOSE = '（散落的檔案）';
 
 interface RepoGroup {
+  /** The location and the repo: the same repo in two locations is two
+   *  copies, deleted and sized apart. */
+  key: string;
+  location: string;
   repo: string;
   owner: string;
   name: string;
@@ -294,9 +311,18 @@ export default function Models() {
   const [alsoDeleteFiles, setAlsoDeleteFiles] = useState(true);
   const [deleting, setDeleting] = useState(false);
 
+  const [locations, setLocations] = useState<ModelLocation[]>([]);
+  const where = useCallback<Where>((key, always) => {
+    if (locations.length < 2) return '';
+    const loc = locations.find((l) => l.key === (key || 'models-dir'));
+    if (!loc || (loc.primary && !always)) return '';
+    return locationName(loc);
+  }, [locations]);
+
   const refresh = useCallback(() => {
     refreshModels().catch(() => undefined);
     fetchModelFiles().then(setFiles).catch(() => undefined);
+    fetchModelLocations().then((l) => setLocations(l.locations)).catch(() => undefined);
     fetchPartials().then(setPartials).catch(() => undefined);
   }, [refreshModels]);
 
@@ -311,6 +337,7 @@ export default function Models() {
         refreshModels(), fetchModelFiles(), fetchPartials().then(setPartials),
       ]);
       setFiles(onDisk);
+      fetchModelLocations().then((l) => setLocations(l.locations)).catch(() => undefined);
       message.success(`已重新整理：${found.length} 個模型、${onDisk.length} 個模型檔`);
     } catch (error) {
       message.error(`重新整理失敗：${(error as Error).message}`);
@@ -538,16 +565,19 @@ export default function Models() {
       // Files predating the `<owner>/<repo>/` layout, or put there by hand, are
       // a group of their own rather than being hidden under a blank heading.
       const repo = file.repo || LOOSE;
-      let group = groups.get(repo);
+      const key = `${file.location}|${repo}`;
+      let group = groups.get(key);
       if (!group) {
         const cut = repo.lastIndexOf('/');
         group = {
+          key,
+          location: file.location,
           repo,
           owner: cut > 0 ? repo.slice(0, cut) : '',
           name: cut > 0 ? repo.slice(cut + 1) : repo,
           files: [], bytes: 0, unused: 0, roles: {},
         };
-        groups.set(repo, group);
+        groups.set(key, group);
       }
       group.files.push(file);
       group.bytes += file.size_bytes;
@@ -647,7 +677,7 @@ export default function Models() {
                 <Descriptions.Item label="說明">{row.description || '—'}</Descriptions.Item>
                 <Descriptions.Item label="上游">{row.proxy || '未載入'}</Descriptions.Item>
                 <Descriptions.Item label="檔案">
-                  <WeightList weights={row.weights ?? []} />
+                  <WeightList weights={row.weights ?? []} where={where} />
                 </Descriptions.Item>
               </Descriptions>
             ),
@@ -695,7 +725,7 @@ export default function Models() {
                         apart, and the filename does that on its own; a number
                         beside every row is weight the row does not need, and
                         the expanded view and the file list both carry it. */}
-                    <Popover content={<ModelFileCard row={row} />} placement="bottomLeft"
+                    <Popover content={<ModelFileCard row={row} where={where} />} placement="bottomLeft"
                              mouseEnterDelay={0.25} arrow={false}>
                       <Text
                         // `0 1 auto`, not `1`: growing would pin the tag to the
@@ -717,7 +747,7 @@ export default function Models() {
                       </Tooltip>
                     )}
                     {missing.length > 0 && (
-                      <Tooltip title={missing.map((w) => w.filename).join('，')}>
+                      <Tooltip title={missing.map((w) => withinLocation(w.filename)).join('，')}>
                         <Tag color="error"
                              style={{ fontSize: 10, marginInlineEnd: 0, flex: 'none' }}>
                           檔案不見了
@@ -819,14 +849,14 @@ export default function Models() {
         <QuantJobs jobs={quantJobs} onChange={refreshQuant} />
         <Table<RepoGroup>
           dataSource={repos}
-          rowKey="repo"
+          rowKey="key"
           size="small"
           pagination={false}
           showHeader={false}
-          locale={{ emptyText: '~/ai/models 中沒有 GGUF 檔' }}
+          locale={{ emptyText: '模型位置裡沒有模型檔' }}
           // A repo with something unused in it is the one worth opening, so it
           // opens itself.
-          defaultExpandedRowKeys={repos.filter((r) => r.unused > 0).map((r) => r.repo)}
+          defaultExpandedRowKeys={repos.filter((r) => r.unused > 0).map((r) => r.key)}
           expandable={{
             expandedRowRender: (group) => (
               <Table<ModelFile>
@@ -874,7 +904,7 @@ export default function Models() {
                     title: '', width: 60, align: 'right',
                     render: (_, row) => (
                       <Popconfirm
-                        title={`刪除 ${row.filename}？`}
+                        title={`刪除 ${withinLocation(row.filename)}？`}
                         description={`會從磁碟永久移除 ${row.size_gib} GiB，無法復原。`}
                         onConfirm={() => onDeleteFile(row.filename)}
                         okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
@@ -899,6 +929,11 @@ export default function Models() {
               render: (_: string, group) => (
                 <div style={{ minWidth: 0 }}>
                   <Text style={{ fontSize: 13 }}>{group.name}</Text>
+                  {where(group.location) && (
+                    <Tag style={{ fontSize: 10, marginInlineStart: 8, marginInlineEnd: 0 }}>
+                      {where(group.location)}
+                    </Tag>
+                  )}
                   {group.owner && (
                     <Text type="secondary" style={{ fontSize: 11, marginInlineStart: 8 }}>
                       {group.owner}
@@ -1035,7 +1070,7 @@ export default function Models() {
               {pendingFiles.map((f) => (
                 <div key={f.filename} style={{ marginBottom: 6 }}>
                   <Space size={6} wrap>
-                    <Text code style={{ fontSize: 12 }}>{f.filename}</Text>
+                    <Text code style={{ fontSize: 12 }}>{withinLocation(f.filename)}</Text>
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       {f.exists ? gib(f.size_bytes) : '不在磁碟上'}
                     </Text>
@@ -1113,7 +1148,7 @@ export default function Models() {
               // what the file is. A string rather than a node because Select's
               // search matches against the label.
               options={ggufFiles.map((f) => ({
-                value: f.filename, label: fileLabel(f),
+                value: f.filename, label: fileLabel(f, where),
               }))}
             />
           </Form.Item>
@@ -1124,7 +1159,7 @@ export default function Models() {
               allowClear
               placeholder="無"
               options={mmprojFiles.map((f) => ({
-                value: f.filename, label: fileLabel(f),
+                value: f.filename, label: fileLabel(f, where),
               }))}
             />
           </Form.Item>
