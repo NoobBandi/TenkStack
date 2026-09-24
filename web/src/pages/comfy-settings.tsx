@@ -150,6 +150,7 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
   const busy = instance.queue_running > 0;
   const manager = instance.manager;
   const after = instance.after_update;
+  const result = instance.update_result;
   const updating = (manager?.processing ?? false) || after === 'updating' || after === 'restarting';
 
   const loadConfig = useCallback(async () => {
@@ -316,7 +317,7 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
           note={manager
             ? <>
                 查新版只問 ComfyUI 本體有沒有新的發行（一通呼叫，平常每小時自動查）；
-                更新節點是把本體和所有自訂節點都更到最新，完成後主控台會自動重啟容器讓它生效；正在算的圖會先算完再重啟。
+                更新節點是把本體和所有自訂節點都更到最新，有東西真的更新了才會自動重啟容器讓它生效（正在算的圖會先算完）；全部都已是最新就不重啟。
                 {instance.latest_checked_at ? `上次查：${ago(instance.latest_checked_at)}。` : ''}
               </>
             : '沒有 ComfyUI-Manager，主控台無法替它查版本或更新'}
@@ -344,9 +345,22 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
             {after === 'restarting' ? (
               <WaitingStatus label="重啟容器中，讓更新生效" />
             ) : after === 'waiting' ? (
-              <WaitingStatus label={instance.queue_running + instance.queue_pending > 0
-                ? `更新完成，等目前 ${instance.queue_running + instance.queue_pending} 張圖算完再重啟`
-                : '更新完成，準備重啟'} />
+              <WaitingStatus label={`${result ? `更新了 ${result.updated.length} 個，` : '更新完成，'}${
+                instance.queue_running + instance.queue_pending > 0
+                  ? `等目前 ${instance.queue_running + instance.queue_pending} 張圖算完再重啟`
+                  : '準備重啟'}`} />
+            ) : after === 'current' ? (
+              // Nothing changed, so nothing was restarted -- said, so the
+              // absence of a restart does not read as the update having stalled.
+              <Tag color="green" style={{ fontSize: 11, marginInlineEnd: 0 }}>
+                檢查了 {result?.checked ?? '全部'} 個，都已是最新，不需要重啟
+              </Tag>
+            ) : after === 'failed-nodes' ? (
+              <Tooltip title={result?.failed.join('、')}>
+                <Tag color="red" style={{ fontSize: 11, marginInlineEnd: 0 }}>
+                  {result?.failed.length} 個節點更新失敗，其餘都已是最新，沒有重啟
+                </Tag>
+              </Tooltip>
             ) : after === 'failed' ? (
               <Tag color="red" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，但自動重啟失敗，請按右上角重啟</Tag>
             ) : updating && manager && manager.total > 0 ? (

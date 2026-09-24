@@ -36,6 +36,16 @@ type ComfyInstance struct {
 	// updating, waiting (for a render to finish), restarting, or failed.
 	// Empty when none is pending.
 	AfterUpdate string `json:"after_update,omitempty"`
+	// UpdateResult is what the last update did, while its phase is shown.
+	UpdateResult *ComfyUpdateResult `json:"update_result,omitempty"`
+}
+
+// ComfyUpdateResult is Manager's report of an update: how many it checked,
+// which it changed and which it could not.
+type ComfyUpdateResult struct {
+	Checked int      `json:"checked"`
+	Updated []string `json:"updated"`
+	Failed  []string `json:"failed"`
 }
 
 // ComfyRelease is one instance's ComfyUI against the newest release.

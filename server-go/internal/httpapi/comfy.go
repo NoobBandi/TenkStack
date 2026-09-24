@@ -134,17 +134,33 @@ func (s *Server) comfyUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if s.ComfyProbe.AfterUpdate(port) != "" {
+	// Only a phase still in motion blocks another update; the notice of how
+	// the last one went does not.
+	switch s.ComfyProbe.AfterUpdate(port) {
+	case "updating", "waiting", "restarting":
 		fail(w, http.StatusConflict, "上一次更新還在進行，或還在等重啟")
 		return
 	}
+	// Listening first: Manager's report of what it changed is sent once, as
+	// the queue finishes, and cleared. Without it the update is followed by
+	// a restart whether or not anything changed.
+	watchCtx, stopWatch := gocontext.WithTimeout(gocontext.Background(), 2*time.Hour)
+	results, err := s.ComfyProbe.WatchManager(watchCtx, port)
+	if err != nil {
+		log.Printf("ComfyUI on %d: cannot hear Manager's report (%v); will restart after the update regardless", port, err)
+		results = nil
+	}
 	if err := s.ComfyProbe.Update(r.Context(), port, queryBool(r, "core", true), queryBool(r, "nodes", true)); err != nil {
+		stopWatch()
 		comfyError(w, err)
 		return
 	}
 	name := s.comfyContainerName(r.Context(), port)
 	s.ComfyProbe.SetAfterUpdate(port, "updating")
-	go s.restartAfterUpdate(port, name)
+	go func() {
+		defer stopWatch()
+		s.restartAfterUpdate(port, name, results)
+	}()
 	writeJSON(w, http.StatusOK, api.OK{OK: true})
 }
 
@@ -159,10 +175,39 @@ func (s *Server) comfyUpdate(w http.ResponseWriter, r *http.Request) {
 // dependency is exactly when that goes wrong. docker restart is a clean
 // process from the image's own entrypoint, which also re-runs the managed
 // pre-start hook.
-func (s *Server) restartAfterUpdate(port int, name string) {
+func (s *Server) restartAfterUpdate(port int, name string, results <-chan map[string]string) {
 	ctx := gocontext.Background()
-	if !s.ComfyProbe.AwaitUpdate(ctx, port) {
+	outcome, finished := s.ComfyProbe.AwaitUpdate(ctx, port, results)
+	if !finished {
 		log.Printf("ComfyUI on %d: update did not finish; not restarting", port)
+		s.ComfyProbe.SetAfterUpdate(port, "")
+		return
+	}
+	// Nothing changed on disk: a restart would only cost the people using it
+	// half a minute. Said on the page for a few minutes, then cleared.
+	if outcome.Known && len(outcome.Updated) == 0 {
+		phase := "current"
+		if len(outcome.Failed) > 0 {
+			phase = "failed-nodes"
+		}
+		log.Printf("ComfyUI on %d: update checked %d, changed none, %d failed (%s); not restarting",
+			port, outcome.Checked, len(outcome.Failed), strings.Join(outcome.Failed, ", "))
+		s.ComfyProbe.SetUpdateOutcome(port, phase, outcome)
+		time.AfterFunc(5*time.Minute, func() {
+			if s.ComfyProbe.AfterUpdate(port) == phase {
+				s.ComfyProbe.SetAfterUpdate(port, "")
+			}
+		})
+		return
+	}
+	if outcome.Known {
+		log.Printf("ComfyUI on %d: update changed %d of %d (%s)", port, len(outcome.Updated), outcome.Checked,
+			strings.Join(outcome.Updated, ", "))
+		s.ComfyProbe.SetUpdateOutcome(port, "waiting", outcome)
+	} else {
+		s.ComfyProbe.SetAfterUpdate(port, "waiting")
+	}
+	if !s.ComfyProbe.AwaitIdle(ctx, port) {
 		s.ComfyProbe.SetAfterUpdate(port, "")
 		return
 	}

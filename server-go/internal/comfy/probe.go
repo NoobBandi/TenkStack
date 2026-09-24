@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/net/websocket"
 	"io"
 	"net"
 	"net/http"
@@ -55,6 +56,7 @@ type Probe struct {
 	managerAbsent map[int]time.Time
 	latest        map[int]latestRelease
 	afterUpdate   map[int]string
+	updateResult  map[int]*api.ComfyUpdateResult
 	client        *http.Client
 	long          *http.Client
 }
@@ -75,9 +77,9 @@ func NewProbe(ports []int, publicOffset int, publicOpen func(int) bool, docker P
 	return &Probe{
 		Ports: ports, PublicOffset: publicOffset, PublicOpen: publicOpen, Docker: docker,
 		seen: map[int]api.ComfyInstance{}, managerAbsent: map[int]time.Time{}, latest: map[int]latestRelease{},
-		afterUpdate: map[int]string{},
-		client:      &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext}},
-		long:        &http.Client{Transport: &http.Transport{DialContext: dialer.DialContext}},
+		afterUpdate: map[int]string{}, updateResult: map[int]*api.ComfyUpdateResult{},
+		client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext}},
+		long:   &http.Client{Transport: &http.Transport{DialContext: dialer.DialContext}},
 	}
 }
 
@@ -287,9 +289,12 @@ func (p *Probe) probeAll(ctx context.Context, ports []int, names map[int]string)
 func (p *Probe) Instances(ctx context.Context) []api.ComfyInstance {
 	ports, names := p.AllPorts(ctx)
 	found := p.probeAll(ctx, ports, names)
+	p.mu.Lock()
 	for i := range found {
-		found[i].AfterUpdate = p.AfterUpdate(found[i].Port)
+		found[i].AfterUpdate = p.afterUpdate[found[i].Port]
+		found[i].UpdateResult = p.updateResult[found[i].Port]
 	}
+	p.mu.Unlock()
 	return found
 }
 
@@ -509,9 +514,25 @@ func (p *Probe) SetAfterUpdate(port int, phase string) {
 	defer p.mu.Unlock()
 	if phase == "" {
 		delete(p.afterUpdate, port)
+		delete(p.updateResult, port)
 	} else {
 		p.afterUpdate[port] = phase
 	}
+}
+
+// SetUpdateOutcome records the phase and what the update did, for the page.
+func (p *Probe) SetUpdateOutcome(port int, phase string, o UpdateOutcome) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.afterUpdate[port] = phase
+	updated, failed := o.Updated, o.Failed
+	if updated == nil {
+		updated = []string{}
+	}
+	if failed == nil {
+		failed = []string{}
+	}
+	p.updateResult[port] = &api.ComfyUpdateResult{Checked: o.Checked, Updated: updated, Failed: failed}
 }
 
 func (p *Probe) AfterUpdate(port int) string {
@@ -551,12 +572,114 @@ func (p *Probe) renderQueue(ctx context.Context, port int) (int, bool) {
 	return len(running) + len(pending), true
 }
 
-// AwaitUpdate follows an update Manager was just asked for until it is
-// finished and ComfyUI has nothing left to draw, which is when a restart
-// costs nobody a picture. It returns false when the update never started,
-// never finished, or the instance went away, and says nothing of whether
-// every node updated -- Manager's queue reports counts, not outcomes.
-func (p *Probe) AwaitUpdate(ctx context.Context, port int) bool {
+// UpdateOutcome is what an update did, as Manager reported it at the end.
+type UpdateOutcome struct {
+	// Known is false when Manager's report never arrived; nothing is then
+	// known about whether files changed, and the caller must assume they did.
+	Known bool
+	// Updated names what changed on disk; Failed what could not be updated.
+	Updated []string
+	Failed  []string
+	// Checked is how many were looked at.
+	Checked int
+}
+
+// WatchManager listens on ComfyUI's websocket for Manager's end-of-queue
+// report, which is the only place it says per item whether it updated
+// anything: its status endpoint gives counts, and the per-item results are
+// cleared the moment the report is sent. Opened before the update starts so
+// the report cannot slip past. The channel yields the report once, or is
+// closed without one.
+func (p *Probe) WatchManager(ctx context.Context, port int) (<-chan map[string]string, error) {
+	cfg, err := websocket.NewConfig(fmt.Sprintf("ws://127.0.0.1:%d/ws?clientId=tenkstack-%d", port, time.Now().UnixNano()),
+		fmt.Sprintf("http://127.0.0.1:%d/", port))
+	if err != nil {
+		return nil, err
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := cfg.DialContext(dialCtx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan map[string]string, 1)
+	go func() {
+		defer close(out)
+		defer conn.Close()
+		// A long update is fine; one that never reports is abandoned with
+		// the queue it belongs to.
+		conn.SetReadDeadline(time.Now().Add(2 * time.Hour))
+		for {
+			var frame []byte
+			if err := websocket.Message.Receive(conn, &frame); err != nil {
+				return
+			}
+			if len(frame) == 0 || frame[0] != '{' {
+				continue // previews arrive as binary frames
+			}
+			var msg struct {
+				Type string `json:"type"`
+				Data struct {
+					Status         string         `json:"status"`
+					NodepackResult map[string]any `json:"nodepack_result"`
+				} `json:"data"`
+			}
+			if json.Unmarshal(frame, &msg) != nil || msg.Type != "cm-queue-status" || msg.Data.Status != "done" {
+				continue
+			}
+			results := map[string]string{}
+			for id, v := range msg.Data.NodepackResult {
+				switch r := v.(type) {
+				case string:
+					results[id] = r
+				case map[string]any:
+					m, _ := r["msg"].(string)
+					results[id] = m
+				}
+			}
+			out <- results
+			return
+		}
+	}()
+	return out, nil
+}
+
+// outcomeOf reads Manager's per-item messages: "skip" means already
+// current, "success" and "success-stable-v…" mean files changed, anything
+// else is the error it hit.
+//
+// running is the ComfyUI version before the update. Manager's stable update
+// checks out master before comparing it with the release tag, so it always
+// finds a difference and reports "success-stable-<tag>" even when the tag is
+// the one already running; that is read as unchanged.
+func outcomeOf(results map[string]string, running string) UpdateOutcome {
+	out := UpdateOutcome{Known: true, Checked: len(results)}
+	same := ""
+	if running != "" {
+		same = "success-stable-v" + strings.TrimPrefix(running, "v")
+	}
+	for id, msg := range results {
+		switch {
+		case msg == "skip", same != "" && msg == same:
+		case strings.HasPrefix(msg, "success"):
+			out.Updated = append(out.Updated, id)
+		default:
+			out.Failed = append(out.Failed, id)
+		}
+	}
+	sort.Strings(out.Updated)
+	sort.Strings(out.Failed)
+	return out
+}
+
+// AwaitUpdate follows an update Manager was just asked for until its queue
+// is idle, and says what it did from the report on results (nil when the
+// websocket could not be opened). It returns false when the update never
+// finished or the instance went away.
+func (p *Probe) AwaitUpdate(ctx context.Context, port int, results <-chan map[string]string) (UpdateOutcome, bool) {
+	p.mu.Lock()
+	running, _ := p.seen[port].Version.(string)
+	p.mu.Unlock()
 	sleep := func(d time.Duration) bool {
 		select {
 		case <-ctx.Done():
@@ -565,44 +688,79 @@ func (p *Probe) AwaitUpdate(ctx context.Context, port int) bool {
 			return true
 		}
 	}
+	var report map[string]string
+	got := false
+	take := func() {
+		if results == nil || got {
+			return
+		}
+		select {
+		case r, ok := <-results:
+			if ok {
+				report, got = r, true
+			} else {
+				results = nil
+			}
+		default:
+		}
+	}
 	// The worker is started by the same request, but the first status can
 	// still read idle; a queue that never shows work was empty.
 	started := false
 	for i := 0; i < 20 && !started; i++ {
+		take()
 		processing, _, total, ok := p.managerState(ctx, port)
-		if ok && (processing || total > 0) {
+		if got || ok && (processing || total > 0) {
 			started = true
 			break
 		}
 		if !sleep(time.Second) {
-			return false
+			return UpdateOutcome{}, false
 		}
 	}
 	// Forty custom nodes each fetch and pip-install; an hour is generous.
 	deadline := time.Now().Add(time.Hour)
-	for started && time.Now().Before(deadline) {
+	for started && !got && time.Now().Before(deadline) {
+		take()
 		processing, _, _, ok := p.managerState(ctx, port)
 		if ok && !processing {
 			break
 		}
 		if !sleep(3 * time.Second) {
-			return false
+			return UpdateOutcome{}, false
 		}
 	}
 	if time.Now().After(deadline) {
-		return false
+		return UpdateOutcome{}, false
 	}
-	p.SetAfterUpdate(port, "waiting")
-	// A render in progress finishes first; a queue somebody left running
-	// for hours does not hold the update back for longer than that.
+	// The report is sent as the worker exits, a moment after the status
+	// turns idle.
+	for i := 0; i < 10 && !got && results != nil; i++ {
+		take()
+		if !got && !sleep(500*time.Millisecond) {
+			return UpdateOutcome{}, false
+		}
+	}
+	if !got {
+		return UpdateOutcome{}, true
+	}
+	return outcomeOf(report, running), true
+}
+
+// AwaitIdle waits for ComfyUI to finish what it is drawing, so a restart
+// costs nobody a picture; a queue left running for hours does not hold a
+// restart back for longer than two.
+func (p *Probe) AwaitIdle(ctx context.Context, port int) bool {
 	wait := time.Now().Add(2 * time.Hour)
 	for time.Now().Before(wait) {
 		n, ok := p.renderQueue(ctx, port)
 		if !ok || n == 0 {
-			break
+			return true
 		}
-		if !sleep(5 * time.Second) {
+		select {
+		case <-ctx.Done():
 			return false
+		case <-time.After(5 * time.Second):
 		}
 	}
 	return true

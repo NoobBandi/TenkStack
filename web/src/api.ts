@@ -143,7 +143,9 @@ export interface ComfyInstance {
   stale: boolean;
   /** Where the automatic restart after a node update stands: updating,
    *  waiting (for a render to finish), restarting, failed. */
-  after_update?: 'updating' | 'waiting' | 'restarting' | 'failed';
+  after_update?: 'updating' | 'waiting' | 'restarting' | 'failed' | 'current' | 'failed-nodes';
+  /** What the update did, by Manager's own report, while its phase shows. */
+  update_result?: { checked: number; updated: string[]; failed: string[] };
 }
 
 export interface ComfyRelease {
