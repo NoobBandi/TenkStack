@@ -91,3 +91,17 @@ func (s *Server) setLocationDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, s.Models.ListLocations())
 }
+
+// browseFolders lists a directory for the location picker. It names the
+// machine's folders, so it is an administrator's, like adding one.
+func (s *Server) browseFolders(w http.ResponseWriter, r *http.Request) {
+	if _, d := s.Auth.RequireOwner(r); d != nil {
+		denied(w, d)
+		return
+	}
+	out, err := s.Models.Browse(r.URL.Query().Get("path"))
+	if refused(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}

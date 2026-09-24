@@ -216,3 +216,32 @@ type ModelLocations struct {
 	Locations []ModelLocation `json:"locations"`
 	Max       int             `json:"max"`
 }
+
+// FolderListing is one directory as the location picker shows it: the
+// folders in it, and the disks on the machine to jump to.
+type FolderListing struct {
+	Path   string `json:"path"`
+	Parent string `json:"parent"`
+	// Writable is whether a folder can be made here; Blocked, when set, is
+	// why this directory cannot be a location itself.
+	Writable bool          `json:"writable"`
+	Blocked  string        `json:"blocked,omitempty"`
+	Folders  []FolderEntry `json:"folders"`
+	Disks    []Disk        `json:"disks"`
+}
+
+type FolderEntry struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Blocked string `json:"blocked,omitempty"`
+}
+
+// Disk is one mounted filesystem a location could be on.
+type Disk struct {
+	Mount      string `json:"mount"`
+	Device     string `json:"device"`
+	FSType     string `json:"fstype"`
+	System     bool   `json:"system"`
+	FreeBytes  int64  `json:"free_bytes"`
+	TotalBytes int64  `json:"total_bytes"`
+}

@@ -1600,6 +1600,24 @@ export const removeModelLocation = (key: string) =>
 export const setModelLocationDefaults = (defaults: Partial<Record<ModelFormat, string>>) =>
   send<ModelLocations>('/model-locations/defaults', 'PUT', defaults);
 
+/** One directory as the location picker shows it. `blocked`, when set, is
+ *  why the directory cannot be a location; `writable` whether a folder can be
+ *  made in it. System directories are not listed at all. */
+export interface FolderListing {
+  path: string;
+  /** Empty at /. */
+  parent: string;
+  writable: boolean;
+  blocked?: string;
+  folders: { name: string; path: string; blocked?: string }[];
+  /** Mounted filesystems that could hold models, / first. */
+  disks: { mount: string; device: string; fstype: string; system: boolean;
+    free_bytes: number; total_bytes: number }[];
+}
+
+export const browseFolders = (path: string) =>
+  get<FolderListing>(`/model-locations/browse?path=${encodeURIComponent(path)}`);
+
 /** A location's name for people: its label, else 主要位置 for the primary,
  *  else its path. */
 export function locationName(loc: Pick<ModelLocation, 'label' | 'primary' | 'path'>): string {

@@ -214,3 +214,43 @@ func TestUpdateLocationPath(t *testing.T) {
 		t.Errorf("the primary could not be renamed: %v", err)
 	}
 }
+
+// The picker lists folders, not files or hidden ones, and says which
+// cannot be a location and why.
+func TestBrowse(t *testing.T) {
+	_, m := tempStore(t)
+	allowTmp(t)
+	m.Prefs = filepath.Join(t.TempDir(), "prefs.json")
+	base := t.TempDir()
+	m.Dir = filepath.Join(base, "models")
+	for _, d := range []string{"models/o", "data", ".hidden", "lost+found"} {
+		os.MkdirAll(filepath.Join(base, d), 0o755)
+	}
+	os.WriteFile(filepath.Join(base, "file.txt"), []byte("x"), 0o644)
+	out, err := m.Browse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	blocked := map[string]string{}
+	for _, f := range out.Folders {
+		names = append(names, f.Name)
+		blocked[f.Name] = f.Blocked
+	}
+	if strings.Join(names, ",") != "data,models" {
+		t.Errorf("listed %v", names)
+	}
+	if blocked["data"] != "" || !strings.Contains(blocked["models"], "已經是模型位置") {
+		t.Errorf("blocked %v", blocked)
+	}
+	if !strings.Contains(out.Blocked, "裡面已經有模型位置") || !out.Writable {
+		t.Errorf("the directory itself: blocked %q writable %v", out.Blocked, out.Writable)
+	}
+	inner, _ := m.Browse(filepath.Join(base, "models"))
+	if !strings.Contains(inner.Folders[0].Blocked, "裡面") {
+		t.Errorf("a folder inside a location: %+v", inner.Folders)
+	}
+	if _, err := m.Browse("relative"); err == nil {
+		t.Error("a relative path was browsed")
+	}
+}

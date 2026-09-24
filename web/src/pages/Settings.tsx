@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Col, Input, InputNumber, Popconfirm, Row, Select, Space,
+  Alert, App as AntApp, Button, Card, Col, InputNumber, Popconfirm, Row, Select, Space,
   Tag, Tooltip, Typography,
 } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import LocationForm from '../components/LocationForm';
 import Versions from '../components/Versions';
 import { bytes } from '../components/files/kit';
 import {
@@ -78,59 +79,6 @@ const FORMATS: { key: ModelFormat; label: string; note: string }[] = [
   // the note says when this starts to matter rather than looking inert.
   { key: 'safetensors', label: 'safetensors 下載到', note: 'vLLM 用的模型資料夾；模型目錄支援 safetensors 下載後生效' },
 ];
-
-/**
- * The path and name of a location, for adding one and for editing one in
- * place of its row. The primary's path is CONSOLE_MODELS_DIR, set where the
- * service is, so it is shown and not offered.
- */
-function LocationForm({ initialPath = '', initialLabel = '', lockPath, busy, submit, onSubmit, onCancel }: {
-  initialPath?: string; initialLabel?: string; lockPath?: boolean; busy: boolean;
-  submit: string; onSubmit: (path: string, label: string) => void; onCancel: () => void;
-}) {
-  const [path, setPath] = useState(initialPath);
-  const [label, setLabel] = useState(initialLabel);
-  const go = () => { if (path.trim()) onSubmit(path.trim(), label); };
-  return (
-    <div style={{ padding: '10px 0', borderBottom: `1px solid ${LINE.faint}` }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Tooltip title={lockPath ? '主要位置的路徑由 CONSOLE_MODELS_DIR 決定，要在服務設定裡改' : undefined}>
-          <Input
-            size="small"
-            autoFocus={!lockPath}
-            disabled={lockPath}
-            placeholder="完整路徑，例如 /mnt/data/models"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            onPressEnter={go}
-            style={{ flex: '2 1 260px', fontFamily: MONO }}
-          />
-        </Tooltip>
-        <Input
-          size="small"
-          autoFocus={lockPath}
-          placeholder="名稱（可不填）"
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          onPressEnter={go}
-          style={{ flex: '1 1 140px' }}
-        />
-        <Space size={6}>
-          <Button size="small" onClick={onCancel}>取消</Button>
-          <Button size="small" type="primary" loading={busy} disabled={!path.trim()} onClick={go}>
-            {submit}
-          </Button>
-        </Space>
-      </div>
-      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
-        {lockPath
-          ? '只能改名稱。'
-          : '資料夾不存在會自動建立。路徑不能有空白或冒號，也不能放在系統目錄、ComfyUI 資料夾，或跟其他位置互相包含。'}
-        {!lockPath && initialPath && ' 改路徑前，先把這個位置裡正在使用的模型檔搬過去。'}
-      </Text>
-    </div>
-  );
-}
 
 /**
  * Where models live. A second disk for the large ones, or GGUF and
@@ -257,7 +205,8 @@ function ModelLocationsCard() {
                 </Space>
               )}
               note={[
-                loc.path,
+                // Without a label the name already is the path.
+                loc.label || loc.primary ? loc.path : '',
                 `${loc.models} 個模型・${bytes(loc.used_bytes)}`,
                 loc.exists ? `磁碟剩 ${bytes(loc.free_bytes)} / ${bytes(loc.total_bytes)}` : '',
               ].filter(Boolean).join('　')}
