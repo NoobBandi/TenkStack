@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Col, InputNumber, Popconfirm, Row, Select, Space,
+  Alert, App as AntApp, Button, Card, Collapse, InputNumber, Popconfirm, Select, Space, Switch,
   Tag, Tooltip, Typography,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import {
+  CheckOutlined, DeleteOutlined, EditOutlined, LoadingOutlined, PlusOutlined,
+} from '@ant-design/icons';
 import LocationForm from '../components/LocationForm';
-import Versions from '../components/Versions';
 import { bytes } from '../components/files/kit';
 import {
   addModelLocation, fetchConfig, fetchMachine, fetchModelLocations, fetchSettings,
@@ -13,36 +14,42 @@ import {
   updateModelLocation,
   type MachinePath, type MachineUnit, type ModelFormat, type ModelLocations, type Setting,
 } from '../api';
-import { LINE, MONO } from '../theme';
+import { useIsOwner } from '../identity';
+import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
 
 /**
- * The console's own settings.
+ * The console's own settings, for the administrator.
  *
- * This page used to be four cards of which one was a setting. The other three
- * described the machine -- hardware, paths, services -- and two of them did it
- * from constants written into the source, so they were true of exactly one
- * install and quietly wrong everywhere else. Hardware went to the dashboard,
- * which shows it live; the containers went to the runtime page, which reads
- * them from Docker.
+ * One column, in the order somebody setting the machine up meets them: where
+ * models are kept first, since that is decided before anything is downloaded,
+ * then how chat behaves, how the cards are shared with ComfyUI, and how much
+ * history is kept. What is for the rare occasion -- the raw llama-swap file,
+ * where the install lives -- is folded away under 進階. The versions of what is
+ * installed are on the about page, beside the update they explain.
  *
- * The layout is a list rather than a table. Tables with their headers hidden
- * are what this was, and they read as a grid whose columns mean nothing: every
- * row here is a label, a sentence and one control, which is a list.
+ * Every control saves itself: a switch or a choice when it changes, a number
+ * when the field is left. An apply button across a page of unrelated settings
+ * made it easy to change three and keep none.
  */
 
-const GROUPS: { key: string; label: string; note: string }[] = [
-  { key: 'chat', label: '對話與預估', note: 'Agent 與模型目錄' },
-  { key: 'vram', label: '顯存政策', note: '聊天請求何時把 ComfyUI 清出顯示卡' },
-  { key: 'history', label: '保留量', note: '伺服器端緩衝' },
+/** Which settings each section holds, in the order they are shown. */
+const SECTIONS: { title: string; note: string; names: string[] }[] = [
+  { title: '對話', note: '對話頁與 Agent 的行為', names: ['agent_max_steps', 'vision_cache', 'estimate_depth'] },
+  {
+    title: '顯示卡',
+    note: 'LLM 與 ComfyUI 共用顯示卡時，什麼時候要先停掉 ComfyUI 讓模型載入',
+    names: ['vram_margin_gib', 'comfyui_idle_gib'],
+  },
+  { title: '紀錄保留', note: '伺服器記住多少，給日誌頁與顯示卡頁往回看', names: ['log_lines', 'gpu_history_hours'] },
 ];
 
 const UNIT_COLOUR: Record<string, string> = {
   active: 'green', activating: 'orange', failed: 'red', inactive: 'default',
 };
 
-/** A small-caps heading, matching the version block's. */
+/** A small-caps heading inside a card. */
 function Heading({ children, note }: { children: React.ReactNode; note?: string }) {
   return (
     <Space size={8} align="baseline" style={{ marginBottom: 2 }}>
@@ -53,23 +60,129 @@ function Heading({ children, note }: { children: React.ReactNode; note?: string 
 }
 
 function Line({ label, note, right }: {
-  label: React.ReactNode; note?: string; right: React.ReactNode;
+  label: React.ReactNode; note?: React.ReactNode; right: React.ReactNode;
 }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 16, minHeight: 40,
-      padding: '6px 0', borderBottom: `1px solid ${LINE.faint}`,
+      padding: '8px 0', borderBottom: `1px solid ${LINE.faint}`,
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13 }}>{label}</div>
         {note && (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 1 }}>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2, lineHeight: 1.6 }}>
             {note}
           </Text>
         )}
       </div>
       <div style={{ flex: 'none' }}>{right}</div>
     </div>
+  );
+}
+
+/** A section: a card whose title says what the settings in it are about. */
+function Section({ title, note, children, extra }: {
+  title: string; note?: string; children: React.ReactNode; extra?: React.ReactNode;
+}) {
+  return (
+    <Card
+      size="small"
+      title={(
+        <Space size={10} align="baseline">
+          <span>{title}</span>
+          {note && <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>{note}</Text>}
+        </Space>
+      )}
+      extra={extra}
+    >
+      {children}
+    </Card>
+  );
+}
+
+type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+
+/**
+ * One setting that saves itself. A 0/1 setting with no unit is a switch; a
+ * number is kept as typed until the field is left or Enter is pressed, so
+ * typing 4096 does not save 4, 40 and 409 on the way.
+ */
+function SettingRow({ setting, onSaved }: { setting: Setting; onSaved: (all: Setting[]) => void }) {
+  const { message } = AntApp.useApp();
+  const [draft, setDraft] = useState<number | null>(setting.value);
+  const [state, setState] = useState<SaveState>('idle');
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => { setDraft(setting.value); }, [setting.value]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const toggle = setting.minimum === 0 && setting.maximum === 1 && !setting.unit;
+
+  const save = async (value: number) => {
+    if (value === setting.value) return;
+    setState('saving');
+    try {
+      onSaved(await saveSettings({ [setting.name]: value }));
+      setState('saved');
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setState('idle'), 2000);
+    } catch (error) {
+      setState('error');
+      setDraft(setting.value);
+      message.error((error as Error).message);
+    }
+  };
+
+  const commit = () => {
+    if (draft === null || Number.isNaN(draft)) { setDraft(setting.value); return; }
+    const clamped = Math.min(setting.maximum, Math.max(setting.minimum, Math.round(draft)));
+    setDraft(clamped);
+    void save(clamped);
+  };
+
+  const changed = setting.value !== setting.default;
+  return (
+    <Line
+      label={setting.label}
+      note={setting.note}
+      right={(
+        <Space size={10}>
+          <span style={{ width: 64, textAlign: 'right', fontSize: 12 }}>
+            {state === 'saving' && <LoadingOutlined style={{ opacity: 0.6 }} />}
+            {state === 'saved' && (
+              <Text style={{ fontSize: 12, color: ACCENT.ok }}><CheckOutlined /> 已儲存</Text>
+            )}
+            {state !== 'saving' && state !== 'saved' && changed && (
+              <Tooltip title={`預設是 ${toggle ? (setting.default ? '開' : '關') : `${setting.default} ${setting.unit}`}`}>
+                <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }}
+                        onClick={() => { setDraft(setting.default); void save(setting.default); }}>
+                  恢復預設
+                </Button>
+              </Tooltip>
+            )}
+          </span>
+          {toggle ? (
+            <Switch
+              checked={setting.value === 1}
+              loading={state === 'saving'}
+              onChange={(on) => void save(on ? 1 : 0)}
+            />
+          ) : (
+            <InputNumber
+              size="small"
+              min={setting.minimum}
+              max={setting.maximum}
+              value={draft}
+              onChange={(v) => setDraft(v === null ? null : Number(v))}
+              onBlur={commit}
+              onPressEnter={commit}
+              style={{ width: 160 }}
+              // One width for every unit, so the fields line up down the page.
+              addonAfter={<span style={{ fontSize: 11, display: 'inline-block', width: 34, textAlign: 'center' }}>{setting.unit}</span>}
+            />
+          )}
+        </Space>
+      )}
+    />
   );
 }
 
@@ -129,7 +242,12 @@ function ModelLocationsCard() {
 
   return (
     <Card
-      title="模型存放位置"
+      title={(
+        <Space size={10} align="baseline">
+          <span>模型存放</span>
+          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>模型下載到哪裡、從哪裡讀</Text>
+        </Space>
+      )}
       size="small"
       loading={!data}
       extra={(
@@ -248,31 +366,38 @@ function ModelLocationsCard() {
   );
 }
 
-export default function Settings() {
+/**
+ * What is here for the rare occasion, folded until asked for: the whole
+ * llama-swap file, and where this install lives. Each is read only once its
+ * panel is opened.
+ */
+function Advanced() {
   const { message } = AntApp.useApp();
+  const [open, setOpen] = useState<string[]>([]);
   const [raw, setRaw] = useState('');
-  const [original, setOriginal] = useState('');
+  const [original, setOriginal] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [settings, setSettings] = useState<Setting[]>([]);
-  const [draft, setDraft] = useState<Record<string, number>>({});
-  const [applying, setApplying] = useState(false);
-  const [paths, setPaths] = useState<MachinePath[]>([]);
+  const [paths, setPaths] = useState<MachinePath[] | null>(null);
   const [units, setUnits] = useState<MachineUnit[]>([]);
 
-  const refresh = useCallback(() => {
-    fetchConfig().then((c) => { setRaw(c.raw); setOriginal(c.raw); }).catch(() => undefined);
-    fetchSettings().then((all) => { setSettings(all); setDraft({}); }).catch(() => undefined);
-    fetchMachine().then((m) => { setPaths(m.paths); setUnits(m.units); }).catch(() => undefined);
-  }, []);
+  const loadConfig = useCallback(() => {
+    fetchConfig().then((c) => { setRaw(c.raw); setOriginal(c.raw); })
+      .catch((e) => message.error((e as Error).message));
+  }, [message]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    if (open.includes('config') && original === null) loadConfig();
+    if (open.includes('machine') && paths === null) {
+      fetchMachine().then((m) => { setPaths(m.paths); setUnits(m.units); }).catch(() => setPaths([]));
+    }
+  }, [open, original, paths, loadConfig]);
 
-  const onSaveConfig = async () => {
+  const onSave = async () => {
     setSaving(true);
     try {
       await saveConfigRaw(raw);
       setOriginal(raw);
-      message.success('已儲存，llama-swap 已重載（原檔備份為 config.yaml.bak）');
+      message.success('已儲存，llama-swap 已重新載入（原檔備份為 config.yaml.bak）');
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -280,169 +405,123 @@ export default function Settings() {
     }
   };
 
-  const onApply = async () => {
-    setApplying(true);
-    try {
-      setSettings(await saveSettings(draft));
-      setDraft({});
-      message.success('已套用');
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setApplying(false);
-    }
-  };
+  const dirty = original !== null && raw !== original;
 
-  const valueOf = (setting: Setting) => draft[setting.name] ?? setting.value;
-  const dirty = Object.keys(draft).length > 0;
-
-  const behaviour = (
-    <Card
-      title="主控台行為"
-      size="small"
-      style={{ height: '100%' }}
-      loading={settings.length === 0}
-      extra={
-        <Space>
-          <Button size="small" disabled={!dirty} onClick={() => setDraft({})}>還原</Button>
-          <Button size="small" type="primary" loading={applying} disabled={!dirty}
-                  onClick={onApply}>
-            套用
-          </Button>
-        </Space>
-      }
-    >
-      {GROUPS.map((group, index) => {
-        const rows = settings.filter((s) => s.group === group.key);
-        if (rows.length === 0) return null;
-        return (
-          <div key={group.key} style={{ marginTop: index === 0 ? 0 : 14 }}>
-            <Heading note={group.note}>{group.label}</Heading>
-            {rows.map((row) => (
-              <Line
-                key={row.name}
-                label={row.label}
-                note={row.note}
-                right={(
-                  <Space size={6}>
-                    {/* Shown only when it differs, because "this one was
-                        changed" is the useful signal and every row carrying a
-                        default would be noise. */}
-                    {valueOf(row) !== row.default && (
-                      <Tooltip title={`預設 ${row.default} ${row.unit}`}>
-                        <Tag style={{ marginInlineEnd: 0 }}>已改</Tag>
-                      </Tooltip>
+  return (
+    <Section title="進階" note="平常用不到；改錯可能讓模型全部載入不了">
+      <Collapse
+        ghost
+        activeKey={open}
+        onChange={(keys) => setOpen(keys as string[])}
+        items={[
+          {
+            key: 'config',
+            label: 'llama-swap 設定檔',
+            extra: open.includes('config') && (
+              <Space size={6} onClick={(e) => e.stopPropagation()}>
+                <Button size="small" disabled={!dirty} onClick={() => setRaw(original ?? '')}>還原</Button>
+                <Button size="small" type="primary" loading={saving} disabled={!dirty} onClick={onSave}>
+                  儲存
+                </Button>
+              </Space>
+            ),
+            children: (
+              <>
+                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10, lineHeight: 1.7 }}>
+                  「模型」頁與這一頁的修改最後都會寫進這個檔案。儲存後會等 llama-swap 確認：
+                  它不接受的內容會自動還原，不會留在檔案裡。原檔備份為 config.yaml.bak。
+                </Text>
+                <textarea
+                  value={raw}
+                  onChange={(e) => setRaw(e.target.value)}
+                  spellCheck={false}
+                  style={{
+                    width: '100%', height: '52vh', fontFamily: MONO, fontSize: 12, lineHeight: 1.5,
+                    padding: 12, borderRadius: 6, border: `1px solid ${LINE.faint}`,
+                    background: 'transparent', color: 'inherit', resize: 'vertical',
+                  }}
+                />
+              </>
+            ),
+          },
+          {
+            key: 'machine',
+            label: '路徑與服務',
+            children: (
+              <>
+                <Heading note="用環境變數設定，這裡只顯示">路徑</Heading>
+                {(paths ?? []).map((path) => (
+                  <Line
+                    key={path.variable}
+                    label={(
+                      <Space size={6}>
+                        <span>{path.label}</span>
+                        {!path.exists && <Tag color="warning">不存在</Tag>}
+                      </Space>
                     )}
-                    <InputNumber
-                      size="small"
-                      min={row.minimum}
-                      max={row.maximum}
-                      value={valueOf(row)}
-                      onChange={(v) => setDraft((prev) => ({
-                        ...prev, [row.name]: Number(v ?? row.default),
-                      }))}
-                      style={{ width: 128 }}
-                      addonAfter={<span style={{ fontSize: 11 }}>{row.unit}</span>}
+                    note={path.path}
+                    right={<Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>{path.variable}</Text>}
+                  />
+                ))}
+                <div style={{ marginTop: 14 }}>
+                  <Heading note="容器在「執行環境」頁">systemd 服務</Heading>
+                  {units.map((unit) => (
+                    <Line
+                      key={unit.name}
+                      label={<span style={{ fontFamily: MONO, fontSize: 12 }}>{unit.name.replace(/\.service$/, '')}</span>}
+                      note={unit.note}
+                      right={(
+                        <Tooltip title={unit.since || undefined}>
+                          <Tag color={UNIT_COLOUR[unit.active] ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                            {unit.active === 'active' ? '執行中' : unit.active}
+                          </Tag>
+                        </Tooltip>
+                      )}
                     />
-                  </Space>
-                )}
-              />
-            ))}
-          </div>
-        );
-      })}
-    </Card>
+                  ))}
+                </div>
+              </>
+            ),
+          },
+        ]}
+      />
+    </Section>
   );
+}
 
-  const machine = (
-    <Card title="這台機器" size="small" style={{ height: '100%' }}
-          loading={paths.length === 0}>
-      <Heading note="環境變數可移動">路徑</Heading>
-      {paths.map((path) => (
-        <Line
-          key={path.variable}
-          label={(
-            <Space size={6}>
-              <span>{path.label}</span>
-              {!path.exists && <Tag color="warning">不存在</Tag>}
-            </Space>
-          )}
-          note={path.path}
-          right={(
-            <Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>
-              {path.variable}
-            </Text>
-          )}
-        />
-      ))}
+export default function Settings() {
+  const owner = useIsOwner();
+  const [settings, setSettings] = useState<Setting[] | null>(null);
 
-      <div style={{ marginTop: 14 }}>
-        <Heading note="容器在「執行環境」頁">systemd 服務</Heading>
-        {units.map((unit) => (
-          <Line
-            key={unit.name}
-            label={<span style={{ fontFamily: MONO, fontSize: 12 }}>
-              {unit.name.replace(/\.service$/, '')}
-            </span>}
-            note={unit.note}
-            right={(
-              <Tooltip title={unit.since || undefined}>
-                <Tag color={UNIT_COLOUR[unit.active] ?? 'default'}
-                     style={{ marginInlineEnd: 0 }}>
-                  {unit.active === 'active' ? '執行中' : unit.active}
-                </Tag>
-              </Tooltip>
-            )}
-          />
-        ))}
-      </div>
-    </Card>
-  );
+  useEffect(() => {
+    if (owner) fetchSettings().then(setSettings).catch(() => setSettings([]));
+  }, [owner]);
 
-  const configCard = (
-    <Card
-      title="llama-swap 設定檔"
-      size="small"
-      extra={
-        <Space>
-          <Button size="small" onClick={refresh} disabled={raw === original}>還原</Button>
-          <Button size="small" type="primary" loading={saving}
-                  disabled={raw === original} onClick={onSaveConfig}>
-            儲存
-          </Button>
-        </Space>
-      }
-    >
+  if (!owner) {
+    return (
       <Alert
         type="info"
         showIcon
-        style={{ marginBottom: 12 }}
-        message="這是唯一真相來源"
-        description="「模型」頁的新增與修改最後都會寫進這個檔案。儲存後會等 llama-swap 表態：它不接受的設定會被還原，而不是留在檔案裡讓之後每次編輯都被默默丟掉。原檔備份為 config.yaml.bak。"
+        message="這些設定由管理員管理"
+        description="模型存放位置、對話與顯示卡的設定會影響這台機器上的每個人，只有管理員能看與修改。"
       />
-      <textarea
-        value={raw}
-        onChange={(e) => setRaw(e.target.value)}
-        spellCheck={false}
-        style={{
-          width: '100%', height: '52vh', fontFamily: 'ui-monospace, monospace',
-          fontSize: 12, lineHeight: 1.5, padding: 12, borderRadius: 6,
-          border: `1px solid ${LINE.faint}`, background: 'transparent',
-          color: 'inherit', resize: 'vertical',
-        }}
-      />
-    </Card>
-  );
+    );
+  }
+
+  const byName = new Map((settings ?? []).map((s) => [s.name, s]));
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Row gutter={[16, 16]} align="stretch">
-        <Col xs={24} xl={13}>{behaviour}</Col>
-        <Col xs={24} xl={11}>{machine}</Col>
-      </Row>
+    <Space direction="vertical" size={16} style={{ width: '100%', maxWidth: 1080 }}>
       <ModelLocationsCard />
-      <Versions />
-      {configCard}
+      {SECTIONS.map((section) => (
+        <Section key={section.title} title={section.title} note={section.note}>
+          {settings === null && <Text type="secondary" style={{ fontSize: 12 }}>讀取中…</Text>}
+          {section.names.map((name) => byName.get(name)).filter((s): s is Setting => !!s).map((s) => (
+            <SettingRow key={s.name} setting={s} onSaved={setSettings} />
+          ))}
+        </Section>
+      ))}
+      <Advanced />
     </Space>
   );
 }

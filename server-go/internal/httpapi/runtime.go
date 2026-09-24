@@ -122,7 +122,13 @@ func (s *Server) readConfig(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+// writeConfig replaces config.yaml whole, which is every model, launcher
+// and macro at once: an administrator's, never an API key's.
 func (s *Server) writeConfig(w http.ResponseWriter, r *http.Request) {
+	if _, d := s.Auth.RequireOwner(r); d != nil {
+		denied(w, d)
+		return
+	}
 	var in struct {
 		Raw *string `json:"raw"`
 	}

@@ -7,6 +7,7 @@ import dayjs from 'dayjs';
 import { applyRelease, checkRelease, fetchConsoleVersion, fetchRelease, type Release } from '../api';
 import { useIsOwner } from '../identity';
 import Markdown from '../components/Markdown';
+import Versions from '../components/Versions';
 import { ACCENT, LINE, MONO } from '../theme';
 
 const { Text } = Typography;
@@ -189,6 +190,15 @@ export default function About() {
           <span style={{ fontFamily: MONO }}> tenkstack.prev</span>。
         </Text>
       </div>
+
+      {/* What is installed, beside the update that changes it. Only the
+          administrator's: the paths and builds of the machine are not every
+          user's business. */}
+      {owner && (
+        <div style={{ marginTop: 32, width: '100%', maxWidth: 960, textAlign: 'left' }}>
+          <Versions />
+        </div>
+      )}
 
       {/* The colophon, where an about screen keeps it: last, small, out of
           the way of anything that is pressed. */}
