@@ -24,10 +24,17 @@ import (
 
 const Prefix = "comfyui"
 
-// Which catalogue Manager consults. 'local' because the other two send
-// Manager to a channel URL it then fails to validate; the catalogue is only
-// for discovering nodes, and updates run the same way under every mode.
-const managerMode = "local"
+// Which catalogue Manager consults while it builds an update list. 'cache'
+// reads the registry data Manager downloaded when ComfyUI last started;
+// 'local' makes it download the whole ComfyRegistry again first, which
+// measured three and a half minutes here before a single node was touched,
+// for the same list. The catalogue only decides what exists -- git-based
+// nodes still fetch their own remotes when they are updated. An older
+// Manager refused 'cache' on channel validation, so 'local' is the fallback.
+const (
+	managerMode         = "cache"
+	managerFallbackMode = "local"
+)
 
 // Long enough that a permanently Manager-less instance costs nothing,
 // short enough that installing Manager into a running one is noticed.
@@ -432,6 +439,9 @@ func (p *Probe) Update(ctx context.Context, port int, core, nodes bool) error {
 	}
 	if nodes {
 		resp, err := p.post(ctx, 300*time.Second, base(port)+"/api/manager/queue/update_all", map[string]any{"mode": managerMode})
+		if err == nil && resp.StatusCode >= 500 {
+			resp, err = p.post(ctx, 300*time.Second, base(port)+"/api/manager/queue/update_all", map[string]any{"mode": managerFallbackMode})
+		}
 		if err != nil {
 			return &Upstream{err.Error()}
 		}
