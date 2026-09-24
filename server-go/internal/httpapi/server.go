@@ -75,7 +75,10 @@ type Server struct {
 	Release    *release.Client
 	// One eviction at a time: two requests arriving together would both
 	// decide to clear the card and both wait for it.
-	vramMu  sync.Mutex
+	vramMu sync.Mutex
+	// meters carries progress measured in the proxy for engines whose own
+	// logs say nothing per request.
+	meters  feed
 	Version string
 	// WebDist overrides the embedded frontend; Embedded is nil when the
 	// binary was built without one.

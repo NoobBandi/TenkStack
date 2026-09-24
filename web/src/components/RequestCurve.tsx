@@ -123,7 +123,7 @@ function TraceList({ traces, current, onPick }: {
               {seconds < 10 ? seconds.toFixed(1) : seconds.toFixed(0)}s
             </span>
             <span style={{ opacity: 0.3, marginInlineStart: 'auto' }}>
-              slot {t.slot}
+              {t.engine ?? `slot ${t.slot}`}
               {t.truncated ? ' ・ 截斷' : ''}
               {!t.done && !stale ? ' ・ 進行中' : ''}
               {stale ? ' ・ 未回報' : ''}
@@ -227,7 +227,9 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
           </Text>
         )}
         <Text style={{ fontSize: 11, opacity: 0.35, fontFamily: MONO, marginInlineStart: 'auto' }}>
-          slot {trace.slot} ・ task {trace.task}
+          {/* A measured trace's numbers are the console's own; the engine
+              is what says where it ran. */}
+          {trace.engine ? `${trace.engine} ・ 主控台量測` : `slot ${trace.slot} ・ task ${trace.task}`}
           {trace.done ? (trace.truncated ? ' ・ 已截斷' : ' ・ 完成') : ' ・ 進行中'}
         </Text>
       </div>

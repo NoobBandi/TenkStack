@@ -126,12 +126,14 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only requests that name a model can cause one to be loaded; reads must
 	// not stall behind an eviction.
+	model := ""
 	if r.Method == http.MethodPost && len(body) > 0 {
 		var probe struct {
 			Model any `json:"model"`
 		}
 		if json.Unmarshal(body, &probe) == nil {
 			if wanted, ok := probe.Model.(string); ok {
+				model = wanted
 				if status, detail := s.makeRoom(r.Context(), wanted); status != 0 {
 					fail(w, status, detail)
 					return
@@ -174,10 +176,27 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	flusher, _ := w.(http.Flusher)
+	// A streamed reply from an engine that logs nothing per request is
+	// measured on its way through; llama.cpp reports its own.
+	var m *meter
+	if resp.StatusCode == http.StatusOK && strings.Contains(contentType, "event-stream") && model != "" &&
+		strings.HasSuffix(path, "completions") {
+		if key := s.Models.ProviderKeys()[s.Config.CanonicalModel(model)]; key != "" && key != providers.LlamaCpp {
+			name := key
+			if p := providers.Get(key); p != nil {
+				name = p.Name
+			}
+			m = newMeter(&s.meters, name)
+			defer m.finish()
+		}
+	}
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
+			if m != nil {
+				m.feedBytes(buf[:n])
+			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return
 			}

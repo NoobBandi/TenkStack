@@ -38,6 +38,8 @@ export interface RequestTrace {
   truncated: boolean;
   /** Whole window the request ended up occupying, prompt included. */
   finalTokens: number;
+  /** The engine, when the console measured it rather than llama-server. */
+  engine?: string;
 }
 
 /** Enough to show the live one and the few before it; a dashboard block cannot
@@ -104,6 +106,7 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
               key, slot: tick.slot, task: tick.task,
               startedAt: at, updatedAt: at, promptTokens: 0,
               points: [], done: false, truncated: false, finalTokens: 0,
+              engine: tick.engine,
             };
 
             if (tick.phase === 'done') {

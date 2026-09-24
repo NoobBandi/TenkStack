@@ -303,6 +303,9 @@ export interface ProgressTick {
   elapsed?: number;
   /** done only: the reply ran into the context ceiling and was cut short. */
   truncated?: boolean;
+  /** Set when the console measured the reply in its proxy (vLLM and other
+   *  engines that log nothing per request); slot and task are then its own. */
+  engine?: string;
 }
 
 /** One completed request, out of llama-swap's own store. */

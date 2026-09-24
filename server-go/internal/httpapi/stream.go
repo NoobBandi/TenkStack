@@ -60,6 +60,18 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	go func() {
+		events, unsubscribe := s.meters.Subscribe()
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case ev := <-events:
+				offer(ev)
+			}
+		}
+	}()
+	go func() {
 		for {
 			// A list even for one card: the client renders per device.
 			if samples := s.History.LatestAll(); len(samples) > 0 {

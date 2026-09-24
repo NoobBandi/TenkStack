@@ -93,6 +93,10 @@ type ProgressTick struct {
 	Progress  *float64 `json:"progress,omitempty"`
 	Elapsed   *float64 `json:"elapsed,omitempty"`
 	Truncated *bool    `json:"truncated,omitempty"`
+	// Engine names the runtime when the tick was measured by the console's
+	// proxy rather than read from llama-server's log; slot and task are
+	// then the console's own numbering and mean nothing to show.
+	Engine string `json:"engine,omitempty"`
 }
 
 type Slot struct {
