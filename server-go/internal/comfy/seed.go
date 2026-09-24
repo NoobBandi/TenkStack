@@ -18,6 +18,15 @@ import (
 //go:embed all:fetchnode
 var fetchNode embed.FS
 
+// xpuFixes patches around Intel XPU kernel bugs inside ComfyUI. It is one
+// module with no nodes, so it is written and linked as a single file.
+//
+//go:embed tenkstack_xpu_fixes.py
+var xpuFixes []byte
+
+// xpuFixesFile is where it lives in the shared user storage.
+const xpuFixesFile = "tenkstack-nodes/tenkstack_xpu_fixes.py"
+
 // fetchNodeDir is where the extension lives in the shared user storage, and
 // the name it is linked under in custom_nodes.
 const fetchNodeDir = "tenkstack-nodes/tenkstack_fetch"
@@ -107,6 +116,16 @@ if [ -f "$FETCH/__init__.py" ] && { [ -L "$LINK" ] || [ ! -e "$LINK" ]; }; then
     ln -sfn "$FETCH/__init__.py" "$LINK"
     echo "[pre-start] TenkStack model fetch linked"
 fi
+
+# TenkStack XPU fixes: workarounds for Intel XPU kernel bugs, patched into
+# torch as ComfyUI loads custom nodes. It does nothing on another vendor;
+# linked on every machine so a card swap needs no second look.
+FIXES=/root/user-scripts/tenkstack-nodes/tenkstack_xpu_fixes.py
+LINK=$NODES/tenkstack_xpu_fixes.py
+if [ -f "$FIXES" ] && { [ -L "$LINK" ] || [ ! -e "$LINK" ]; }; then
+    ln -sfn "$FIXES" "$LINK"
+    echo "[pre-start] TenkStack XPU fixes linked"
+fi
 `
 
 // Seed writes the pre-start hook and the Manager flag into the shared user
@@ -122,10 +141,21 @@ func (m *Manager) Seed() {
 	if err := seedFetchNode(filepath.Join(user, "user-scripts", filepath.FromSlash(fetchNodeDir))); err != nil {
 		log.Printf("could not write the ComfyUI model-fetch extension: %v", err)
 	}
+	if err := writeIfChanged(filepath.Join(user, "user-scripts", filepath.FromSlash(xpuFixesFile)), xpuFixes); err != nil {
+		log.Printf("could not write the ComfyUI XPU fixes: %v", err)
+	}
 }
 
-// seedFetchNode writes the extension's files, each only when it differs, so
-// a start that changes nothing touches nothing ComfyUI is watching.
+// writeIfChanged writes a file only when its content differs, so a start
+// that changes nothing touches nothing ComfyUI is watching.
+func writeIfChanged(target string, content []byte) error {
+	if current, err := os.ReadFile(target); err == nil && bytes.Equal(current, content) {
+		return nil
+	}
+	return writeFile(target, content, 0o644)
+}
+
+// seedFetchNode writes the extension's files, each only when it differs.
 func seedFetchNode(dir string) error {
 	return fs.WalkDir(fetchNode, "fetchnode", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
@@ -136,11 +166,7 @@ func seedFetchNode(dir string) error {
 			return err
 		}
 		rel := strings.TrimPrefix(p, "fetchnode/")
-		target := filepath.Join(dir, filepath.FromSlash(rel))
-		if current, err := os.ReadFile(target); err == nil && bytes.Equal(current, content) {
-			return nil
-		}
-		return writeFile(target, content, 0o644)
+		return writeIfChanged(filepath.Join(dir, filepath.FromSlash(rel)), content)
 	})
 }
 

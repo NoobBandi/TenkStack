@@ -1,6 +1,7 @@
 package comfy
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,5 +90,20 @@ func TestSeedFetchNode(t *testing.T) {
 	after, _ := os.Stat(filepath.Join(dir, "__init__.py"))
 	if !before.ModTime().Equal(after.ModTime()) {
 		t.Error("unchanged file was rewritten")
+	}
+}
+
+// Seed writes the XPU fixes beside the fetch extension, and the pre-start
+// hook links them into custom_nodes.
+func TestSeedXPUFixes(t *testing.T) {
+	m := &Manager{ComfyDir: t.TempDir()}
+	m.Seed()
+	path := filepath.Join(m.ComfyDir, "storage-user", "user-scripts", filepath.FromSlash(xpuFixesFile))
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(got, []byte("scaled_dot_product_attention")) {
+		t.Fatalf("fixes not written: %v", err)
+	}
+	if !strings.Contains(preStart, "custom_nodes/tenkstack_xpu_fixes.py") && !strings.Contains(preStart, "$NODES/tenkstack_xpu_fixes.py") {
+		t.Error("pre-start does not link the fixes")
 	}
 }
