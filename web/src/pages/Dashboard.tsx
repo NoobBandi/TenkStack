@@ -262,7 +262,7 @@ export default function Dashboard() {
     setUnloading(true);
     try {
       await unloadAll();
-      refreshModels();
+      refreshModels().catch(() => undefined);
     } finally {
       setUnloading(false);
     }

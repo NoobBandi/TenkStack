@@ -58,7 +58,8 @@ interface StreamState {
   traces: RequestTrace[];
   requests: InflightRequest[];
   connected: boolean;
-  refreshModels: () => void;
+  /** Refetches the model list; resolves with it, rejects when it fails. */
+  refreshModels: () => Promise<ModelInfo[]>;
 }
 
 const StreamContext = createContext<StreamState | null>(null);
@@ -74,11 +75,11 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(true);
 
   const refreshModels = useMemo(
-    () => () => { fetchModels().then(setModels).catch(() => undefined); },
+    () => () => fetchModels().then((found) => { setModels(found); return found; }),
     [],
   );
 
-  useEffect(() => { refreshModels(); }, [refreshModels]);
+  useEffect(() => { refreshModels().catch(() => undefined); }, [refreshModels]);
 
   useEffect(() => {
     const unsubscribe = subscribe((event: StreamEvent) => {
@@ -182,7 +183,7 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
   // Model status arrives on the stream, but capabilities and context size only
   // come from REST, so a periodic refetch keeps them current after a reload.
   useEffect(() => {
-    const timer = window.setInterval(refreshModels, 15000);
+    const timer = window.setInterval(() => { refreshModels().catch(() => undefined); }, 15000);
     return () => window.clearInterval(timer);
   }, [refreshModels]);
 

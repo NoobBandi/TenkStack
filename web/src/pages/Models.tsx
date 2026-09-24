@@ -295,10 +295,29 @@ export default function Models() {
   const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(() => {
-    refreshModels();
+    refreshModels().catch(() => undefined);
     fetchModelFiles().then(setFiles).catch(() => undefined);
     fetchPartials().then(setPartials).catch(() => undefined);
   }, [refreshModels]);
+
+  // The button's own reload: the same three reads, waited for, so it can
+  // spin while they run and say what it found -- done silently it looked
+  // as though the press had done nothing.
+  const [reloading, setReloading] = useState(false);
+  const reload = async () => {
+    setReloading(true);
+    try {
+      const [found, onDisk] = await Promise.all([
+        refreshModels(), fetchModelFiles(), fetchPartials().then(setPartials),
+      ]);
+      setFiles(onDisk);
+      message.success(`已重新整理：${found.length} 個模型、${onDisk.length} 個模型檔`);
+    } catch (error) {
+      message.error(`重新整理失敗：${(error as Error).message}`);
+    } finally {
+      setReloading(false);
+    }
+  };
 
   useEffect(() => { refresh(); }, [refresh]);
   // A finished quantisation left a new directory behind.
@@ -597,7 +616,7 @@ export default function Models() {
         size="small"
         extra={
           <Space>
-            <Button size="small" icon={<ReloadOutlined />} onClick={refresh}>重新整理</Button>
+            <Button size="small" icon={<ReloadOutlined />} loading={reloading} onClick={() => void reload()}>重新整理</Button>
             <Button size="small" onClick={() => unloadAll().then(refresh)}
                     disabled={!models.some((m) => m.running)}>
               全部卸載
