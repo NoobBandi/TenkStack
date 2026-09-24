@@ -276,9 +276,10 @@ var systemDirs = []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/l
 // whitespace, and into docker's -v, which splits on colons.
 var unsafePath = regexp.MustCompile("[\\s:$\\{\\}'\"`\\\\;&|<>*?]")
 
-// AddLocation checks a directory, creating it when it does not exist yet,
-// and makes it a location under the next free key.
-func (m *Models) AddLocation(ctx context.Context, raw, label string) (api.ModelLocation, error) {
+// checkPath is the directory raw names, created when it does not exist
+// yet, if it may be a location: except is the key of the location it would
+// replace, which it may of course overlap.
+func (m *Models) checkPath(raw, except string) (string, error) {
 	p := strings.TrimSpace(raw)
 	if strings.HasPrefix(p, "~/") || p == "~" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -286,48 +287,61 @@ func (m *Models) AddLocation(ctx context.Context, raw, label string) (api.ModelL
 		}
 	}
 	if p == "" || !filepath.IsAbs(p) {
-		return api.ModelLocation{}, &Refused{"請填完整路徑，例如 /mnt/data/models"}
+		return "", &Refused{"請填完整路徑，例如 /mnt/data/models"}
 	}
 	p = filepath.Clean(p)
 	if unsafePath.MatchString(p) {
-		return api.ModelLocation{}, &Refused{"路徑不能有空白或 : $ { } 引號等符號，模型指令與容器掛載會被拆開"}
+		return "", &Refused{"路徑不能有空白或 : $ { } 引號等符號，模型指令與容器掛載會被拆開"}
 	}
 	if p == "/" {
-		return api.ModelLocation{}, &Refused{"不能用根目錄"}
+		return "", &Refused{"不能用根目錄"}
 	}
 	for _, dir := range systemDirs {
 		if p == dir || strings.HasPrefix(p, dir+"/") {
-			return api.ModelLocation{}, &Refused{dir + " 是系統目錄，不能放模型"}
+			return "", &Refused{dir + " 是系統目錄，不能放模型"}
 		}
 	}
-	locs := m.Locations()
-	if len(locs) >= MaxLocations {
-		return api.ModelLocation{}, &Refused{fmt.Sprintf("最多 %d 個位置", MaxLocations)}
-	}
 	if err := os.MkdirAll(p, 0o755); err != nil {
-		return api.ModelLocation{}, &Refused{"無法建立這個資料夾：" + err.Error()}
+		return "", &Refused{"無法建立這個資料夾：" + err.Error()}
 	}
 	real := realDir(p)
 	if st, err := os.Stat(real); err != nil || !st.IsDir() {
-		return api.ModelLocation{}, &Refused{"這不是資料夾"}
+		return "", &Refused{"這不是資料夾"}
 	}
 	if syscall.Access(real, 0x2|0x1) != nil {
-		return api.ModelLocation{}, &Refused{"主控台沒有這個資料夾的寫入權限"}
+		return "", &Refused{"主控台沒有這個資料夾的寫入權限"}
 	}
 	for _, avoid := range m.Avoid {
 		a := realDir(avoid)
 		if real == a || strings.HasPrefix(real, a+"/") || strings.HasPrefix(a, real+"/") {
-			return api.ModelLocation{}, &Refused{"不能跟 " + avoid + " 重疊"}
+			return "", &Refused{"不能跟 " + avoid + " 重疊"}
 		}
 	}
-	for _, loc := range locs {
+	for _, loc := range m.Locations() {
+		if loc.Key == except {
+			continue
+		}
 		other := realDir(loc.Path)
 		if real == other {
-			return api.ModelLocation{}, &Refused{"這個位置已經在清單裡"}
+			return "", &Refused{"這個位置已經在清單裡"}
 		}
 		if strings.HasPrefix(real, other+"/") || strings.HasPrefix(other, real+"/") {
-			return api.ModelLocation{}, &Refused{"不能跟 " + loc.Path + " 互相包含，同一個模型會被算成兩份"}
+			return "", &Refused{"不能跟 " + loc.Path + " 互相包含，同一個模型會被算成兩份"}
 		}
+	}
+	return real, nil
+}
+
+// AddLocation checks a directory, creating it when it does not exist yet,
+// and makes it a location under the next free key.
+func (m *Models) AddLocation(ctx context.Context, raw, label string) (api.ModelLocation, error) {
+	locs := m.Locations()
+	if len(locs) >= MaxLocations {
+		return api.ModelLocation{}, &Refused{fmt.Sprintf("最多 %d 個位置", MaxLocations)}
+	}
+	real, err := m.checkPath(raw, "")
+	if err != nil {
+		return api.ModelLocation{}, err
 	}
 	key := ""
 	taken := map[string]bool{}
@@ -402,10 +416,51 @@ func (m *Models) RemoveLocation(ctx context.Context, key string) error {
 	return m.WriteMountList()
 }
 
-// LabelLocation names a location; an empty label shows the path instead.
-func (m *Models) LabelLocation(key, label string) error {
-	if _, ok := m.location(key); !ok {
+// UpdateLocation names a location -- an empty label shows the path
+// instead -- and, when path is given, points it at another directory: the
+// disk it is on moved, or its files were moved to a new one. The primary's
+// path is CONSOLE_MODELS_DIR and not this to change. Every file an entry
+// loads from the location has to be at the new path already, or those
+// entries would stop loading the moment the macro changed.
+func (m *Models) UpdateLocation(ctx context.Context, key, label string, path *string) error {
+	loc, ok := m.location(key)
+	if !ok {
 		return &Refused{"沒有這個位置"}
+	}
+	if path != nil && strings.TrimSpace(*path) != "" && filepath.Clean(strings.TrimSpace(*path)) != loc.Path {
+		if key == PrimaryLocation {
+			return &Refused{"主要位置的路徑由 CONSOLE_MODELS_DIR 決定，要在服務設定裡改"}
+		}
+		real, err := m.checkPath(*path, key)
+		if err != nil {
+			return err
+		}
+		if real != realDir(loc.Path) {
+			entries, _, err := m.entries()
+			if err != nil {
+				return err
+			}
+			var missing []string
+			for _, e := range entries {
+				for _, name := range weightsInCmd(e.cmd) {
+					if k, rel := SplitRef(name); k == key {
+						if _, err := os.Stat(filepath.Join(real, rel)); err != nil {
+							missing = append(missing, e.id+"（"+rel+"）")
+						}
+					}
+				}
+			}
+			if len(missing) > 0 {
+				sort.Strings(missing)
+				return &Refused{"新路徑底下找不到這些模型的檔案：" + strings.Join(missing, "、") + "。先把檔案搬過去再改路徑"}
+			}
+			if err := m.Store.AddMacro(ctx, key, real); err != nil {
+				return err
+			}
+			if err := m.WriteMountList(); err != nil {
+				return err
+			}
+		}
 	}
 	prefs := m.prefs()
 	if label = strings.TrimSpace(label); label != "" {

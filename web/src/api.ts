@@ -1591,8 +1591,10 @@ export interface ModelLocations {
 export const fetchModelLocations = () => get<ModelLocations>('/model-locations');
 export const addModelLocation = (path: string, label: string) =>
   send<ModelLocation>('/model-locations', 'POST', { path, label });
-export const labelModelLocation = (key: string, label: string) =>
-  send<ModelLocations>(`/model-locations/${encodeURIComponent(key)}`, 'PATCH', { label });
+/** Renames a location and, with `path`, points it at another directory --
+ *  refused unless every file a model loads from it is already there. */
+export const updateModelLocation = (key: string, label: string, path?: string) =>
+  send<ModelLocations>(`/model-locations/${encodeURIComponent(key)}`, 'PATCH', { label, path });
 export const removeModelLocation = (key: string) =>
   send<ModelLocations>(`/model-locations/${encodeURIComponent(key)}`, 'DELETE');
 export const setModelLocationDefaults = (defaults: Partial<Record<ModelFormat, string>>) =>

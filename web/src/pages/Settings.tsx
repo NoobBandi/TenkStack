@@ -3,13 +3,13 @@ import {
   Alert, App as AntApp, Button, Card, Col, Input, InputNumber, Popconfirm, Row, Select, Space,
   Tag, Tooltip, Typography,
 } from 'antd';
-import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import Versions from '../components/Versions';
 import { bytes } from '../components/files/kit';
 import {
   addModelLocation, fetchConfig, fetchMachine, fetchModelLocations, fetchSettings,
-  labelModelLocation, locationName, removeModelLocation, saveConfigRaw, saveSettings,
-  setModelLocationDefaults,
+  locationName, removeModelLocation, saveConfigRaw, saveSettings, setModelLocationDefaults,
+  updateModelLocation,
   type MachinePath, type MachineUnit, type ModelFormat, type ModelLocations, type Setting,
 } from '../api';
 import { LINE, MONO } from '../theme';
@@ -80,6 +80,59 @@ const FORMATS: { key: ModelFormat; label: string; note: string }[] = [
 ];
 
 /**
+ * The path and name of a location, for adding one and for editing one in
+ * place of its row. The primary's path is CONSOLE_MODELS_DIR, set where the
+ * service is, so it is shown and not offered.
+ */
+function LocationForm({ initialPath = '', initialLabel = '', lockPath, busy, submit, onSubmit, onCancel }: {
+  initialPath?: string; initialLabel?: string; lockPath?: boolean; busy: boolean;
+  submit: string; onSubmit: (path: string, label: string) => void; onCancel: () => void;
+}) {
+  const [path, setPath] = useState(initialPath);
+  const [label, setLabel] = useState(initialLabel);
+  const go = () => { if (path.trim()) onSubmit(path.trim(), label); };
+  return (
+    <div style={{ padding: '10px 0', borderBottom: `1px solid ${LINE.faint}` }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Tooltip title={lockPath ? '主要位置的路徑由 CONSOLE_MODELS_DIR 決定，要在服務設定裡改' : undefined}>
+          <Input
+            size="small"
+            autoFocus={!lockPath}
+            disabled={lockPath}
+            placeholder="完整路徑，例如 /mnt/data/models"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            onPressEnter={go}
+            style={{ flex: '2 1 260px', fontFamily: MONO }}
+          />
+        </Tooltip>
+        <Input
+          size="small"
+          autoFocus={lockPath}
+          placeholder="名稱（可不填）"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          onPressEnter={go}
+          style={{ flex: '1 1 140px' }}
+        />
+        <Space size={6}>
+          <Button size="small" onClick={onCancel}>取消</Button>
+          <Button size="small" type="primary" loading={busy} disabled={!path.trim()} onClick={go}>
+            {submit}
+          </Button>
+        </Space>
+      </div>
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 6 }}>
+        {lockPath
+          ? '只能改名稱。'
+          : '資料夾不存在會自動建立。路徑不能有空白或冒號，也不能放在系統目錄、ComfyUI 資料夾，或跟其他位置互相包含。'}
+        {!lockPath && initialPath && ' 改路徑前，先把這個位置裡正在使用的模型檔搬過去。'}
+      </Text>
+    </div>
+  );
+}
+
+/**
  * Where models live. A second disk for the large ones, or GGUF and
  * safetensors kept apart: each is a location, and each format has the one new
  * downloads of it land in. The primary is CONSOLE_MODELS_DIR and stays; the
@@ -89,8 +142,7 @@ function ModelLocationsCard() {
   const { message } = AntApp.useApp();
   const [data, setData] = useState<ModelLocations | null>(null);
   const [adding, setAdding] = useState(false);
-  const [path, setPath] = useState('');
-  const [label, setLabel] = useState('');
+  const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
@@ -114,9 +166,12 @@ function ModelLocationsCard() {
     }
   };
 
-  const onAdd = async () => {
-    if (await run(() => addModelLocation(path, label), '已加入')) {
-      setAdding(false); setPath(''); setLabel('');
+  const onAdd = async (path: string, label: string) => {
+    if (await run(() => addModelLocation(path, label), '已加入')) setAdding(false);
+  };
+  const onEdit = async (key: string, path: string, label: string, primary: boolean) => {
+    if (await run(() => updateModelLocation(key, label, primary ? undefined : path), '已儲存')) {
+      setEditing(null);
     }
   };
 
@@ -131,7 +186,7 @@ function ModelLocationsCard() {
       loading={!data}
       extra={(
         <Tooltip title={full && data ? `最多 ${data.max} 個位置` : undefined}>
-          <Button size="small" icon={<PlusOutlined />} disabled={full || adding}
+          <Button size="small" icon={<PlusOutlined />} disabled={full || adding || editing !== null}
                   onClick={() => setAdding(true)}>
             新增位置
           </Button>
@@ -169,24 +224,26 @@ function ModelLocationsCard() {
             : loc.in_use.length > 0
               ? `還有模型從這裡載入：${loc.in_use.join('、')}`
               : undefined;
+          if (editing === loc.key) {
+            return (
+              <LocationForm
+                key={loc.key}
+                initialPath={loc.path}
+                initialLabel={loc.label}
+                lockPath={loc.primary}
+                busy={busy}
+                submit="儲存"
+                onSubmit={(path, label) => onEdit(loc.key, path, label, loc.primary)}
+                onCancel={() => setEditing(null)}
+              />
+            );
+          }
           return (
             <Line
               key={loc.key}
               label={(
                 <Space size={6} wrap>
-                  <Text
-                    editable={{
-                      text: loc.label,
-                      tooltip: '改名稱',
-                      onChange: (next) => {
-                        if (next.trim() !== loc.label) {
-                          run(() => labelModelLocation(loc.key, next));
-                        }
-                      },
-                    }}
-                  >
-                    {locationName(loc)}
-                  </Text>
+                  <span>{locationName(loc)}</span>
                   {loc.primary && <Tag style={{ marginInlineEnd: 0 }}>主要</Tag>}
                   {loc.default_for.map((f) => (
                     <Tag key={f} color="blue" style={{ marginInlineEnd: 0 }}>
@@ -205,57 +262,37 @@ function ModelLocationsCard() {
                 loc.exists ? `磁碟剩 ${bytes(loc.free_bytes)} / ${bytes(loc.total_bytes)}` : '',
               ].filter(Boolean).join('　')}
               right={(
-                <Tooltip title={why}>
-                  <Popconfirm
-                    title="移除這個位置？"
-                    description="只是不再使用，資料夾裡的檔案會留著。"
-                    okText="移除"
-                    cancelText="取消"
-                    disabled={blocked}
-                    onConfirm={() => run(() => removeModelLocation(loc.key), '已移除')}
-                  >
-                    <Button size="small" type="text" danger icon={<DeleteOutlined />}
-                            disabled={blocked || busy} />
-                  </Popconfirm>
-                </Tooltip>
+                <Space size={2}>
+                  <Tooltip title={loc.primary ? '改名稱' : '改路徑或名稱'}>
+                    <Button size="small" type="text" icon={<EditOutlined />}
+                            disabled={busy || adding || editing !== null}
+                            onClick={() => setEditing(loc.key)} />
+                  </Tooltip>
+                  <Tooltip title={why}>
+                    <Popconfirm
+                      title="移除這個位置？"
+                      description="只是不再使用，資料夾裡的檔案會留著。"
+                      okText="移除"
+                      cancelText="取消"
+                      disabled={blocked}
+                      onConfirm={() => run(() => removeModelLocation(loc.key), '已移除')}
+                    >
+                      <Button size="small" type="text" danger icon={<DeleteOutlined />}
+                              disabled={blocked || busy} />
+                    </Popconfirm>
+                  </Tooltip>
+                </Space>
               )}
             />
           );
         })}
         {adding && (
-          <div style={{ display: 'flex', gap: 8, padding: '10px 0', flexWrap: 'wrap' }}>
-            <Input
-              size="small"
-              autoFocus
-              placeholder="完整路徑，例如 /mnt/data/models"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              onPressEnter={onAdd}
-              style={{ flex: '2 1 260px', fontFamily: MONO }}
-            />
-            <Input
-              size="small"
-              placeholder="名稱（可不填）"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              onPressEnter={onAdd}
-              style={{ flex: '1 1 140px' }}
-            />
-            <Space size={6}>
-              <Button size="small" onClick={() => { setAdding(false); setPath(''); setLabel(''); }}>
-                取消
-              </Button>
-              <Button size="small" type="primary" loading={busy} disabled={!path.trim()}
-                      onClick={onAdd}>
-                加入
-              </Button>
-            </Space>
-          </div>
-        )}
-        {adding && (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', paddingBottom: 4 }}>
-            資料夾不存在會自動建立。路徑不能有空白或冒號，也不能放在系統目錄、ComfyUI 資料夾，或跟其他位置互相包含。
-          </Text>
+          <LocationForm
+            busy={busy}
+            submit="加入"
+            onSubmit={onAdd}
+            onCancel={() => setAdding(false)}
+          />
         )}
       </div>
     </Card>

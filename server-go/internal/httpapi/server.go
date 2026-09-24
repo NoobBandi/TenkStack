@@ -129,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/model-locations", s.readLocations)
 	mux.HandleFunc("POST /api/model-locations", s.addLocation)
 	mux.HandleFunc("PUT /api/model-locations/defaults", s.setLocationDefaults)
-	mux.HandleFunc("PATCH /api/model-locations/{key}", s.labelLocation)
+	mux.HandleFunc("PATCH /api/model-locations/{key}", s.updateLocation)
 	mux.HandleFunc("DELETE /api/model-locations/{key}", s.removeLocation)
 	mux.HandleFunc("GET /api/models/recommended", s.readRecommended)
 	mux.HandleFunc("POST /api/models/unload", s.unloadAll)

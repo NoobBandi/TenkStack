@@ -166,3 +166,51 @@ func TestAddLocationRefuses(t *testing.T) {
 		t.Error("a sixth location was accepted")
 	}
 }
+
+// A location can be pointed at another directory only once every file an
+// entry loads from it is there; the primary's path is not this to change.
+func TestUpdateLocationPath(t *testing.T) {
+	s, m := tempStore(t)
+	allowTmp(t)
+	ctx := context.Background()
+	m.Prefs = filepath.Join(t.TempDir(), "prefs.json")
+	os.MkdirAll(m.Dir, 0o755)
+	old := filepath.Join(t.TempDir(), "old")
+	if _, err := m.AddLocation(ctx, old, "舊"); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(old, "o", "r"), 0o755)
+	os.WriteFile(filepath.Join(old, "o", "r", "w.gguf"), []byte("x"), 0o644)
+	if err := s.Upsert(ctx, api.ModelSpec{ID: "w", ModelFile: "${models-dir-2}/o/r/w.gguf", CtxSize: 512}, nil, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	moved := filepath.Join(t.TempDir(), "new")
+	path := moved
+	if err := m.UpdateLocation(ctx, "models-dir-2", "新", &path); err == nil || !strings.Contains(err.Error(), "w（o/r/w.gguf）") {
+		t.Fatalf("repointed without the entry's file there: %v", err)
+	}
+	os.MkdirAll(filepath.Join(moved, "o", "r"), 0o755)
+	os.WriteFile(filepath.Join(moved, "o", "r", "w.gguf"), []byte("x"), 0o644)
+	if err := m.UpdateLocation(ctx, "models-dir-2", "新", &path); err != nil {
+		t.Fatal(err)
+	}
+	loc, _ := m.location("models-dir-2")
+	if loc.Path != realDir(moved) {
+		t.Errorf("path is %s, want %s", loc.Path, moved)
+	}
+	if got := m.ListLocationLabels()[1][1]; got != "新" {
+		t.Errorf("label is %q", got)
+	}
+	if abs := m.resolve("${models-dir-2}/o/r/w.gguf"); !strings.HasPrefix(abs, realDir(moved)) {
+		t.Errorf("the entry's file resolves to %s", abs)
+	}
+
+	primary := filepath.Join(t.TempDir(), "elsewhere")
+	if err := m.UpdateLocation(ctx, PrimaryLocation, "", &primary); err == nil {
+		t.Error("the primary's path was changed")
+	}
+	if err := m.UpdateLocation(ctx, PrimaryLocation, "系統碟", nil); err != nil {
+		t.Errorf("the primary could not be renamed: %v", err)
+	}
+}

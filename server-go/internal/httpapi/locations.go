@@ -32,19 +32,27 @@ func (s *Server) addLocation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, loc)
 }
 
-func (s *Server) labelLocation(w http.ResponseWriter, r *http.Request) {
+// updateLocation renames a location and, with a path, repoints it; not
+// while a download is writing into it, which would land at the old path.
+func (s *Server) updateLocation(w http.ResponseWriter, r *http.Request) {
 	if _, d := s.Auth.RequireOwner(r); d != nil {
 		denied(w, d)
 		return
 	}
 	var in struct {
-		Label string `json:"label"`
+		Label string  `json:"label"`
+		Path  *string `json:"path"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		fail(w, http.StatusBadRequest, "label is required")
 		return
 	}
-	if refused(w, s.Models.LabelLocation(r.PathValue("key"), in.Label)) {
+	key := r.PathValue("key")
+	if in.Path != nil && s.Catalog.ActiveIn(key) {
+		fail(w, http.StatusConflict, "還有模型正在下載到這個位置，等下載完或取消後再改路徑")
+		return
+	}
+	if refused(w, s.Models.UpdateLocation(r.Context(), key, in.Label, in.Path)) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Models.ListLocations())
