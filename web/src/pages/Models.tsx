@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
-  InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  InputNumber, Modal, Popconfirm, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
@@ -476,6 +476,30 @@ export default function Models() {
   }, [files]);
   const partialBytes = partials.reduce((sum, f) => sum + f.size_bytes, 0);
 
+  /**
+   * The models by the engine that runs them. llama.cpp first, as the one
+   * every install has; the rest in the order the store lists them. A bar of
+   * one engine is no choice, so it only appears once there is a second.
+   */
+  const [engine, setEngine] = useState<string>('all');
+  const engines = useMemo(() => {
+    const seen = new Map<string, { key: string; name: string; count: number }>();
+    for (const m of models) {
+      const key = m.provider ?? 'llamacpp';
+      const entry = seen.get(key) ?? { key, name: m.provider_name ?? key, count: 0 };
+      entry.count += 1;
+      seen.set(key, entry);
+    }
+    return [...seen.values()].sort((a, b) =>
+      (a.key === 'llamacpp' ? -1 : 0) - (b.key === 'llamacpp' ? -1 : 0) || a.name.localeCompare(b.name));
+  }, [models]);
+  const shownEngine = engines.some((e) => e.key === engine) ? engine : 'all';
+  const shown = shownEngine === 'all'
+    ? [...models].sort((a, b) =>
+        engines.findIndex((e) => e.key === (a.provider ?? 'llamacpp'))
+        - engines.findIndex((e) => e.key === (b.provider ?? 'llamacpp')))
+    : models.filter((m) => (m.provider ?? 'llamacpp') === shownEngine);
+
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card
@@ -499,11 +523,26 @@ export default function Models() {
           </Space>
         }
       >
+        {engines.length > 1 && (
+          <Segmented
+            size="small"
+            style={{ marginBottom: 12 }}
+            value={shownEngine}
+            onChange={(v) => setEngine(String(v))}
+            options={[
+              { value: 'all', label: `全部 ${models.length}` },
+              ...engines.map((e) => ({ value: e.key, label: `${e.name} ${e.count}` })),
+            ]}
+          />
+        )}
         <Table<ModelInfo>
-          dataSource={models}
+          dataSource={shown}
           rowKey="id"
           size="small"
           pagination={false}
+          // Fixed: under auto the long filenames widened their column past
+          // its width and the name was squeezed into three lines.
+          tableLayout="fixed"
           locale={{ emptyText: '設定檔中沒有模型' }}
           expandable={{
             expandedRowRender: (row) => (
@@ -526,6 +565,17 @@ export default function Models() {
                 </div>
               ),
             },
+            // The engine, only in 全部: filtered to one engine the column
+            // would repeat what the bar above says on every row.
+            ...(engines.length > 1 && shownEngine === 'all' ? [{
+              title: '推論引擎', width: 100,
+              render: (_: unknown, row: ModelInfo) => (
+                <Tag color={row.provider === 'vllm' ? 'geekblue' : 'default'}
+                     style={{ fontSize: 11, marginInlineEnd: 0 }}>
+                  {row.provider_name ?? 'llama.cpp'}
+                </Tag>
+              ),
+            }] : []),
             {
               // The one column that separates two entries of the same model at
               // different quantisations, which is now an ordinary thing to

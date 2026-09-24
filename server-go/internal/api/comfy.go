@@ -32,6 +32,10 @@ type ComfyInstance struct {
 	// Stale means it stopped answering and these are the last numbers it
 	// gave: the normal state during a generation, not a fault.
 	Stale bool `json:"stale"`
+	// AfterUpdate is where the restart that follows a node update stands:
+	// updating, waiting (for a render to finish), restarting, or failed.
+	// Empty when none is pending.
+	AfterUpdate string `json:"after_update,omitempty"`
 }
 
 // ComfyRelease is one instance's ComfyUI against the newest release.

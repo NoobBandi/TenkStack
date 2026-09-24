@@ -145,7 +145,8 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
   const name = instance.container ?? config?.name ?? null;
   const busy = instance.queue_running > 0;
   const manager = instance.manager;
-  const updating = manager?.processing ?? false;
+  const after = instance.after_update;
+  const updating = (manager?.processing ?? false) || after === 'updating' || after === 'restarting';
 
   const loadConfig = useCallback(async () => {
     try {
@@ -310,7 +311,7 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
           note={manager
             ? <>
                 查新版只問 ComfyUI 本體有沒有新的發行（一通呼叫，平常每小時自動查）；
-                更新節點是把本體和所有自訂節點都更到最新，完成後要重啟才生效。
+                更新節點是把本體和所有自訂節點都更到最新，完成後主控台會自動重啟容器讓它生效；正在算的圖會先算完再重啟。
                 {instance.latest_checked_at ? `上次查：${ago(instance.latest_checked_at)}。` : ''}
               </>
             : '沒有 ComfyUI-Manager，主控台無法替它查版本或更新'}
@@ -334,11 +335,17 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
               {instance.torch ? <span style={{ opacity: 0.5 }}> ・ torch {instance.torch}</span> : ''}
               {instance.python ? <span style={{ opacity: 0.5 }}> ・ Python {instance.python}</span> : ''}
             </Text>
-            {updating && manager ? (
+            {after === 'restarting' ? (
+              <Tag color="blue" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，重啟容器中</Tag>
+            ) : after === 'waiting' ? (
+              <Tag color="gold" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，等目前的圖算完就重啟</Tag>
+            ) : after === 'failed' ? (
+              <Tag color="red" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，但自動重啟失敗，請按右上角重啟</Tag>
+            ) : updating && manager ? (
               <Tag color="blue" style={{ fontSize: 11, marginInlineEnd: 0 }}>
                 更新中 {manager.done}/{manager.total}
               </Tag>
-            ) : staleAfterUpdate ? (
+            ) : staleAfterUpdate && !after ? (
               // The files on disk changed; the running process did not. Saying
               // so is the point -- an update that silently needs a restart looks
               // like an update that did nothing.

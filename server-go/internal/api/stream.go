@@ -112,6 +112,9 @@ type ActivityRow struct {
 	TokensPerSecond float64 `json:"tokens_per_second"`
 	DurationMs      int64   `json:"duration_ms"`
 	Status          *int64  `json:"status"`
+	// Estimated means the server reported no rate and this one is the
+	// output over the whole request, prefill included.
+	Estimated bool `json:"estimated,omitempty"`
 }
 
 type LastUsed struct {

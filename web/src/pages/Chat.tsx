@@ -77,17 +77,27 @@ function TurnStats({ turn }: { turn: Turn }) {
   const t = turn.timings;
   if (!t && !turn.usage) return null;
   const bits: string[] = [];
+  // Measured here when the server gives counts and no timings (vLLM): the
+  // tokens over the time from the first one to the last, which includes the
+  // network and is a shade lower than the server's own figure would be.
+  const measured = !t && turn.usage && turn.decode_ms && turn.decode_ms > 0;
   if (t) {
     bits.push(`${t.predicted_n} tok`);
     bits.push(`${t.predicted_per_second.toFixed(1)} t/s`);
     if (t.cache_n > 0) bits.push(`快取 ${t.cache_n}`);
   } else if (turn.usage) {
     bits.push(`${turn.usage.completion_tokens} tok`);
+    if (measured) {
+      bits.push(`${(turn.usage.completion_tokens / (turn.decode_ms! / 1000)).toFixed(1)} t/s`);
+    }
+    if (turn.usage.prompt_tokens) bits.push(`輸入 ${turn.usage.prompt_tokens}`);
   }
   if (turn.ttft_ms !== undefined) bits.push(`首字 ${(turn.ttft_ms / 1000).toFixed(2)}s`);
 
   return (
-    <Tooltip title="取自 llama-server 的內部計時，不含網路與排隊時間">
+    <Tooltip title={t
+      ? '取自 llama-server 的內部計時，不含網路與排隊時間'
+      : 'token 數由伺服器回報；速度是這裡從第一個字到最後一個字量的，含思考，也含網路'}>
       <Text style={{ fontSize: 10.5, opacity: 0.35, fontFamily: MONO }}>{bits.join('  ')}</Text>
     </Tooltip>
   );

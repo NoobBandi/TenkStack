@@ -115,6 +115,16 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 			caps.Tools = tpl != ""
 		}
 		row["capabilities"] = caps
+		// Which inference engine starts the entry, so the list can be
+		// grouped by it; an entry named by hand is llama.cpp.
+		key := providerOf[id]
+		if key == "" {
+			key = providers.LlamaCpp
+		}
+		row["provider"] = key
+		if p := providers.Get(key); p != nil {
+			row["provider_name"] = p.Name
+		}
 		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -51,6 +51,10 @@ export interface Turn extends ChatMessage {
   /** Wall time spent inside the reasoning block, first thought to first word.
    *  A collapsed trace says nothing about what it cost; this does. */
   thinking_ms?: number;
+  /** From the first token to the last, measured here. What a speed is
+   *  worked out from when the server reports tokens but no timings --
+   *  vLLM sends usage and nothing else. */
+  decode_ms?: number;
 }
 
 /**
@@ -268,6 +272,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // answer, so it can only be closed out when the answer starts.
     let reasoningAt: number | undefined;
     let thinkingMs: number | undefined;
+    let decodeMs: number | undefined;
 
     // Deltas accumulate outside React so no token is dropped even though most
     // of them never trigger a render.
@@ -284,7 +289,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         next[next.length - 1] = {
           ...next[next.length - 1], ...pending,
           content, reasoning, tool_calls: calls, ttft_ms: ttft,
-          thinking_ms: thinkingMs, model: activeModel,
+          thinking_ms: thinkingMs, decode_ms: decodeMs, model: activeModel,
         };
         return next;
       });
@@ -322,6 +327,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       if (delta.finish_reason) pending.finish_reason = delta.finish_reason;
       if (performance.now() - lastFlush >= FLUSH_INTERVAL_MS) flush();
     }
+    if (ttft !== undefined) decodeMs = performance.now() - startedAt - ttft;
     flush();
 
     // A reply that was all reasoning and no answer still spent the time.
@@ -330,7 +336,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }
     return {
       role: 'assistant', content, reasoning, tool_calls: calls, ...pending,
-      ttft_ms: ttft, thinking_ms: thinkingMs, model: activeModel,
+      ttft_ms: ttft, thinking_ms: thinkingMs, decode_ms: decodeMs, model: activeModel,
     };
   }, [params, searchable]);
 

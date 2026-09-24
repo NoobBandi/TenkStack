@@ -134,11 +134,66 @@ func (s *Server) comfyUpdate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if s.ComfyProbe.AfterUpdate(port) != "" {
+		fail(w, http.StatusConflict, "上一次更新還在進行，或還在等重啟")
+		return
+	}
 	if err := s.ComfyProbe.Update(r.Context(), port, queryBool(r, "core", true), queryBool(r, "nodes", true)); err != nil {
 		comfyError(w, err)
 		return
 	}
+	name := s.comfyContainerName(r.Context(), port)
+	s.ComfyProbe.SetAfterUpdate(port, "updating")
+	go s.restartAfterUpdate(port, name)
 	writeJSON(w, http.StatusOK, api.OK{OK: true})
+}
+
+// restartAfterUpdate restarts the container once an update has finished
+// and nothing is being drawn. Updated nodes are files on disk until the
+// process that imported the old ones is gone, and an update that needs a
+// second button to take effect reads as one that did nothing.
+//
+// The container, not Manager's reboot: Manager execs over its own process,
+// which keeps the Python that already imported the old torch extensions
+// and pip's half-replaced packages, and a node update that changed a
+// dependency is exactly when that goes wrong. docker restart is a clean
+// process from the image's own entrypoint, which also re-runs the managed
+// pre-start hook.
+func (s *Server) restartAfterUpdate(port int, name string) {
+	ctx := gocontext.Background()
+	if !s.ComfyProbe.AwaitUpdate(ctx, port) {
+		log.Printf("ComfyUI on %d: update did not finish; not restarting", port)
+		s.ComfyProbe.SetAfterUpdate(port, "")
+		return
+	}
+	if name == "" {
+		name = s.comfyContainerName(ctx, port)
+	}
+	if name == "" {
+		log.Printf("ComfyUI on %d: update finished but no container publishes it; restart it by hand", port)
+		s.ComfyProbe.SetAfterUpdate(port, "failed")
+		return
+	}
+	s.ComfyProbe.SetAfterUpdate(port, "restarting")
+	log.Printf("ComfyUI on %d: update finished, restarting %s", port, name)
+	if !s.Docker.Control(ctx, name, "restart") {
+		s.ComfyProbe.SetAfterUpdate(port, "failed")
+		return
+	}
+	// Answering again is the end of it; a minute and a half covers a cold
+	// start with forty custom nodes importing.
+	deadline := time.Now().Add(3 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		for _, inst := range s.ComfyProbe.Instances(ctx) {
+			if inst.Port == port && !inst.Stale && inst.Version != nil {
+				s.ComfyProbe.SetAfterUpdate(port, "")
+				log.Printf("ComfyUI on %d: back after the update", port)
+				return
+			}
+		}
+	}
+	s.ComfyProbe.SetAfterUpdate(port, "")
 }
 
 func (s *Server) comfyRestart(w http.ResponseWriter, r *http.Request) {

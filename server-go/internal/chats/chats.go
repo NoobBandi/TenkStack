@@ -190,7 +190,7 @@ func (s *Store) Get(id int64) (*api.Conversation, error) {
 // metaKeys travel with a message because a conversation that used the
 // sandbox is not reloadable without its tool calls, and model is
 // per-message since a thread can be continued by another model.
-var metaKeys = []string{"usage", "timings", "finish_reason", "ttft_ms", "thinking_ms", "model", "tool_calls", "tool_call_id", "run"}
+var metaKeys = []string{"usage", "timings", "finish_reason", "ttft_ms", "thinking_ms", "decode_ms", "model", "tool_calls", "tool_call_id", "run"}
 
 // ErrNoConversation is a save against an id that does not exist.
 type ErrNoConversation struct{ ID int64 }

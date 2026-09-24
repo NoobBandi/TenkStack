@@ -589,8 +589,10 @@ export default function ComfyUI() {
     }
     // An instance that restarted comes back with a fresh queue, so the version
     // on screen is the running one again and the flag has done its job.
+    // The backend restarts an updated instance on its own now; one it is
+    // handling is not waiting on anybody's button.
     setStale((prev) => {
-      const kept = [...prev].filter((p) => found.some((i) => i.port === p));
+      const kept = [...prev].filter((p) => found.some((i) => i.port === p && !i.after_update));
       return kept.length === prev.size ? prev : new Set(kept);
     });
   }, []);

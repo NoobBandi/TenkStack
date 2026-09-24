@@ -35,6 +35,9 @@ export interface SlotInfo {
 
 export interface ModelInfo {
   id: string;
+  /** The inference engine that starts it: llamacpp, vllm. */
+  provider?: string;
+  provider_name?: string;
   name?: string;
   description?: string;
   running: boolean;
@@ -138,6 +141,9 @@ export interface ComfyInstance {
    *  gave. ComfyUI serves nothing while a sampling step runs, so this is the
    *  normal state during a generation rather than a fault. */
   stale: boolean;
+  /** Where the automatic restart after a node update stands: updating,
+   *  waiting (for a render to finish), restarting, failed. */
+  after_update?: 'updating' | 'waiting' | 'restarting' | 'failed';
 }
 
 export interface ComfyRelease {

@@ -54,6 +54,7 @@ type Probe struct {
 	seen          map[int]api.ComfyInstance
 	managerAbsent map[int]time.Time
 	latest        map[int]latestRelease
+	afterUpdate   map[int]string
 	client        *http.Client
 	long          *http.Client
 }
@@ -74,8 +75,9 @@ func NewProbe(ports []int, publicOffset int, publicOpen func(int) bool, docker P
 	return &Probe{
 		Ports: ports, PublicOffset: publicOffset, PublicOpen: publicOpen, Docker: docker,
 		seen: map[int]api.ComfyInstance{}, managerAbsent: map[int]time.Time{}, latest: map[int]latestRelease{},
-		client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext}},
-		long:   &http.Client{Transport: &http.Transport{DialContext: dialer.DialContext}},
+		afterUpdate: map[int]string{},
+		client:      &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext}},
+		long:        &http.Client{Transport: &http.Transport{DialContext: dialer.DialContext}},
 	}
 }
 
@@ -284,7 +286,11 @@ func (p *Probe) probeAll(ctx context.Context, ports []int, names map[int]string)
 // Instances is every ComfyUI on this machine, in port order.
 func (p *Probe) Instances(ctx context.Context) []api.ComfyInstance {
 	ports, names := p.AllPorts(ctx)
-	return p.probeAll(ctx, ports, names)
+	found := p.probeAll(ctx, ports, names)
+	for i := range found {
+		found[i].AfterUpdate = p.AfterUpdate(found[i].Port)
+	}
+	return found
 }
 
 // Held is an instance holding VRAM and how much.
@@ -495,4 +501,109 @@ func (p *Probe) Quiesce(ctx context.Context, port int, wait time.Duration) {
 func (p *Probe) Free(ctx context.Context, port int) error {
 	_, err := p.post(ctx, 10*time.Second, base(port)+"/free", map[string]any{"unload_models": true, "free_memory": true})
 	return err
+}
+
+// SetAfterUpdate records where the restart following an update stands.
+func (p *Probe) SetAfterUpdate(port int, phase string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if phase == "" {
+		delete(p.afterUpdate, port)
+	} else {
+		p.afterUpdate[port] = phase
+	}
+}
+
+func (p *Probe) AfterUpdate(port int) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.afterUpdate[port]
+}
+
+// managerState is Manager's own queue: whether it is working, and how far.
+func (p *Probe) managerState(ctx context.Context, port int) (processing bool, done, total int, ok bool) {
+	resp, err := p.get(ctx, base(port)+"/api/manager/queue/status")
+	if err != nil {
+		return false, 0, 0, false
+	}
+	m, err := decode(resp)
+	if err != nil {
+		return false, 0, 0, false
+	}
+	processing, _ = m["is_processing"].(bool)
+	d, _ := m["done_count"].(float64)
+	t, _ := m["total_count"].(float64)
+	return processing, int(d), int(t), true
+}
+
+// renderQueue is how many prompts are running and waiting.
+func (p *Probe) renderQueue(ctx context.Context, port int) (int, bool) {
+	resp, err := p.get(ctx, base(port)+"/queue")
+	if err != nil {
+		return 0, false
+	}
+	queue, err := decode(resp)
+	if err != nil {
+		return 0, false
+	}
+	running, _ := queue["queue_running"].([]any)
+	pending, _ := queue["queue_pending"].([]any)
+	return len(running) + len(pending), true
+}
+
+// AwaitUpdate follows an update Manager was just asked for until it is
+// finished and ComfyUI has nothing left to draw, which is when a restart
+// costs nobody a picture. It returns false when the update never started,
+// never finished, or the instance went away, and says nothing of whether
+// every node updated -- Manager's queue reports counts, not outcomes.
+func (p *Probe) AwaitUpdate(ctx context.Context, port int) bool {
+	sleep := func(d time.Duration) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	// The worker is started by the same request, but the first status can
+	// still read idle; a queue that never shows work was empty.
+	started := false
+	for i := 0; i < 20 && !started; i++ {
+		processing, _, total, ok := p.managerState(ctx, port)
+		if ok && (processing || total > 0) {
+			started = true
+			break
+		}
+		if !sleep(time.Second) {
+			return false
+		}
+	}
+	// Forty custom nodes each fetch and pip-install; an hour is generous.
+	deadline := time.Now().Add(time.Hour)
+	for started && time.Now().Before(deadline) {
+		processing, _, _, ok := p.managerState(ctx, port)
+		if ok && !processing {
+			break
+		}
+		if !sleep(3 * time.Second) {
+			return false
+		}
+	}
+	if time.Now().After(deadline) {
+		return false
+	}
+	p.SetAfterUpdate(port, "waiting")
+	// A render in progress finishes first; a queue somebody left running
+	// for hours does not hold the update back for longer than that.
+	wait := time.Now().Add(2 * time.Hour)
+	for time.Now().Before(wait) {
+		n, ok := p.renderQueue(ctx, port)
+		if !ok || n == 0 {
+			break
+		}
+		if !sleep(5 * time.Second) {
+			return false
+		}
+	}
+	return true
 }
