@@ -26,7 +26,7 @@ func (f *Files) Receive(rootKey, rel, name string, offset, total int64, body io.
 	if exists(target) {
 		return nil, &Exists{name}
 	}
-	if !writable(filepath.Dir(target)) {
+	if !f.ensureWritable(filepath.Dir(target)) {
 		return nil, &NotWritable{filepath.Dir(target)}
 	}
 	part := target + PartSuffix

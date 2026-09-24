@@ -192,6 +192,13 @@ func main() {
 	if _, err := os.Stat(filepath.Join(layout.ComfyDir, "storage-user")); err == nil {
 		srv.Comfy.Seed()
 	}
+	// What the root ComfyUI container writes is taken back for the files
+	// page when the owner is all that stops a delete or a rename.
+	srv.Files.Reclaim = func(dir string) error {
+		rctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		return srv.Comfy.Reclaim(rctx, dir)
+	}
 	history.Start(ctx)
 	defer history.Stop()
 	containerStats.Start(ctx)

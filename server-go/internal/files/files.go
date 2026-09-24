@@ -7,6 +7,8 @@ package files
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -62,6 +64,9 @@ type Files struct {
 	Home      string
 	Roots     string // CONSOLE_FILE_ROOTS
 	ExtraDeny string // CONSOLE_FILE_DENY
+	// Reclaim gives a directory the ComfyUI container wrote back to the
+	// console's user, recursively. Nil where there is no container side.
+	Reclaim func(dir string) error
 }
 
 func resolveQuiet(p string) string {
@@ -316,7 +321,52 @@ func writable(p string) bool {
 	return err == nil && st.IsDir() && syscall.Access(p, 0x2|0x1) == nil
 }
 
-func (f *Files) canWrite(root Root, p string) bool { return !root.Readonly && writable(p) }
+func (f *Files) canWrite(root Root, p string) bool {
+	return !root.Readonly && (writable(p) || f.reclaimable(p))
+}
+
+// reclaimable is a directory ComfyUI wrote that the console can take back:
+// anything inside the ComfyUI storage, where the container runs as root.
+func (f *Files) reclaimable(p string) bool {
+	if f.Reclaim == nil || f.ComfyDir == "" {
+		return false
+	}
+	if st, err := os.Stat(p); err != nil || !st.IsDir() {
+		return false
+	}
+	return strings.HasPrefix(resolveQuiet(p), resolveQuiet(f.ComfyDir)+string(filepath.Separator))
+}
+
+// ensureWritable is writable, first taking back a directory ComfyUI wrote
+// when its owner is what stands in the way.
+func (f *Files) ensureWritable(p string) bool {
+	if writable(p) {
+		return true
+	}
+	if !f.reclaimable(p) {
+		return false
+	}
+	if err := f.Reclaim(p); err != nil {
+		log.Printf("could not take back %s from the ComfyUI container: %v", p, err)
+		return false
+	}
+	return writable(p)
+}
+
+// reclaimed runs op, and once more after taking dir back when it failed on
+// a permission: a directory moved or removed whole needs every level under
+// it writable, not just the one checked up front.
+func (f *Files) reclaimed(dir string, op func() error) error {
+	err := op()
+	if errors.Is(err, fs.ErrPermission) && f.reclaimable(dir) {
+		if rerr := f.Reclaim(dir); rerr != nil {
+			log.Printf("could not take back %s from the ComfyUI container: %v", dir, rerr)
+			return err
+		}
+		err = op()
+	}
+	return err
+}
 
 // RootsInfo is the trees on offer, each with whether it can be written to:
 // the ComfyUI directories are created by a root container.
@@ -497,7 +547,7 @@ func (f *Files) Mkdir(rootKey, rel, name string) (api.FSNamed, error) {
 	if exists(target) {
 		return api.FSNamed{}, &Exists{name}
 	}
-	if !writable(filepath.Dir(target)) {
+	if !f.ensureWritable(filepath.Dir(target)) {
 		return api.FSNamed{}, &NotWritable{filepath.Dir(target)}
 	}
 	if err := os.Mkdir(target, 0o755); err != nil {
@@ -526,10 +576,10 @@ func (f *Files) Rename(rootKey, rel, name, to string) (api.FSNamed, error) {
 	if exists(target) {
 		return api.FSNamed{}, &Exists{to}
 	}
-	if !writable(filepath.Dir(source)) {
+	if !f.ensureWritable(filepath.Dir(source)) {
 		return api.FSNamed{}, &NotWritable{filepath.Dir(source)}
 	}
-	if err := os.Rename(source, target); err != nil {
+	if err := f.reclaimed(source, func() error { return os.Rename(source, target) }); err != nil {
 		return api.FSNamed{}, err
 	}
 	return api.FSNamed{OK: true, Name: to}, nil
@@ -558,10 +608,10 @@ func (f *Files) Move(rootKey, rel, name, toRoot, toRel string) (api.FSNamed, err
 	if st, err := os.Stat(dest); err != nil || !st.IsDir() {
 		return api.FSNamed{}, &NotDir{toRel}
 	}
-	if !writable(dest) {
+	if !f.ensureWritable(dest) {
 		return api.FSNamed{}, &NotWritable{dest}
 	}
-	if !writable(filepath.Dir(source)) {
+	if !f.ensureWritable(filepath.Dir(source)) {
 		return api.FSNamed{}, &NotWritable{filepath.Dir(source)}
 	}
 	target := filepath.Join(dest, filepath.Base(source))
@@ -571,13 +621,13 @@ func (f *Files) Move(rootKey, rel, name, toRoot, toRel string) (api.FSNamed, err
 	if source == dest || strings.HasPrefix(dest, source+string(filepath.Separator)) {
 		return api.FSNamed{}, &BadPath{"不能把資料夾移進它自己底下"}
 	}
-	if err := os.Rename(source, target); err != nil {
+	if err := f.reclaimed(source, func() error { return os.Rename(source, target) }); err != nil {
 		var linkErr *os.LinkError
 		if errors.As(err, &linkErr) && errors.Is(linkErr.Err, syscall.EXDEV) {
 			if err := copyTree(source, target); err != nil {
 				return api.FSNamed{}, err
 			}
-			if err := os.RemoveAll(source); err != nil {
+			if err := f.reclaimed(source, func() error { return os.RemoveAll(source) }); err != nil {
 				return api.FSNamed{}, err
 			}
 		} else {
@@ -635,6 +685,9 @@ func (f *Files) Delete(rootKey, rel, name string, partial bool) (api.FSFreed, er
 	}
 	if partial {
 		target += PartSuffix
+	}
+	if exists(target) && !f.ensureWritable(filepath.Dir(target)) {
+		return api.FSFreed{}, &NotWritable{filepath.Dir(target)}
 	}
 	if st, err := os.Stat(target); err == nil && st.IsDir() {
 		if err := os.Remove(target); err != nil {

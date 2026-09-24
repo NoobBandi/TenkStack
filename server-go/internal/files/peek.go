@@ -535,7 +535,7 @@ func (f *Files) WriteText(rootKey, rel, name, text string, mtimeSeen *float64) (
 	if err != nil || !st.Mode().IsRegular() {
 		return api.FSWritten{}, &NotFound{name}
 	}
-	if !writable(filepath.Dir(target)) {
+	if !f.ensureWritable(filepath.Dir(target)) {
 		return api.FSWritten{}, &NotWritable{filepath.Dir(target)}
 	}
 	if mtimeSeen != nil && math.Abs(mtime(st)-*mtimeSeen) > 1e-6 {
