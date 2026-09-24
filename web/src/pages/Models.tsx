@@ -530,8 +530,8 @@ export default function Models() {
             value={shownEngine}
             onChange={(v) => setEngine(String(v))}
             options={[
-              { value: 'all', label: `全部 ${models.length}` },
-              ...engines.map((e) => ({ value: e.key, label: `${e.name} ${e.count}` })),
+              { value: 'all', label: `全部（${models.length}）` },
+              ...engines.map((e) => ({ value: e.key, label: `${e.name}（${e.count}）` })),
             ]}
           />
         )}
