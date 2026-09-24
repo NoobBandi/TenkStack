@@ -29,7 +29,23 @@ from server import PromptServer
 
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
-WEB_DIRECTORY = "./web"
+# Loaded as a single file, custom_nodes/tenkstack_fetch.py, linked to this
+# one: ComfyUI-Manager treats every folder there that is not from its
+# registry as a git checkout and fails to `git pull` it on every update,
+# and it leaves single files alone.
+#
+# The web folder is registered here rather than through WEB_DIRECTORY: for a
+# single-file node ComfyUI files it under the module's full path, which
+# yields /extensions//root/... -- a URL its own router then refuses. The
+# table is read when the routes are built, after every node has loaded.
+WEB_DIRECTORY = None
+try:
+    import nodes as _nodes
+
+    _nodes.EXTENSION_WEB_DIRS["tenkstack_fetch"] = os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), "web")
+except Exception as _e:
+    print(f"[tenkstack_fetch] could not register the panel: {_e}")
 
 # Where models are published. A server-side fetch of any URL a page names is
 # a way into whatever this container can reach; these are the hosts the

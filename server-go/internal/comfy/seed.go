@@ -95,11 +95,16 @@ PY
 # TenkStack model fetch: missing models downloaded by this server rather than
 # by the browser. The console writes it into the shared user storage; linked
 # rather than copied so a console update reaches the instance on its next
-# start. A directory of that name somebody put there by hand is left alone.
+# start. Linked as one .py file, not a folder: ComfyUI-Manager takes every
+# folder in custom_nodes it does not know for a git checkout and fails to
+# pull it on each update, and it never touches single files. The folder link
+# an earlier console made is taken away; anything else by that name is left.
 FETCH=/root/user-scripts/tenkstack-nodes/tenkstack_fetch
-LINK=/root/ComfyUI/custom_nodes/tenkstack_fetch
-if [ -d "$FETCH" ] && { [ -L "$LINK" ] || [ ! -e "$LINK" ]; }; then
-    ln -sfn "$FETCH" "$LINK"
+NODES=/root/ComfyUI/custom_nodes
+[ -L "$NODES/tenkstack_fetch" ] && rm -f "$NODES/tenkstack_fetch"
+LINK=$NODES/tenkstack_fetch.py
+if [ -f "$FETCH/__init__.py" ] && { [ -L "$LINK" ] || [ ! -e "$LINK" ]; }; then
+    ln -sfn "$FETCH/__init__.py" "$LINK"
     echo "[pre-start] TenkStack model fetch linked"
 fi
 `
