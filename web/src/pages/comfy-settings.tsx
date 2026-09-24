@@ -33,6 +33,7 @@ import {
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
 import FlagPicker from '../components/FlagPicker';
+import WaitingStatus from '../components/WaitingStatus';
 
 const { Text } = Typography;
 
@@ -141,6 +142,9 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
   const [saving, setSaving] = useState(false);
   const [checking, setChecking] = useState(false);
   const [working, setWorking] = useState(false);
+  // Which action `working` belongs to: the update's own waiting text must
+  // not show while a restart or a stop is the thing in flight.
+  const [action, setAction] = useState('');
 
   const name = instance.container ?? config?.name ?? null;
   const busy = instance.queue_running > 0;
@@ -170,6 +174,7 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
   /** `done` is optional: an action that reports its own result says it once. */
   const run = async (label: string, action: () => Promise<unknown>, done?: string) => {
     setWorking(true);
+    setAction(label);
     try {
       await action();
       if (done) message.success(done);
@@ -335,16 +340,22 @@ export default function ContainerCard({ instance, staleAfterUpdate, onChanged, o
               {instance.torch ? <span style={{ opacity: 0.5 }}> ・ torch {instance.torch}</span> : ''}
               {instance.python ? <span style={{ opacity: 0.5 }}> ・ Python {instance.python}</span> : ''}
             </Text>
+            {/* The slow stages, in the words of what is happening now. */}
             {after === 'restarting' ? (
-              <Tag color="blue" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，重啟容器中</Tag>
+              <WaitingStatus label="重啟容器中，讓更新生效" />
             ) : after === 'waiting' ? (
-              <Tag color="gold" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，等目前的圖算完就重啟</Tag>
+              <WaitingStatus label={instance.queue_running + instance.queue_pending > 0
+                ? `更新完成，等目前 ${instance.queue_running + instance.queue_pending} 張圖算完再重啟`
+                : '更新完成，準備重啟'} />
             ) : after === 'failed' ? (
               <Tag color="red" style={{ fontSize: 11, marginInlineEnd: 0 }}>更新完成，但自動重啟失敗，請按右上角重啟</Tag>
-            ) : updating && manager ? (
-              <Tag color="blue" style={{ fontSize: 11, marginInlineEnd: 0 }}>
-                更新中 {manager.done}/{manager.total}
-              </Tag>
+            ) : updating && manager && manager.total > 0 ? (
+              <WaitingStatus label={`更新節點中 ${manager.done}/${manager.total}`}
+                             percent={(manager.done / manager.total) * 100} />
+            ) : updating || (working && action === '更新' && !after) ? (
+              <WaitingStatus label="送出更新，等 ComfyUI-Manager 排好清單" />
+            ) : checking ? (
+              <WaitingStatus label="向 ComfyUI 查最新版本中" />
             ) : staleAfterUpdate && !after ? (
               // The files on disk changed; the running process did not. Saying
               // so is the point -- an update that silently needs a restart looks

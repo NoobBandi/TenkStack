@@ -211,3 +211,28 @@ body {
    * the two lines beside it instead of sitting on the first. */
   vertical-align: top;
 }
+
+/* The waiting indicator (components/WaitingStatus.tsx): a label that
+ * shimmers left to right, and a ring that turns when the stage has no
+ * percentage to show. Reduced motion stills both; the timer still counts. */
+@keyframes ws-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@keyframes ws-spin {
+  to { transform: rotate(360deg); }
+}
+.ws-label {
+  background-image: linear-gradient(90deg,
+    rgba(255, 255, 255, 0.45) 35%, rgba(255, 255, 255, 0.95) 50%, rgba(255, 255, 255, 0.45) 65%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ws-shimmer 1.4s linear infinite;
+}
+.ws-spin { animation: ws-spin 0.9s linear infinite; transform-origin: 50% 50%; }
+@media (prefers-reduced-motion: reduce) {
+  .ws-label { animation: none; color: rgba(255, 255, 255, 0.75); background: none; }
+  .ws-spin { animation: none; }
+}
