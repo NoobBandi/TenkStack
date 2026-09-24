@@ -65,6 +65,9 @@ type Weight struct {
 	Exists     bool     `json:"exists"`
 	SizeBytes  int64    `json:"size_bytes"`
 	SharedWith []string `json:"shared_with"`
+	// Parts is how many shards a split GGUF is, the first of which names
+	// it; the size is theirs together. Omitted for one file.
+	Parts int `json:"parts,omitempty"`
 }
 
 // GGUFFile is one set of weights on disk: a GGUF, or a directory of

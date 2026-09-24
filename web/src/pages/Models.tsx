@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
-  InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
@@ -16,7 +16,7 @@ import {
   type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo,
   type ModelSpec, type ModelWeight, type PartialFile, type QuantJob, type Runtime,
 } from '../api';
-import { MONO } from '../theme';
+import { ACCENT, LINE, MONO } from '../theme';
 import FlagPicker from '../components/FlagPicker';
 import { QuantJobs, QuantizeModal } from '../components/Quantize';
 import { STATE_COLOURS, stateLabel } from '../modelState';
@@ -127,6 +127,80 @@ function WeightList({ weights }: { weights: ModelWeight[] }) {
         合計 {gib(total)} —— 載入時大致就是這些進顯存，再加上 KV 快取
       </Text>
     </Space>
+  );
+}
+
+/**
+ * The model-file column's hover card.
+ *
+ * The column shows one basename, cut to fit; this is the rest of it laid
+ * out in rows -- where the files came from, which engine runs them, each
+ * file with what it is and how big, the total the card will need, and
+ * what the entry is configured to hold -- rather than one wrapped line of
+ * path and size run together.
+ */
+function ModelFileCard({ row }: { row: ModelInfo }) {
+  const weights = row.weights ?? [];
+  const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
+  const main = weights.find((w) => w.role === 'model') ?? weights[0];
+  const repo = main?.repo;
+  const shared = [...new Set(weights.flatMap((w) => w.shared_with))];
+  const label = { fontSize: 11, opacity: 0.5, whiteSpace: 'nowrap' as const };
+  const value = { fontSize: 12, fontFamily: MONO, wordBreak: 'break-all' as const };
+  return (
+    <div style={{ width: 460, maxWidth: '80vw' }}>
+      <div style={{ ...value, fontSize: 13, fontWeight: 500, marginBottom: 10 }}>
+        {main?.basename ?? '—'}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 14, rowGap: 6, alignItems: 'baseline' }}>
+        {repo && (<><span style={label}>來源</span><span style={value}>{repo}</span></>)}
+        <span style={label}>推論引擎</span>
+        <span style={{ fontSize: 12 }}>{row.provider_name ?? 'llama.cpp'}</span>
+        {row.ctx_size ? (
+          <><span style={label}>Context</span>
+            <span style={{ ...value, fontVariantNumeric: 'tabular-nums' }}>{row.ctx_size.toLocaleString()}</span></>
+        ) : null}
+      </div>
+
+      <div style={{ borderTop: `1px solid ${LINE.faint}`, margin: '10px 0' }} />
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', columnGap: 12, rowGap: 6, alignItems: 'baseline' }}>
+        {weights.map((w) => (
+          <Fragment key={w.filename}>
+            <Tag style={{ fontSize: 10, marginInlineEnd: 0, justifySelf: 'start' }}
+                 color={w.role === 'mmproj' ? 'purple' : 'default'}>
+              {w.role === 'mmproj' ? '視覺投影' : '權重'}
+            </Tag>
+            <span style={value}>
+              {w.basename}
+              {w.parts ? (
+                <span style={{ display: 'block', fontSize: 11, opacity: 0.5, marginTop: 2 }}>
+                  共 {w.parts} 個分片，大小是全部加起來
+                </span>
+              ) : null}
+            </span>
+            <span style={{ fontSize: 12, fontFamily: MONO, whiteSpace: 'nowrap', textAlign: 'right',
+              color: w.exists ? undefined : ACCENT.error }}>
+              {w.exists ? gib(w.size_bytes) : '檔案不見了'}
+            </span>
+          </Fragment>
+        ))}
+        {weights.length > 1 && (
+          <>
+            <span style={label}>合計</span>
+            <span />
+            <span style={{ fontSize: 12, fontFamily: MONO, whiteSpace: 'nowrap', textAlign: 'right', fontWeight: 500 }}>
+              {gib(total)}
+            </span>
+          </>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11, opacity: 0.5, marginTop: 10, lineHeight: 1.6 }}>
+        載入時大致就是這些進顯存，再加上 KV 快取。
+        {shared.length > 0 && <> 檔案也被 {shared.join('、')} 使用，移除這個模型不會刪掉它。</>}
+      </div>
+    </div>
   );
 }
 
@@ -590,7 +664,6 @@ export default function Models() {
                 const weights = row.weights ?? [];
                 if (weights.length === 0) return <Text type="secondary">—</Text>;
                 const main = weights.find((w) => w.role === 'model') ?? weights[0];
-                const total = weights.reduce((sum, w) => sum + w.size_bytes, 0);
                 const missing = weights.filter((w) => !w.exists);
                 return (
                   // One flex row rather than a block with things under it.
@@ -603,7 +676,8 @@ export default function Models() {
                         apart, and the filename does that on its own; a number
                         beside every row is weight the row does not need, and
                         the expanded view and the file list both carry it. */}
-                    <Tooltip title={`${main.filename}　${gib(total)}`}>
+                    <Popover content={<ModelFileCard row={row} />} placement="bottomLeft"
+                             mouseEnterDelay={0.25} arrow={false}>
                       <Text
                         // `0 1 auto`, not `1`: growing would pin the tag to the
                         // far edge of the column with a gap of whatever is left
@@ -614,7 +688,7 @@ export default function Models() {
                       >
                         {main.basename}
                       </Text>
-                    </Tooltip>
+                    </Popover>
                     {weights.some((w) => w.role === 'mmproj') && (
                       <Tooltip title="含視覺投影檔，一起佔用顯存">
                         <Tag color="purple"

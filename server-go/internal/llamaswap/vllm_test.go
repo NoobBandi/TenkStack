@@ -2,7 +2,9 @@ package llamaswap
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -170,6 +172,36 @@ func TestPrecisionOf(t *testing.T) {
 		p, q := precisionOf(dir)
 		if p != c.precision || q != c.quantized {
 			t.Errorf("%s: got %q %v, want %q %v", c.cfg, p, q, c.precision, c.quantized)
+		}
+	}
+}
+
+// A split GGUF is its shards: all of them count as used, sizes add up,
+// and the entry shows one row for them.
+func TestSplitGGUFIsItsShards(t *testing.T) {
+	if got := shardsOf("unsloth/X/M-00001-of-00003.gguf"); len(got) != 3 || got[2] != "unsloth/X/M-00003-of-00003.gguf" {
+		t.Errorf("shards = %v", got)
+	}
+	if got := shardsOf("plain.gguf"); len(got) != 1 {
+		t.Errorf("plain = %v", got)
+	}
+	s, m := tempStore(t)
+	dir := filepath.Join(m.Dir, "unsloth", "X")
+	os.MkdirAll(dir, 0o755)
+	for i, n := range []int{10, 200, 300} {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("M-%05d-of-00003.gguf", i+1)), make([]byte, n), 0o644)
+	}
+	spec := api.ModelSpec{ID: "big", ModelFile: "unsloth/X/M-00001-of-00003.gguf", CtxSize: 4096, TTL: 60, NGpuLayers: 99}
+	if err := s.Upsert(context.Background(), spec, map[string]string{}, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	w := m.Weights()["big"]
+	if len(w) != 1 || w[0].SizeBytes != 510 || w[0].Parts != 3 || !w[0].Exists {
+		t.Errorf("weights = %+v", w)
+	}
+	for _, f := range m.ListGGUF() {
+		if len(f.UsedBy) == 0 && strings.HasPrefix(path.Base(f.Filename), "M-") {
+			t.Errorf("%s listed as unused", f.Filename)
 		}
 	}
 }

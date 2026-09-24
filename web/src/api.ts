@@ -75,6 +75,8 @@ export interface ModelWeight {
    *  projector serves every quantisation of its model, so two entries sharing
    *  one is the design rather than a collision. */
   shared_with: string[];
+  /** A split GGUF: how many shards, named by the first, sized together. */
+  parts?: number;
 }
 
 export interface ModelCapabilities {

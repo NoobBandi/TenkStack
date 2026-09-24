@@ -290,10 +290,33 @@ func relativeName(raw string) string {
 
 // filesInCmd is every GGUF a model entry references, relative to the
 // models directory, in sorted order.
+// A model too large for one file is published as …-00001-of-00003.gguf and
+// its siblings, and llama-server is given only the first; it finds the rest
+// by name. The shards are the model as much as the first is, so everything
+// that asks which files an entry uses gets all of them.
+var splitShard = regexp.MustCompile(`^(.+)-00001-of-(\d{5})\.gguf$`)
+
+// shardsOf is every shard of a split GGUF named by its first, or the name
+// alone when it is not split.
+func shardsOf(name string) []string {
+	m := splitShard.FindStringSubmatch(name)
+	if m == nil {
+		return []string{name}
+	}
+	n, _ := strconv.Atoi(m[2])
+	out := make([]string, 0, n)
+	for i := 1; i <= n; i++ {
+		out = append(out, fmt.Sprintf("%s-%05d-of-%s.gguf", m[1], i, m[2]))
+	}
+	return out
+}
+
 func filesInCmd(cmd string) []string {
 	seen := map[string]bool{}
 	for _, m := range fileFlags.FindAllStringSubmatch(cmd, -1) {
-		seen[relativeName(m[3])] = true
+		for _, shard := range shardsOf(relativeName(m[3])) {
+			seen[shard] = true
+		}
 	}
 	out := make([]string, 0, len(seen))
 	for name := range seen {
@@ -306,7 +329,6 @@ func filesInCmd(cmd string) []string {
 func rolesInCmd(cmd string) map[string]string {
 	out := map[string]string{}
 	for _, m := range fileFlags.FindAllStringSubmatch(cmd, -1) {
-		name := relativeName(m[3])
 		flag := m[1]
 		if flag == "" {
 			flag = m[2]
@@ -315,8 +337,10 @@ func rolesInCmd(cmd string) map[string]string {
 		if !ok {
 			role = "weights"
 		}
-		if prev, has := out[name]; !has || roleOrder[role] < roleOrder[prev] {
-			out[name] = role
+		for _, name := range shardsOf(relativeName(m[3])) {
+			if prev, has := out[name]; !has || roleOrder[role] < roleOrder[prev] {
+				out[name] = role
+			}
 		}
 	}
 	return out
@@ -546,8 +570,34 @@ func (m *Models) Weights() map[string][]api.Weight {
 			projectors[macroPrefix.ReplaceAllString(mm[1], "")] = true
 		}
 		list := []api.Weight{}
+		dirs := map[string]bool{}
+		for _, d := range dirsInCmd(e.cmd) {
+			dirs[d] = true
+		}
+		// A split GGUF is one row, named by its first shard: the others are
+		// folded into it below rather than listed as files of their own.
+		firstOf := map[string]string{}
+		for _, name := range filesInCmd(e.cmd) {
+			if mm := splitShard.FindStringSubmatch(name); mm != nil {
+				for _, shard := range shardsOf(name) {
+					firstOf[shard] = name
+				}
+			}
+		}
 		for _, name := range weightsInCmd(e.cmd) {
+			if first, ok := firstOf[name]; ok && first != name {
+				continue
+			}
 			size, exists := m.weightSize(name)
+			parts := 0
+			if _, ok := firstOf[name]; ok {
+				parts = len(shardsOf(name))
+				for _, shard := range shardsOf(name)[1:] {
+					more, there := m.weightSize(shard)
+					size += more
+					exists = exists && there
+				}
+			}
 			shared := []string{}
 			for _, other := range references[name] {
 				if other != e.id {
@@ -559,9 +609,14 @@ func (m *Models) Weights() map[string][]api.Weight {
 			if projectors[name] {
 				role = "mmproj"
 			}
+			repo := repoOf(name)
+			if dirs[name] {
+				// A safetensors model is its folder: <owner>/<name> is the repo.
+				repo = name
+			}
 			list = append(list, api.Weight{
-				Filename: name, Basename: path.Base(name), Repo: repoOf(name), Role: role,
-				Exists: exists, SizeBytes: size, SharedWith: shared,
+				Filename: name, Basename: path.Base(name), Repo: repo, Role: role,
+				Exists: exists, SizeBytes: size, SharedWith: shared, Parts: parts,
 			})
 		}
 		sort.SliceStable(list, func(i, j int) bool {
