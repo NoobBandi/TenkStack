@@ -60,6 +60,7 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 
 	contexts := s.Models.ContextSizes()
 	declared := s.Models.DeclaredVision()
+	chatParams := s.Models.ChatParams()
 	sampling := s.Models.SamplingDefaults()
 	weights := s.Models.Weights()
 
@@ -100,7 +101,7 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		if sl, ok := slots[id]; ok && sl != nil {
 			row["slots"] = sl
 		}
-		caps := api.Capabilities{Source: "config", Vision: declared[id]}
+		caps := api.Capabilities{Source: "config", Vision: declared[id], Params: chatParams[id]}
 		// A server engine has no /props to ask. Tool calling is a launch
 		// flag its record's recommended flags write, so the record says.
 		if p := providers.Get(providerOf[id]); p != nil && p.Tools {

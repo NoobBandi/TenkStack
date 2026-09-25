@@ -543,6 +543,38 @@ func (m *Models) ProviderKeys() map[string]string {
 	return out
 }
 
+// ChatParams is, per entry, the chat panel's controls its engine takes,
+// each under the engine's own name.
+func (m *Models) ChatParams() map[string]map[string]string {
+	out := map[string]map[string]string{}
+	entries, _, err := m.entries()
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		p, _, _ := ProviderOf(e.cmd)
+		out[e.id] = p.ChatParams(e.cmd)
+	}
+	return out
+}
+
+// Refused is, per entry, the request fields its engine would refuse given
+// how the entry is started. Entries that take everything are absent.
+func (m *Models) Refused() map[string][]string {
+	out := map[string][]string{}
+	entries, _, err := m.entries()
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		p, _, _ := ProviderOf(e.cmd)
+		if fields := p.Refused(e.cmd); len(fields) > 0 {
+			out[e.id] = fields
+		}
+	}
+	return out
+}
+
 // SamplingDefaults is each model's sampling flags, so the chat panel
 // starts from what the model was configured with.
 func (m *Models) SamplingDefaults() map[string]map[string]any {

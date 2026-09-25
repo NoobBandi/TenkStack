@@ -24,6 +24,17 @@ flags:
 drop_max_tokens: true
 tools: true
 
+# The chat panel's sampling controls, as SGLang names them.
+sampling:
+  temperature: temperature
+  top_p: top_p
+  top_k: top_k
+  min_p: min_p
+  repeat_penalty: repetition_penalty
+  presence_penalty: presence_penalty
+  frequency_penalty: frequency_penalty
+  seed: seed
+
 env_prefix: SGLANG
 
 builds:

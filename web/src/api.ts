@@ -89,6 +89,9 @@ export interface ModelCapabilities {
   /** 'live' when read from llama-server's /props, 'config' when only declared
    *  in the command line because the model is not running. */
   source: 'live' | 'config';
+  /** The panel's sampling controls this model's engine takes, each under the
+   *  name the engine wants. A control that is absent does not exist there. */
+  params?: Record<string, string> | null;
 }
 
 export interface ComfyDevice {
@@ -1080,6 +1083,33 @@ export interface ChatOptions {
   /** Offered to the model, or omitted entirely. An empty array is not the same
    *  as absent: some templates render a "you have no tools" preamble for it. */
   tools?: ToolSpec[];
+  /** The model's `capabilities.params`: which sampling controls to send and
+   *  under what names. Unknown means every control by llama-server's name. */
+  paramNames?: Record<string, string> | null;
+}
+
+/** The panel's sampling controls, by llama-server's names. */
+export const SAMPLING_CONTROLS = [
+  'temperature', 'top_p', 'top_k', 'min_p', 'repeat_penalty',
+  'presence_penalty', 'frequency_penalty', 'seed', 'reasoning_budget_tokens',
+] as const;
+
+/**
+ * The panel's values under the names the model's engine takes. A control the
+ * engine lacks is left out rather than sent under a name it ignores or, as
+ * vLLM does with min_p while it speculates, refuses outright. -1 on the seed
+ * and the reasoning budget means "the server's own", which is saying nothing.
+ */
+function samplingFor(params: ChatParams, names?: Record<string, string> | null): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const control of SAMPLING_CONTROLS) {
+    const name = names ? names[control] : control;
+    if (!name) continue;
+    const value = params[control];
+    if ((control === 'seed' || control === 'reasoning_budget_tokens') && value < 0) continue;
+    out[name] = value;
+  }
+  return out;
 }
 
 /**
@@ -1178,15 +1208,9 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
     signal: options.signal,
     body: JSON.stringify({
       model: options.model,
-      ...(({ thinking, reasoning_budget_tokens, system, max_tokens, ...rest }) => ({
-        ...rest,
-        max_tokens,
-        // Only sent when set: a -1 budget means "use whatever the server was
-        // started with", and passing it explicitly would say the same thing
-        // more confusingly.
-        ...(reasoning_budget_tokens >= 0 ? { reasoning_budget_tokens } : {}),
-        chat_template_kwargs: { enable_thinking: thinking },
-      }))(options.params),
+      ...samplingFor(options.params, options.paramNames),
+      max_tokens: options.params.max_tokens,
+      chat_template_kwargs: { enable_thinking: options.params.thinking },
       // A message with images has to use the content-parts form; plain text
       // stays a plain string, because some servers reject the array form when
       // no mmproj is loaded.
@@ -1270,8 +1294,20 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
         yield { done: true };
         continue;
       }
+      let parsed;
       try {
-        const parsed = JSON.parse(payload);
+        parsed = JSON.parse(payload);
+      } catch {
+        // A malformed frame should not abort the stream.
+        continue;
+      }
+      // A server that refuses the request after the stream has opened says so
+      // in a frame of its own, under a 200: vLLM does this for a sampling
+      // field it cannot honour. Shown, rather than ending in an empty reply.
+      if (parsed?.error) {
+        throw new Error(parsed.error.message ?? JSON.stringify(parsed.error));
+      }
+      {
         const delta = parsed.choices?.[0]?.delta ?? {};
         yield {
           content: delta.content ?? undefined,
@@ -1281,8 +1317,6 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
           finish_reason: parsed.choices?.[0]?.finish_reason ?? undefined,
           tool_calls: absorb(delta.tool_calls),
         };
-      } catch {
-        // A malformed frame should not abort the stream.
       }
     }
   }

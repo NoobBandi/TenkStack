@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -68,6 +69,18 @@ type Recommendation struct {
 	Match string   `yaml:"match"`
 	Flags []string `yaml:"flags"`
 	Note  string   `yaml:"note"`
+}
+
+// SamplingControls are the chat panel's sampling controls, by the names
+// llama-server takes. An engine's `sampling` maps each to its own name.
+var SamplingControls = []string{"temperature", "top_p", "top_k", "min_p", "repeat_penalty",
+	"presence_penalty", "frequency_penalty", "seed", "reasoning_budget_tokens"}
+
+// Speculation is the flag that turns speculative decoding on for an entry,
+// and the request fields the engine then refuses outright.
+type Speculation struct {
+	Flag    string   `yaml:"flag"`
+	Refuses []string `yaml:"refuses"`
 }
 
 // The forms a provider's entries are edited with.
@@ -120,6 +133,12 @@ type Provider struct {
 	// Tools: entries declare tool calling, which a FormServer engine cannot
 	// be asked about the way llama-server's /props can.
 	Tools bool `yaml:"tools"`
+	// Sampling is how the engine names each of SamplingControls. A control
+	// left out does not exist there: the chat panel hides it and does not
+	// send it. Empty means every control under its own name.
+	Sampling map[string]string `yaml:"sampling"`
+	// Speculation, when set, is what an entry that speculates cannot take.
+	Speculation *Speculation `yaml:"speculation"`
 	// Builds by vendor key. A vendor with no build has no way to run this
 	// provider on its cards, and the store does not offer it there.
 	Builds map[string]Build `yaml:"builds"`
@@ -316,6 +335,17 @@ func loadOne(files fs.FS, dir string) (Provider, error) {
 	if p.Fallback != nil && (p.Fallback.Image == "" || p.FallbackLabel == "") {
 		return p, fmt.Errorf("fallback needs an image and a label")
 	}
+	for control, name := range p.Sampling {
+		if !slices.Contains(SamplingControls, control) {
+			return p, fmt.Errorf("sampling.%s: not a chat control (%s)", control, strings.Join(SamplingControls, ", "))
+		}
+		if name == "" {
+			return p, fmt.Errorf("sampling.%s has no name; leave the control out instead", control)
+		}
+	}
+	if sp := p.Speculation; sp != nil && (!strings.HasPrefix(sp.Flag, "--") || len(sp.Refuses) == 0) {
+		return p, fmt.Errorf("speculation needs a flag starting with -- and the fields it refuses")
+	}
 	for _, rec := range p.Recommended {
 		if _, err := regexp.Compile(rec.Match); err != nil {
 			return p, fmt.Errorf("recommended match %q: %w", rec.Match, err)
@@ -423,4 +453,38 @@ func Lookup(key string) (Provider, error) {
 		return *p, nil
 	}
 	return Provider{}, &Unknown{key}
+}
+
+// ChatParams is the chat panel's controls an entry of this engine takes,
+// each under the engine's own name. cmd is the entry's command line, which
+// says whether it speculates.
+func (p Provider) ChatParams(cmd string) map[string]string {
+	refused := p.Refused(cmd)
+	out := map[string]string{}
+	for _, control := range SamplingControls {
+		name := control
+		if len(p.Sampling) > 0 {
+			n, ok := p.Sampling[control]
+			if !ok {
+				continue
+			}
+			name = n
+		}
+		if !slices.Contains(refused, name) {
+			out[control] = name
+		}
+	}
+	return out
+}
+
+// Refused is the request fields an entry with this command line cannot
+// take: what the engine refuses while it speculates, if the entry does.
+func (p Provider) Refused(cmd string) []string {
+	if p.Speculation == nil {
+		return nil
+	}
+	if !regexp.MustCompile(`(^|\s)` + regexp.QuoteMeta(p.Speculation.Flag) + `(\s|=|$)`).MatchString(cmd) {
+		return nil
+	}
+	return p.Speculation.Refuses
 }

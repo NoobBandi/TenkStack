@@ -172,6 +172,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
    * "the model changed" from "something else did".
    */
   const seededFor = useRef<string | undefined>(undefined);
+  // The model's sampling names, from its engine: see ChatOptions.paramNames.
+  const paramNames = useRef<Record<string, string> | null | undefined>(undefined);
   const [streaming, setStreaming] = useState(false);
   // Off by default. Offering the sandbox changes what an answer costs and how
   // long it takes, which is not something to switch on for somebody without
@@ -226,6 +228,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       let title = '';
       for await (const delta of chatStream({
         model: activeModel,
+        paramNames: paramNames.current,
         messages: [{
           role: 'user',
           content:
@@ -299,6 +302,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       model: activeModel,
       messages,
       params,
+      paramNames: paramNames.current,
       signal: controller.signal,
       // Search only when the service answered. A tool that is offered and
       // then always fails is worse than one never mentioned -- the model
@@ -556,6 +560,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
    */
   const seedParams = useCallback((info: ModelInfo | undefined, force = false) => {
     if (!info) return;
+    // Kept even when the values are not reseeded: which controls the engine
+    // takes can change while the model stays the same, when its entry does.
+    paramNames.current = info.capabilities?.params;
     if (!force && seededFor.current === info.id) return;
     seededFor.current = info.id;
     setParams((current) => ({

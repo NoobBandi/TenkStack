@@ -142,6 +142,9 @@ type Capabilities struct {
 	Audio  bool   `json:"audio"`
 	Tools  bool   `json:"tools"`
 	Source string `json:"source"` // live or config
+	// Params is the chat panel's sampling controls the model's engine
+	// takes, each under the name the engine wants it sent by.
+	Params map[string]string `json:"params"`
 }
 
 // QuantTool is the quantisation image for one vendor and whether it is here.

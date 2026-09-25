@@ -214,8 +214,11 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 // llama-server treats max_tokens as a ceiling and stops at the context;
 // vLLM refuses the request outright when it exceeds the context, and the
 // console's chat -- and any client that says "as much as you can" the
-// llama-server way -- sends numbers far above it. For a vLLM entry the
-// field goes when it is over the context, and vLLM then uses what is left.
+// llama-server way -- sends numbers far above it. For such an engine the
+// field goes when it is over the context, and the engine then uses what is
+// left. Fields the entry would refuse as it is started -- vLLM's min_p
+// while it speculates -- go too, since a refusal arrives as an error inside
+// a 200 stream that most clients show as nothing at all.
 func (s *Server) fitForProvider(path string, body []byte) []byte {
 	if !strings.HasSuffix(path, "completions") || len(body) == 0 {
 		return body
@@ -228,15 +231,21 @@ func (s *Server) fitForProvider(path string, body []byte) []byte {
 	if model == "" {
 		return body
 	}
-	if p := providers.Get(s.Models.ProviderKeys()[s.Config.CanonicalModel(model)]); p == nil || !p.DropMaxTokens {
-		return body
-	}
-	ctx := s.Models.ContextSizes()[s.Config.CanonicalModel(model)]
+	id := s.Config.CanonicalModel(model)
 	changed := false
-	for _, key := range []string{"max_tokens", "max_completion_tokens"} {
-		if n, ok := payload[key].(float64); ok && ctx > 0 && int(n) >= ctx {
+	for _, key := range s.Models.Refused()[id] {
+		if _, ok := payload[key]; ok {
 			delete(payload, key)
 			changed = true
+		}
+	}
+	if p := providers.Get(s.Models.ProviderKeys()[id]); p != nil && p.DropMaxTokens {
+		ctx := s.Models.ContextSizes()[id]
+		for _, key := range []string{"max_tokens", "max_completion_tokens"} {
+			if n, ok := payload[key].(float64); ok && ctx > 0 && int(n) >= ctx {
+				delete(payload, key)
+				changed = true
+			}
 		}
 	}
 	if !changed {

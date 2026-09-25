@@ -112,6 +112,10 @@ builds: {intel: {image: x/a}}
 		"bad regexp":         good + "recommended: [{match: \"(\", flags: [--x]}]\n",
 		"second default":     good + "default: true\n",
 		"missing icon":       strings.Replace(good, "icon.png", "nope.png", 1),
+		"unknown control":    good + "sampling: {mirostat: mirostat}\n",
+		"control, no name":   good + "sampling: {top_k: \"\"}\n",
+		"speculation no --":  good + "speculation: {flag: spec, refuses: [min_p]}\n",
+		"refuses nothing":    good + "speculation: {flag: --spec}\n",
 	}
 	for name, yaml := range cases {
 		files := fstest.MapFS{
@@ -136,5 +140,30 @@ builds: {intel: {image: x/a}}
 	}
 	if all[0].Key != "d" || all[1].Managed[0] != "--host" {
 		t.Errorf("loaded %+v", all)
+	}
+}
+
+func TestChatParams(t *testing.T) {
+	llama := Get(LlamaCpp).ChatParams("${llama-intel}\n--model m.gguf\n")
+	if len(llama) != len(SamplingControls) || llama["repeat_penalty"] != "repeat_penalty" {
+		t.Errorf("llama.cpp takes every control by its own name: %v", llama)
+	}
+	vllm := Get(VLLM)
+	plain := vllm.ChatParams("${vllm-intel}\n--model m\n")
+	if plain["repeat_penalty"] != "repetition_penalty" || plain["min_p"] != "min_p" {
+		t.Errorf("vLLM names: %v", plain)
+	}
+	if _, ok := plain["reasoning_budget_tokens"]; ok {
+		t.Error("vLLM has no reasoning budget without --reasoning-config")
+	}
+	cmd := "${vllm-intel}\n--model m\n--speculative-config '{\"method\":\"qwen3_5_mtp\"}'\n"
+	if _, ok := vllm.ChatParams(cmd)["min_p"]; ok {
+		t.Error("an entry that speculates still offers min_p")
+	}
+	if got := vllm.Refused(cmd); len(got) != 2 {
+		t.Errorf("refused %v", got)
+	}
+	if got := vllm.Refused("${vllm-intel}\n--speculative-configx 1\n"); got != nil {
+		t.Errorf("a longer flag is not the speculation flag: %v", got)
 	}
 }

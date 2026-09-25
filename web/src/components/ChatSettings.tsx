@@ -5,6 +5,13 @@ import { MONO } from '../theme';
 
 const { Text } = Typography;
 
+/** The panel's sampling rows, by the control each sets. */
+const PANEL_CONTROLS: [string, string][] = [
+  ['temperature', 'TEMPERATURE'], ['reasoning_budget_tokens', 'REASONING BUDGET'],
+  ['top_p', 'TOP P'], ['top_k', 'TOP K'], ['min_p', 'MIN P'],
+  ['repeat_penalty', 'REPEAT PENALTY'], ['seed', 'SEED'],
+];
+
 /**
  * The sampling panel.
  *
@@ -77,6 +84,11 @@ export default function ChatSettings({ params, onChange, model, onReset, context
     ...(model?.sampling ?? {}),
   };
   const ctxPercent = ctxLimit ? Math.min(100, (contextUsed / ctxLimit) * 100) : 0;
+  // Which controls the model's engine takes. A control it lacks is hidden and
+  // not sent; an older server that does not say shows everything, as before.
+  const names = model?.capabilities?.params;
+  const takes = (control: string) => !names || control in names;
+  const missing = names ? PANEL_CONTROLS.filter(([c]) => !(c in names)).map(([, label]) => label) : [];
 
   return (
     <div style={{ padding: '4px 2px' }}>
@@ -103,10 +115,12 @@ export default function ChatSettings({ params, onChange, model, onReset, context
         </>
       )}
 
-      <Row label="TEMPERATURE" hint="越低越保守。工具呼叫與程式碼建議 0.1–0.3">
-        <Numeric value={params.temperature} onChange={(v) => set('temperature', v)}
-                 min={0} max={2} step={0.05} />
-      </Row>
+      {takes('temperature') && (
+        <Row label="TEMPERATURE" hint="越低越保守。工具呼叫與程式碼建議 0.1–0.3">
+          <Numeric value={params.temperature} onChange={(v) => set('temperature', v)}
+                   min={0} max={2} step={0.05} />
+        </Row>
+      )}
 
       <Row
         label="MAX TOKENS"
@@ -137,42 +151,61 @@ export default function ChatSettings({ params, onChange, model, onReset, context
         </Space>
       </Row>
 
-      <Row
-        label="REASONING BUDGET"
-        hint="取樣層的硬上限，比模板開關可靠。-1 沿用伺服器設定，0 立即結束思考，N 為 token 上限"
-      >
-        {/* Thinking spends the same allowance the reply does, so a budget above
-            max tokens could never be reached -- it follows that value instead
-            of carrying a ceiling of its own. */}
-        <Numeric value={params.reasoning_budget_tokens}
-                 onChange={(v) => set('reasoning_budget_tokens', v)}
-                 min={-1} max={params.max_tokens} step={128} />
-      </Row>
+      {takes('reasoning_budget_tokens') && (
+        <Row
+          label="REASONING BUDGET"
+          hint="取樣層的硬上限，比模板開關可靠。-1 沿用伺服器設定，0 立即結束思考，N 為 token 上限"
+        >
+          {/* Thinking spends the same allowance the reply does, so a budget above
+              max tokens could never be reached -- it follows that value instead
+              of carrying a ceiling of its own. */}
+          <Numeric value={params.reasoning_budget_tokens}
+                   onChange={(v) => set('reasoning_budget_tokens', v)}
+                   min={-1} max={params.max_tokens} step={128} />
+        </Row>
+      )}
 
       <Divider style={{ margin: '14px 0' }}>
         <Text style={{ fontSize: 10, opacity: 0.35, letterSpacing: 1 }}>取樣</Text>
       </Divider>
 
-      <Row label="TOP P" hint="累積機率門檻">
-        <Numeric value={params.top_p} onChange={(v) => set('top_p', v)}
-                 min={0} max={1} step={0.01} />
-      </Row>
-      <Row label="TOP K" hint="每步只考慮機率最高的 K 個 token。0 表示不限制">
-        <Numeric value={params.top_k} onChange={(v) => set('top_k', v)}
-                 min={0} max={200} step={1} />
-      </Row>
-      <Row label="MIN P" hint="相對於最高機率的門檻，通常比 top_p 更穩定">
-        <Numeric value={params.min_p} onChange={(v) => set('min_p', v)}
-                 min={0} max={0.5} step={0.01} />
-      </Row>
-      <Row label="REPEAT PENALTY" hint="1.0 為不懲罰。過高會讓文字變得刻意迴避用詞">
-        <Numeric value={params.repeat_penalty} onChange={(v) => set('repeat_penalty', v)}
-                 min={1} max={1.5} step={0.01} />
-      </Row>
-      <Row label="SEED" hint="-1 為隨機。固定後同樣的輸入會得到同樣的輸出">
-        <Numeric value={params.seed} onChange={(v) => set('seed', v)}
-                 min={-1} max={999999} step={1} />
-      </Row>
+      {missing.length > 0 && (
+        <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 14 }}>
+          這個模型的推理引擎{model?.provider_name ? `（${model.provider_name}）` : ''}照它的啟動設定不接受
+          {' '}{missing.join('、')}，已隱藏且不會送出。
+        </Text>
+      )}
+
+      {takes('top_p') && (
+        <Row label="TOP P" hint="累積機率門檻">
+          <Numeric value={params.top_p} onChange={(v) => set('top_p', v)}
+                   min={0} max={1} step={0.01} />
+        </Row>
+      )}
+      {takes('top_k') && (
+        <Row label="TOP K" hint="每步只考慮機率最高的 K 個 token。0 表示不限制">
+          <Numeric value={params.top_k} onChange={(v) => set('top_k', v)}
+                   min={0} max={200} step={1} />
+        </Row>
+      )}
+      {takes('min_p') && (
+        <Row label="MIN P" hint="相對於最高機率的門檻，通常比 top_p 更穩定">
+          <Numeric value={params.min_p} onChange={(v) => set('min_p', v)}
+                   min={0} max={0.5} step={0.01} />
+        </Row>
+      )}
+      {takes('repeat_penalty') && (
+        <Row label="REPEAT PENALTY" hint="1.0 為不懲罰。過高會讓文字變得刻意迴避用詞">
+          <Numeric value={params.repeat_penalty} onChange={(v) => set('repeat_penalty', v)}
+                   min={1} max={1.5} step={0.01} />
+        </Row>
+      )}
+      {takes('seed') && (
+        <Row label="SEED" hint="-1 為隨機。固定後同樣的輸入會得到同樣的輸出">
+          <Numeric value={params.seed} onChange={(v) => set('seed', v)}
+                   min={-1} max={999999} step={1} />
+        </Row>
+      )}
 
       <Divider style={{ margin: '14px 0' }}>
         <Text style={{ fontSize: 10, opacity: 0.35, letterSpacing: 1 }}>系統提示</Text>
