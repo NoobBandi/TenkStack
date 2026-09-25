@@ -41,6 +41,14 @@ flags:                      # server engines: how this engine spells each field
 drop_max_tokens: true       # the proxy leaves max_tokens out of requests
 tools: true                 # entries declare tool calling
 
+sampling:                   # the chat panel's controls, as this engine names them
+  temperature: temperature  # a control left out is hidden in the chat and not sent;
+  repeat_penalty: repetition_penalty   # no `sampling` at all means llama-server's names
+  # top_p, top_k, min_p, presence_penalty, frequency_penalty, seed, reasoning_budget_tokens
+speculation:                # optional: an entry whose command has `flag` refuses these,
+  flag: --speculative-config  # so the chat hides them and the proxy drops them
+  refuses: [min_p, logit_bias]
+
 env_prefix: SGLANG          # <PREFIX>_IMAGE and <PREFIX>_NAME in the launcher
 
 builds:                     # one per vendor key in internal/vendors
