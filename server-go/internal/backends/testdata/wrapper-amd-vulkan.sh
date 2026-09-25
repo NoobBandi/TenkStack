@@ -13,12 +13,14 @@ MODELS_DIR="/home/someone/tenkstack/models"
 
 # Every model location, one path per line, written by the console beside
 # this script. Each is mounted read-only at its own path; MODELS_DIR is
-# mounted even when the list is missing.
-MOUNTS=(-v "$MODELS_DIR:$MODELS_DIR:ro")
-LOCATIONS="$(dirname "$(readlink -f "$0")")/model-locations"
+# mounted even when the list is missing. So is this script's own directory,
+# where the chat templates a model entry names by macro are kept.
+HERE="$(dirname "$(readlink -f "$0")")"
+MOUNTS=(-v "$MODELS_DIR:$MODELS_DIR:ro" -v "$HERE:$HERE:ro")
+LOCATIONS="$HERE/model-locations"
 if [[ -f "$LOCATIONS" ]]; then
   while IFS= read -r dir; do
-    if [[ -n "$dir" && "$dir" != "$MODELS_DIR" && -d "$dir" ]]; then
+    if [[ -n "$dir" && "$dir" != "$MODELS_DIR" && "$dir" != "$HERE" && -d "$dir" ]]; then
       MOUNTS+=(-v "$dir:$dir:ro")
     fi
   done < "$LOCATIONS"

@@ -82,9 +82,20 @@ func TestUpgradeMountsMatchesTheTemplate(t *testing.T) {
 	if len(changed) != len(cases) {
 		t.Errorf("changed %v, want the %d generated scripts", changed, len(cases))
 	}
+	// The legacy scripts were written before the Intel build carried flags
+	// of its own; the upgrade touches the mounts, not the flags, so they are
+	// compared with the template as it was then.
+	then := *providers.Get(providers.LlamaCpp)
+	then.Builds = map[string]providers.Build{}
+	for k, b := range providers.Get(providers.LlamaCpp).Builds {
+		if k == "intel" {
+			b.Flags = nil
+		}
+		then.Builds[k] = b
+	}
 	for _, c := range cases {
 		got, _ := os.ReadFile(filepath.Join(dir, c.file))
-		want := WrapperText(*providers.Get(providers.LlamaCpp), c.vendor, "/home/someone/tenkstack/models", c.variant)
+		want := WrapperText(then, c.vendor, "/home/someone/tenkstack/models", c.variant)
 		if string(got) != want {
 			t.Errorf("%s upgraded differs from the template:\n--- want\n%s\n--- got\n%s", c.file, want, got)
 		}

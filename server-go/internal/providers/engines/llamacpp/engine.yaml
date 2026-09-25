@@ -29,6 +29,11 @@ builds:
     # 16K, generation 18.3 and 15.9. The image is built with GGML_SYCL_F16,
     # which is where its prompt speed comes from.
     verified: true
+    # Copies between cards go through the host. The image's default, the
+    # SYCL API, hung two B70s in --split-mode tensor on the first prompt;
+    # llama.cpp's SYCL guide calls host forwarding the stable choice for
+    # several cards, at a cost of 2-5%. One card never copies.
+    flags: [--device, /dev/dri, -e, GGML_SYCL_DEV2DEV_MEMCPY=2]
   amd:
     image: ghcr.io/ggml-org/llama.cpp:server-rocm
   nvidia:

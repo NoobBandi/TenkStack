@@ -18,7 +18,9 @@
  "intel": {
   "flags": [
    "--device",
-   "/dev/dri"
+   "/dev/dri",
+   "-e",
+   "GGML_SYCL_DEV2DEV_MEMCPY=2"
   ],
   "image": "ghcr.io/ggml-org/llama.cpp:server-intel",
   "label": "Intel (SYCL)",
