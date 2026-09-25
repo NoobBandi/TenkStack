@@ -34,7 +34,14 @@ builds:
     image: intel/llm-scaler-vllm:0.26.0-b2
     verified: true
     # OneCCL opens every render node by path, so by-path goes in read-only.
-    flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --shm-size, 16g, -e, HF_HUB_OFFLINE=1]
+    # XPU graph replays a whole decode step instead of launching each kernel
+    # from Python: 14.6 -> 34.8 tok/s for a 27B on two B70s. It is off in the
+    # image by default and has no effect with --enforce-eager. The Triton and
+    # Inductor caches default to /tmp, which dies with the container; kept in
+    # cache_dir they save ~70 s of every start.
+    flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --shm-size, 16g, -e, HF_HUB_OFFLINE=1,
+            -e, VLLM_XPU_ENABLE_XPU_GRAPH=1, -e, TRITON_CACHE_DIR=/root/.cache/vllm/triton,
+            -e, TORCHINDUCTOR_CACHE_DIR=/root/.cache/vllm/inductor]
     cache_dir: /root/.cache/vllm
   nvidia:
     image: vllm/vllm-openai:latest
@@ -64,9 +71,17 @@ online_quantization:
 # matching rule wins for each flag; `match` is a regular expression against
 # the architecture in config.json.
 recommended:
+  # Compiled with the image's default split points, two cards emit garbage
+  # (the all-reduce lands inside a captured graph); splitting at all_reduce
+  # too is the image's default list plus that one op. Harmless on one card.
+  # Graphs are recorded for up to four requests at once. Qwen3.5/3.8 write
+  # tool calls as XML, which hermes does not read.
   - match: ^Qwen3_5
-    flags: [--enforce-eager]
-    note: torch.compile 在 Intel 版會讓 Qwen3.5/3.8 輸出亂碼
+    flags:
+      - '--compilation-config ''{"cudagraph_mode":"FULL_DECODE_ONLY","splitting_ops":["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::linear_attention","vllm::plamo2_mamba_mixer","vllm::qwen_gdn_attention_core","vllm::gdn_attention_core_xpu","vllm::olmo_hybrid_gdn_full_forward","vllm::kda_attention","vllm::sparse_attn_indexer","vllm::rocm_aiter_sparse_attn_indexer","vllm::deepseek_v4_attention","vllm::hpc_rope_norm_forward","vllm::unified_kv_cache_update","vllm::unified_mla_kv_cache_update","vllm::all_reduce"]}'''
+      - --max-num-seqs 4
+      - --tool-call-parser qwen3_coder
+    note: 整段解碼錄成 XPU graph（雙卡 27B 從 14.6 提升到 34.8 tok/s），在 all_reduce 切開才不會輸出亂碼；工具呼叫是 XML 格式
   - match: ^Qwen3
     flags: [--reasoning-parser qwen3, --enable-auto-tool-choice, --tool-call-parser hermes]
     note: 思考過程與工具呼叫分開回傳

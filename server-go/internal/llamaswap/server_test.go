@@ -15,6 +15,10 @@ import (
 // A vLLM entry round-trips through the same writer and reader as a
 // llama.cpp one, carries the container's name for cmdStop, and counts its
 // weights as a directory.
+// compileFlag is a flag whose value is quoted JSON, the way an entry turns on
+// XPU graphs; it has to come back byte for byte.
+const compileFlag = `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","splitting_ops":["vllm::all_reduce"]}'`
+
 func TestVLLMEntryRoundTrip(t *testing.T) {
 	s, m := tempStore(t)
 	ctx := context.Background()
@@ -29,7 +33,7 @@ func TestVLLMEntryRoundTrip(t *testing.T) {
 
 	spec := api.ModelSpec{ID: "qwen3-8b", Name: "Qwen3 8B", ModelFile: "Qwen/Qwen3-8B", CtxSize: 32768,
 		TTL: 300, Group: strp("large"), Runtime: "vllm-intel", Quantization: "fp8", GpuMemoryUtilization: 0.85,
-		Extra: "--enable-prefix-caching\n"}
+		Extra: "--enable-prefix-caching\n" + compileFlag + "\n"}
 	err := s.Upsert(ctx, spec, map[string]string{"ONEAPI_DEVICE_SELECTOR": "level_zero:0,1"},
 		map[string]bool{"ONEAPI_DEVICE_SELECTOR": true}, "${vllm-intel}")
 	if err != nil {
@@ -38,7 +42,7 @@ func TestVLLMEntryRoundTrip(t *testing.T) {
 	out, _ := s.Raw()
 	for _, want := range []string{
 		"    cmd: |\n      ${vllm-intel}\n      --model ${models-dir}/Qwen/Qwen3-8B\n      --served-model-name qwen3-8b\n",
-		"      --max-model-len 32768\n      --tensor-parallel-size 2\n      --gpu-memory-utilization 0.85\n      --quantization fp8\n      --enable-prefix-caching\n",
+		"      --max-model-len 32768\n      --tensor-parallel-size 2\n      --gpu-memory-utilization 0.85\n      --quantization fp8\n      --enable-prefix-caching\n      " + compileFlag + "\n",
 		"    cmdStop: docker stop vllm-intel-qwen3-8b\n",
 		"      - ONEAPI_DEVICE_SELECTOR=level_zero:0,1\n      - VLLM_NAME=vllm-intel-qwen3-8b\n",
 	} {
@@ -50,7 +54,7 @@ func TestVLLMEntryRoundTrip(t *testing.T) {
 	read := m.ReadSpec("qwen3-8b")
 	if read == nil || read.Provider != "vllm" || read.Runtime != "vllm-intel" || read.Format != "safetensors" ||
 		read.ModelFile != "Qwen/Qwen3-8B" || read.CtxSize != 32768 || read.Quantization != "fp8" ||
-		read.GpuMemoryUtilization != 0.85 || read.Extra != "--enable-prefix-caching" {
+		read.GpuMemoryUtilization != 0.85 || read.Extra != "--enable-prefix-caching\n"+compileFlag {
 		t.Errorf("ReadSpec = %+v", read)
 	}
 	if got := m.ContextSizes()["qwen3-8b"]; got != 32768 {

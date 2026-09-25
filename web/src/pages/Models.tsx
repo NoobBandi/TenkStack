@@ -77,13 +77,17 @@ type Where = (key?: string, always?: boolean) => string;
  * tool-call parsers are per family and per engine, and without them the
  * thinking arrives inline in the answer and tool calls come back as text.
  */
+const flagName = (flag: string) => flag.trim().split(/\s+/)[0];
+
 function recommendedFlags(rules: EngineRecommendation[] | undefined, architecture?: string): string[] {
   if (!architecture || !rules) return [];
   const flags: string[] = [];
   for (const rule of rules) {
     let hit = false;
     try { hit = new RegExp(rule.match, 'i').test(architecture); } catch { hit = false; }
-    if (hit) rule.flags.forEach((f) => { if (!flags.includes(f)) flags.push(f); });
+    // The first matching rule wins for each flag: a family's own
+    // --tool-call-parser is not joined by the broader rule's.
+    if (hit) rule.flags.forEach((f) => { if (!flags.some((g) => flagName(g) === flagName(f))) flags.push(f); });
   }
   return flags;
 }
