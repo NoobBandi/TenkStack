@@ -480,7 +480,28 @@ export interface EngineInstall {
   state: 'pulling' | 'writing' | 'done' | 'error';
   layers_done: number;
   layers_total: number;
+  /** Bytes downloaded and to download, when the Engine API reports them. */
+  bytes_done?: number;
+  bytes_total?: number;
   message: string;
+}
+
+/** How far an image pull is, by bytes when they are known and by layers
+ *  otherwise -- one layer can be most of an image, so layers alone stall. */
+export function pullPercent(p: { layers_done: number; layers_total: number;
+  bytes_done?: number; bytes_total?: number }): number {
+  if (p.bytes_total) return Math.min(100, Math.round(((p.bytes_done ?? 0) / p.bytes_total) * 100));
+  return p.layers_total ? Math.round((p.layers_done / p.layers_total) * 100) : 0;
+}
+
+/** The same, as words: "3.1 / 10.2 GB" when the bytes are known. */
+export function pullText(p: { layers_done: number; layers_total: number;
+  bytes_done?: number; bytes_total?: number }): string {
+  if (p.bytes_total) {
+    const gb = (n: number) => (n / 1e9).toFixed(1);
+    return `${gb(p.bytes_done ?? 0)} / ${gb(p.bytes_total)} GB`;
+  }
+  return `${p.layers_done}/${p.layers_total} 層`;
 }
 
 /** One engine build on this machine: whether its launcher exists and is
@@ -603,7 +624,8 @@ export interface RuntimeCoverage {
     job: {
       card: string; action: 'create' | 'update';
       state: 'pulling' | 'starting' | 'done' | 'error';
-      layers_done: number; layers_total: number; message: string;
+      layers_done: number; layers_total: number;
+      bytes_done?: number; bytes_total?: number; message: string;
     } | null;
   };
   runtime: {
@@ -625,7 +647,8 @@ export interface RuntimeCoverage {
     install: {
       vendor: string; image: string;
       state: 'pulling' | 'writing' | 'done' | 'error';
-      layers_done: number; layers_total: number; message: string;
+      layers_done: number; layers_total: number;
+      bytes_done?: number; bytes_total?: number; message: string;
     } | null;
     /** Models started through this launcher. Non-empty means it cannot be
      *  switched off without breaking them. */

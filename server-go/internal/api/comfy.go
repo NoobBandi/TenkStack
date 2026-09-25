@@ -80,7 +80,11 @@ type Job struct {
 	State       string `json:"state"`  // pulling, starting, done, error
 	LayersDone  int    `json:"layers_done"`
 	LayersTotal int    `json:"layers_total"`
-	Message     string `json:"message"`
+	// Bytes of the image downloaded and to download, when known; the bar
+	// follows these rather than layers, one of which can be most of it.
+	BytesDone  int64  `json:"bytes_done"`
+	BytesTotal int64  `json:"bytes_total"`
+	Message    string `json:"message"`
 }
 
 type ComfyState struct {
@@ -100,6 +104,8 @@ type Install struct {
 	State       string `json:"state"` // pulling, writing, done, error
 	LayersDone  int    `json:"layers_done"`
 	LayersTotal int    `json:"layers_total"`
+	BytesDone   int64  `json:"bytes_done"`
+	BytesTotal  int64  `json:"bytes_total"`
 	Message     string `json:"message"`
 }
 

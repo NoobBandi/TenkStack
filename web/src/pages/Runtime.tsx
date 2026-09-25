@@ -8,7 +8,7 @@ import Sparkline from '../components/Sparkline';
 import { useStream } from '../stream';
 import {
   controlContainer, fetchContainerHistory, fetchRuntime, fetchRuntimes,
-  runtimeAction,
+  pullPercent, runtimeAction,
   setCardRole,
   type RuntimeAction, type RuntimeContainer, type RuntimeCoverage, type RuntimeSurvey,
 } from '../api';
@@ -214,8 +214,7 @@ export default function Runtime() {
               {job!.state === 'writing' ? '寫入設定…' : '下載映像…'}
             </Text>
             <Progress size="small" status="active"
-                      percent={job!.layers_total
-                        ? Math.round((job!.layers_done / job!.layers_total) * 100) : 0} />
+                      percent={pullPercent(job!)} />
           </Space>
         );
       }

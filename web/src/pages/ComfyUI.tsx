@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import {
   controlContainer, fetchComfyInstances, fetchComfyStorage, fetchContainerHistory,
-  fetchRuntimes, interruptComfy, setCardRole,
+  fetchRuntimes, interruptComfy, pullText, setCardRole,
   type ComfyInstance, type ComfyStorage, type GpuSample, type RuntimeCoverage,
 } from '../api';
 import { useStream } from '../stream';
@@ -490,7 +490,7 @@ function Spare({ onChanged }: { onChanged: () => void }) {
                   <SyncOutlined spin style={{ fontSize: 12, opacity: 0.7 }} />
                   <Text style={{ fontSize: 12, fontFamily: MONO }}>
                     {job.state === 'pulling'
-                      ? `下載中 ${job.layers_done}/${job.layers_total}` : '啟動中'}
+                      ? `下載中 ${pullText(job)}` : '啟動中'}
                   </Text>
                 </Space>
               ) : row.comfy.container ? (

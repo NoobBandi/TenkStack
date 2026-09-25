@@ -305,6 +305,11 @@ func (ip installProgress) Layer(done, total int) {
 	ip.rec.LayersDone, ip.rec.LayersTotal = done, total
 	ip.p.mu.Unlock()
 }
+func (ip installProgress) Bytes(done, total int64) {
+	ip.p.mu.Lock()
+	ip.rec.BytesDone, ip.rec.BytesTotal = done, total
+	ip.p.mu.Unlock()
+}
 func (ip installProgress) Message(text string) {
 	ip.p.mu.Lock()
 	ip.rec.Message = text

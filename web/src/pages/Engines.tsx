@@ -6,7 +6,7 @@ import {
 import { CheckCircleFilled, ExportOutlined, WarningFilled } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import {
-  engineAction, fetchProviders, type ProviderBuild, type ProviderCard, type ProvidersPage,
+  engineAction, fetchProviders, pullPercent, pullText, type ProviderBuild, type ProviderCard, type ProvidersPage,
 } from '../api';
 import { useIsOwner } from '../identity';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -57,7 +57,7 @@ function MachineLine({ card }: { card: ProviderCard }) {
   const pulling = card.builds.find(busy);
   if (pulling?.state.install) {
     const i = pulling.state.install;
-    const pct = i.layers_total ? Math.round((i.layers_done / i.layers_total) * 100) : 0;
+    const pct = pullPercent(i);
     return (
       <Space size={8} style={{ width: '100%' }}>
         <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -128,12 +128,12 @@ function BuildRow({ card, build, onAction }: {
 
   let body: React.ReactNode;
   if (busy(build) && install) {
-    const pct = install.layers_total ? Math.round((install.layers_done / install.layers_total) * 100) : 0;
+    const pct = pullPercent(install);
     body = (
       <div>
         <Progress percent={pct} size="small" style={{ margin: 0 }} />
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {install.state === 'writing' ? '寫入啟動設定中' : `下載映像中（${install.layers_done}/${install.layers_total} 層）`}
+          {install.state === 'writing' ? '寫入啟動設定中' : `下載映像中（${pullText(install)}）`}
         </Text>
       </div>
     );

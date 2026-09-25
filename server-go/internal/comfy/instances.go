@@ -374,6 +374,11 @@ func (p jobProgress) Layer(done, total int) {
 	p.job.LayersDone, p.job.LayersTotal = done, total
 	p.m.mu.Unlock()
 }
+func (p jobProgress) Bytes(done, total int64) {
+	p.m.mu.Lock()
+	p.job.BytesDone, p.job.BytesTotal = done, total
+	p.m.mu.Unlock()
+}
 func (p jobProgress) Message(text string) { p.m.mu.Lock(); p.job.Message = text; p.m.mu.Unlock() }
 func (p jobProgress) Failed(text string) {
 	p.m.mu.Lock()
