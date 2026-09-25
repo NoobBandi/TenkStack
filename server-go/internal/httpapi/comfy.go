@@ -842,20 +842,34 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 	}
 	// Waited for rather than assumed: /free returns as soon as the flag is
 	// set, and llama-server would allocate against memory not yet released.
+	// ComfyUI keeps some of it for good (custom nodes' tensors, the torch
+	// context), so the wait ends once the total stops falling rather than
+	// only below the idle threshold, which it may never reach.
+	last, steady := -1.0, 0
 	for i := 0; i < 60; i++ {
 		select {
 		case <-ctx.Done():
 			return 0, ""
 		case <-time.After(500 * time.Millisecond):
 		}
-		still := false
+		still := 0.0
 		for _, h := range s.ComfyProbe.HeldVRAM(ctx, idle) {
 			if sharesCard(h.Instance, target, byPort) {
-				still = true
+				still += h.Bytes
 			}
 		}
-		if !still {
+		if still == 0 {
 			log.Print("ComfyUI released the card")
+			return 0, ""
+		}
+		if last >= 0 && still >= last {
+			steady++
+		} else {
+			steady = 0
+		}
+		last = still
+		if steady >= 4 {
+			log.Printf("ComfyUI released what it will; %.1f GiB stays, loading %s", still/(1<<30), modelID)
 			return 0, ""
 		}
 	}
