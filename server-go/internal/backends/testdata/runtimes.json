@@ -23,7 +23,7 @@
   "image": "ghcr.io/ggml-org/llama.cpp:server-intel",
   "label": "Intel (SYCL)",
   "requires": null,
-  "verified": false
+  "verified": true
  },
  "nvidia": {
   "flags": [

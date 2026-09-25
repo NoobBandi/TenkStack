@@ -24,6 +24,11 @@ script_prefix: llama-server-
 builds:
   intel:
     image: ghcr.io/ggml-org/llama.cpp:server-intel
+    # Run on an Arc Pro B70, 2026-09-25, build b11151: Qwen3.8-27B Q6_K_XL,
+    # q8_0 KV, ubatch 1024, one card -- prompt 889 tok/s at 4K and 952 at
+    # 16K, generation 18.3 and 15.9. The image is built with GGML_SYCL_F16,
+    # which is where its prompt speed comes from.
+    verified: true
   amd:
     image: ghcr.io/ggml-org/llama.cpp:server-rocm
   nvidia:
