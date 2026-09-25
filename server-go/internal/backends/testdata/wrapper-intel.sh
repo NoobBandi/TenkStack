@@ -31,6 +31,10 @@ fi
 # arrive at the container instead, which is what `docker stop` does.
 NAME="${LLAMA_NAME:-llama-intel}"
 
+# Compiled kernels, kept between runs.
+CACHE_DIR="$(dirname "$(readlink -f "$0")")/cache/llama-intel"
+mkdir -p "$CACHE_DIR"
+
 # Forwarded only when it has a value. An empty ONEAPI_DEVICE_SELECTOR does not mean "no
 # preference" -- it means *no devices*, and the container then reports that it
 # cannot find a card on a machine where the card is fine.
@@ -44,5 +48,6 @@ exec docker run --rm --init \
   --device /dev/dri -e GGML_SYCL_DEV2DEV_MEMCPY=2 \
   --network host \
   "${SELECT[@]}" \
+  -v "$CACHE_DIR:/root/.cache/neo_compiler_cache" \
   "${MOUNTS[@]}" \
   "$IMAGE" "$@"

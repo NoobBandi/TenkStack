@@ -89,7 +89,7 @@ func TestUpgradeMountsMatchesTheTemplate(t *testing.T) {
 	then.Builds = map[string]providers.Build{}
 	for k, b := range providers.Get(providers.LlamaCpp).Builds {
 		if k == "intel" {
-			b.Flags = nil
+			b.Flags, b.CacheDir = nil, ""
 		}
 		then.Builds[k] = b
 	}

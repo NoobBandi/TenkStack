@@ -16,6 +16,7 @@
   "verified": false
  },
  "intel": {
+  "cache_dir": "/root/.cache/neo_compiler_cache",
   "flags": [
    "--device",
    "/dev/dri",

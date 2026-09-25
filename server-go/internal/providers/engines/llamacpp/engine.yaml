@@ -34,6 +34,11 @@ builds:
     # llama.cpp's SYCL guide calls host forwarding the stable choice for
     # several cards, at a cost of 2-5%. One card never copies.
     flags: [--device, /dev/dri, -e, GGML_SYCL_DEV2DEV_MEMCPY=2]
+    # The GPU driver in the image compiles the SYCL kernels on a server's
+    # first run and caches them here. Kept on the host, a start after the
+    # first takes 8.6 s instead of 41 (Spark-X2.5-4B, one B70); lost with
+    # each container, every model switch paid the 35 s again.
+    cache_dir: /root/.cache/neo_compiler_cache
   amd:
     image: ghcr.io/ggml-org/llama.cpp:server-rocm
   nvidia:
