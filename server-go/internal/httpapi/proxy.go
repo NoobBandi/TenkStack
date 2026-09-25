@@ -181,7 +181,7 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 	var m *meter
 	if resp.StatusCode == http.StatusOK && strings.Contains(contentType, "event-stream") && model != "" &&
 		strings.HasSuffix(path, "completions") {
-		if key := s.Models.ProviderKeys()[s.Config.CanonicalModel(model)]; key != "" && key != providers.LlamaCpp {
+		if key := s.Models.ProviderKeys()[s.Config.CanonicalModel(model)]; key != "" && formOf(key) != providers.FormLlama {
 			name := key
 			if p := providers.Get(key); p != nil {
 				name = p.Name
@@ -225,7 +225,10 @@ func (s *Server) fitForProvider(path string, body []byte) []byte {
 		return body
 	}
 	model, _ := payload["model"].(string)
-	if model == "" || s.Models.ProviderKeys()[s.Config.CanonicalModel(model)] != providers.VLLM {
+	if model == "" {
+		return body
+	}
+	if p := providers.Get(s.Models.ProviderKeys()[s.Config.CanonicalModel(model)]); p == nil || !p.DropMaxTokens {
 		return body
 	}
 	ctx := s.Models.ContextSizes()[s.Config.CanonicalModel(model)]

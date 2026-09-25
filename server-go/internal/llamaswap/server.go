@@ -6,45 +6,97 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 )
 
-// A vLLM entry has the same shape as a llama.cpp one -- the launcher macro
-// on the first line, one flag per line under it -- so everything that
-// reads a cmd (which launcher, which card, which files) works on both. The
-// flags are vLLM's own: --max-model-len where llama.cpp says --ctx-size,
-// --tensor-parallel-size for a model across cards, and no layer count
-// because vLLM either fits or does not.
+// An entry for a server engine -- vLLM, SGLang, any record whose form is
+// "server" -- has the same shape as a llama.cpp one: the launcher macro on
+// the first line, one flag per line under it, so everything that reads a
+// cmd (which launcher, which card, which files) works on all of them. The
+// flags are the engine's own, as its record spells each field of the form:
+// --max-model-len for vLLM where SGLang says --context-length, and no layer
+// count because a server engine either fits or does not.
 //
-// --served-model-name is the entry's id. llama-swap forwards the request
-// body as the client sent it, and vLLM refuses a request whose model field
-// names anything but a name it was started with.
+// The served-name flag carries the entry's id. llama-swap forwards the
+// request body as the client sent it, and these servers refuse a request
+// whose model field names anything but a name they were started with.
 
-var vllmPatterns = map[string]*regexp.Regexp{
-	"model_dir":              regexp.MustCompile(`--model\s+(\S+)`),
-	"max_model_len":          regexp.MustCompile(`--max-model-len\s+(\d+)`),
-	"tensor_parallel":        regexp.MustCompile(`--tensor-parallel-size\s+(\d+)`),
-	"quantization":           regexp.MustCompile(`--quantization\s+(\S+)`),
-	"gpu_memory_utilization": regexp.MustCompile(`--gpu-memory-utilization\s+([\d.]+)`),
+// flagAt matches a flag as a word of the cmd, so --model is never found in
+// --model-path or --served-model-name.
+func flagAt(flag, value string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:^|\s)` + regexp.QuoteMeta(flag) + `\s+` + value)
 }
 
-// BuildVLLMCmd is the command line for one vLLM entry.
-func BuildVLLMCmd(id, modelDir string, maxLen, tp int, util float64, quant, extra, wrapper string) string {
-	lines := []string{wrapper, "--model " + cmdPath(modelDir), "--served-model-name " + id, "--host 127.0.0.1 --port ${PORT}"}
+var (
+	patternsMu sync.Mutex
+	patterns   = map[string]map[string]*regexp.Regexp{}
+)
+
+// serverPatterns read a server entry's fields back, keyed by the names the
+// editor's fields had before there was more than one server engine.
+func serverPatterns(p providers.Provider) map[string]*regexp.Regexp {
+	patternsMu.Lock()
+	defer patternsMu.Unlock()
+	if got, ok := patterns[p.Key]; ok {
+		return got
+	}
+	out := map[string]*regexp.Regexp{}
+	for field, spec := range map[string]struct{ name, value string }{
+		providers.FlagModel:          {"model_dir", `(\S+)`},
+		providers.FlagContext:        {"max_model_len", `(\d+)`},
+		providers.FlagTensorParallel: {"tensor_parallel", `(\d+)`},
+		providers.FlagQuantization:   {"quantization", `(\S+)`},
+		providers.FlagMemory:         {"gpu_memory_utilization", `([\d.]+)`},
+	} {
+		if flag := p.ServerFlags[field]; flag != "" {
+			out[spec.name] = flagAt(flag, spec.value)
+		}
+	}
+	patterns[p.Key] = out
+	return out
+}
+
+// anyServer matches a field under whichever server engine's spelling, for
+// the readers that do not know which engine a cmd is for.
+func anyServer(field, value string) *regexp.Regexp {
+	seen := map[string]bool{}
+	var alts []string
+	for _, p := range providers.All() {
+		if flag := p.ServerFlags[field]; p.Form == providers.FormServer && flag != "" && !seen[flag] {
+			seen[flag] = true
+			alts = append(alts, regexp.QuoteMeta(flag))
+		}
+	}
+	sort.Strings(alts)
+	return regexp.MustCompile(`(?:^|\s)(?:` + strings.Join(alts, "|") + `)\s+` + value)
+}
+
+var (
+	anyModelDir = anyServer(providers.FlagModel, `(\S+)`)
+	anyContext  = anyServer(providers.FlagContext, `(\d+)`)
+)
+
+// BuildServerCmd is the command line for one server engine's entry.
+func BuildServerCmd(p providers.Provider, id, modelDir string, maxLen, tp int, util float64, quant, extra, wrapper string) string {
+	f := p.ServerFlags
+	lines := []string{wrapper, f[providers.FlagModel] + " " + cmdPath(modelDir),
+		f[providers.FlagServedName] + " " + id, "--host 127.0.0.1 --port ${PORT}"}
 	if maxLen > 0 {
-		lines = append(lines, fmt.Sprintf("--max-model-len %d", maxLen))
+		lines = append(lines, fmt.Sprintf("%s %d", f[providers.FlagContext], maxLen))
 	}
-	if tp > 1 {
-		lines = append(lines, fmt.Sprintf("--tensor-parallel-size %d", tp))
+	if flag := f[providers.FlagTensorParallel]; tp > 1 && flag != "" {
+		lines = append(lines, fmt.Sprintf("%s %d", flag, tp))
 	}
-	if util > 0 {
-		lines = append(lines, "--gpu-memory-utilization "+strconv.FormatFloat(util, 'g', 3, 64))
+	if flag := f[providers.FlagMemory]; util > 0 && flag != "" {
+		lines = append(lines, flag+" "+strconv.FormatFloat(util, 'g', 3, 64))
 	}
-	if quant != "" {
-		lines = append(lines, "--quantization "+quant)
+	if flag := f[providers.FlagQuantization]; quant != "" && flag != "" {
+		lines = append(lines, flag+" "+quant)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(extra), "\n") {
 		if t := strings.TrimSpace(line); t != "" {
@@ -95,11 +147,12 @@ func containerName(macro, id string) string {
 	return macro + "-" + safe
 }
 
-// dirsInCmd is every --model that names a directory rather than a GGUF:
-// the weights of a vLLM entry, one directory as Hugging Face publishes it.
+// dirsInCmd is every model flag that names a directory rather than a GGUF:
+// the weights of a server engine's entry, one directory as Hugging Face
+// publishes it.
 func dirsInCmd(cmd string) []string {
 	var out []string
-	for _, m := range vllmPatterns["model_dir"].FindAllStringSubmatch(cmd, -1) {
+	for _, m := range anyModelDir.FindAllStringSubmatch(cmd, -1) {
 		name := strings.TrimRight(relativeName(m[1]), "/")
 		if strings.HasSuffix(strings.ToLower(name), ".gguf") || name == "" || name == "." {
 			continue

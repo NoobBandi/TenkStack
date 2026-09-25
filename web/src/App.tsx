@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Models from './pages/Models';
 import Catalog from './pages/Catalog';
+import Engines from './pages/Engines';
 import ComfyUI from './pages/ComfyUI';
 import Files from './pages/Files';
 import Users from './pages/Users';
@@ -36,6 +37,7 @@ const ROUTES = [
   { path: '/chat', element: <Chat /> },
   { path: '/models', element: <Models /> },
   { path: '/catalog', element: <Catalog /> },
+  { path: '/engines', element: <Engines /> },
   { path: '/comfyui', element: <ComfyUI /> },
   { path: '/runtime', element: <Runtime /> },
   { path: '/files', element: <Files /> },

@@ -190,6 +190,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/comfyui/stop", s.comfyStop)
 	mux.HandleFunc("POST /api/comfyui/interrupt", s.comfyInterrupt)
 	mux.HandleFunc("GET /api/providers", s.readProviders)
+	mux.HandleFunc("GET /api/providers/{key}/icon", s.providerIcon)
 	mux.HandleFunc("GET /api/quant", s.readQuant)
 	mux.HandleFunc("POST /api/quant/tool", s.buildQuantTool)
 	mux.HandleFunc("POST /api/quant", s.startQuant)

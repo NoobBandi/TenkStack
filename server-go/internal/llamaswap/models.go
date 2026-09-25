@@ -204,8 +204,8 @@ func (s *Store) Upsert(ctx context.Context, spec api.ModelSpec, env map[string]s
 			// would now stop nothing, and llama-swap would wait on it.
 			entry.Delete("cmdStop")
 		}
-		switch p.Key {
-		case providers.VLLM:
+		switch p.Form {
+		case providers.FormServer:
 			// The card count comes from the selector being written, else
 			// from the one already there.
 			tp := tensorParallel(env)
@@ -213,11 +213,11 @@ func (s *Store) Upsert(ctx context.Context, spec api.ModelSpec, env map[string]s
 				tp = tensorParallel(EnvMap(entry.Get("env")))
 			}
 			if tp == 0 {
-				if m := vllmPatterns["tensor_parallel"].FindStringSubmatch(previous); m != nil {
+				if m := serverPatterns(p)["tensor_parallel"].FindStringSubmatch(previous); m != nil {
 					tp, _ = strconv.Atoi(m[1])
 				}
 			}
-			entry.Set("cmd", Literal(BuildVLLMCmd(spec.ID, spec.ModelFile, spec.CtxSize, tp,
+			entry.Set("cmd", Literal(BuildServerCmd(p, spec.ID, spec.ModelFile, spec.CtxSize, tp,
 				spec.GpuMemoryUtilization, spec.Quantization, spec.Extra, wrapper)))
 		default:
 			entry.Set("cmd", Literal(BuildCmd(spec.ModelFile, spec.CtxSize, spec.NGpuLayers, spec.Extra, spec.Mmproj, wrapper, spec.Sampling)))
@@ -494,7 +494,7 @@ func (m *Models) ContextSizes() map[string]int {
 	for _, e := range entries {
 		if mm := ctxFlag.FindStringSubmatch(e.cmd); mm != nil {
 			out[e.id], _ = strconv.Atoi(mm[1])
-		} else if mm := vllmPatterns["max_model_len"].FindStringSubmatch(e.cmd); mm != nil {
+		} else if mm := anyContext.FindStringSubmatch(e.cmd); mm != nil {
 			out[e.id], _ = strconv.Atoi(mm[1])
 		}
 	}
@@ -1001,8 +1001,8 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 	}
 	p, _, _ := ProviderOf(e.cmd)
 	patterns, owns := argPatterns, managed
-	if p.Key == providers.VLLM {
-		patterns, owns = vllmPatterns, p.Managed
+	if p.Form == providers.FormServer {
+		patterns, owns = serverPatterns(p), p.Managed
 	}
 	values := map[string]string{}
 	for field, pat := range patterns {
@@ -1061,7 +1061,7 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 	if out.Name == "" {
 		out.Name = modelID
 	}
-	if p.Key == providers.VLLM {
+	if p.Form == providers.FormServer {
 		out.Format = "safetensors"
 		out.ModelFile = values["model_dir"]
 		out.Sampling = map[string]any{}

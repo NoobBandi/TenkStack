@@ -1,0 +1,47 @@
+# SGLang: an OpenAI-compatible server built for many users and long
+# conversations, with a prefix cache shared between requests.
+key: sglang
+name: SGLang
+order: 20
+program: sglang serve
+summary: 多人同時對話、長對話與共用前綴時特別快，直接跑 Hugging Face 的 safetensors 模型
+category: llm
+formats: [safetensors]
+site: https://github.com/sgl-project/sglang
+icon: icon.png
+icon_source: https://github.com/sgl-project/sglang/blob/main/assets/logo_square.png
+
+form: server
+flags:
+  model: --model-path
+  served_name: --served-model-name
+  context: --context-length
+  tensor_parallel: --tp-size
+  memory: --mem-fraction-static
+  quantization: --quantization
+# Left out rather than risk a refusal like vLLM's; without it the reply runs
+# to the end of the context or the model's stop, which is what the chat wants.
+drop_max_tokens: true
+tools: true
+
+env_prefix: SGLANG
+
+builds:
+  intel:
+    # Written from SGLang's XPU guide, which names the Arc Pro B-series;
+    # not yet run on this project's hardware.
+    image: lmsysorg/sglang:v0.5.20-xpu
+    flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --ipc, host, -e, HF_HUB_OFFLINE=1]
+    # The image's entrypoint is a shell; XPU needs its device and attention
+    # backend named.
+    command: [sglang, serve, --device, xpu, --attention-backend, intel_xpu]
+  nvidia:
+    image: lmsysorg/sglang:latest
+    requires: nvidia-container-toolkit
+    flags: [--gpus, all, --ipc, host, -e, HF_HUB_OFFLINE=1]
+    command: [sglang, serve]
+
+recommended:
+  - match: ^Qwen3
+    flags: [--reasoning-parser qwen3, --tool-call-parser qwen25]
+    note: 思考過程與工具呼叫分開回傳

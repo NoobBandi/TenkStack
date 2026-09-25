@@ -116,11 +116,12 @@ var musa = Vendor{
 ```
 
 The llama.cpp image that drives the card is not on this record. It is a
-`Build` under the `llamacpp` provider in
-`server-go/internal/providers/providers.go`, keyed by the vendor's `Key`, and
-any other inference runtime that supports the card is a `Build` on its own
-record there. The vendor says how a card is reached; a provider says what
-runs on it.
+build under `builds:` in
+`server-go/internal/providers/engines/llamacpp/engine.yaml`, keyed by the
+vendor's `Key`, and any other inference engine that supports the card is a
+build in its own `engine.yaml` there. The vendor says how a card is reached;
+an engine says what runs on it. Adding a new engine rather than a card is
+`server-go/internal/providers/engines/README.md`.
 
 Notes on the parts that are easy to get subtly wrong:
 
@@ -225,4 +226,5 @@ first, because everything else follows from it.
 | A vendor with shared mechanisms | `intel` and `ClaimsByRender` in the same file, `server-go/internal/gpu/intel/` |
 | How vendors are found | `vendors.All()`; providers are listed in `cmd/tenkstack/main.go` |
 | Who consumes the record | `internal/backends`, `internal/comfy`, `internal/containers` |
+| Which engines run on a card | `server-go/internal/providers/engines/*/engine.yaml` |
 | Which card a model runs on | `targetCard` and `makeRoom` in `internal/httpapi/comfy.go` |

@@ -472,17 +472,50 @@ export interface ModelSpec {
 }
 
 /** One provider on one vendor's cards, and what of it exists here. */
+/** An engine build being pulled and written, in the background. */
+export interface EngineInstall {
+  provider: string;
+  vendor: string;
+  image: string;
+  state: 'pulling' | 'writing' | 'done' | 'error';
+  layers_done: number;
+  layers_total: number;
+  message: string;
+}
+
+/** One engine build on this machine: whether its launcher exists and is
+ *  registered, its image, and who uses it. */
+export interface EngineState {
+  managed: boolean;
+  enabled: boolean;
+  image: string | null;
+  image_size: string | null;
+  install: EngineInstall | null;
+  used_by: string[];
+}
+
 export interface ProviderBuild {
   vendor: string;
   vendor_label: string;
   macro: string;
   image: string;
   requires: string | null;
+  /** False for a recipe written from documentation and not yet run on the
+   *  vendor's hardware. */
   verified: boolean;
-  state: RuntimeCoverage['state'] & object;
+  state: EngineState;
 }
 
-/** One inference runtime the store offers. Builds are listed only for the
+/** Flags a model family needs on an engine; `match` is a regular expression
+ *  against the architecture in config.json. */
+export interface EngineRecommendation {
+  match: string;
+  flags: string[];
+  note: string;
+}
+
+/** One inference engine the store offers, from the registry under
+ *  server-go/internal/providers/engines. Builds are listed only for the
  *  vendors with a card in this machine. */
 export interface ProviderCard {
   key: string;
@@ -492,6 +525,17 @@ export interface ProviderCard {
   formats: string[];
   site: string;
   builds: ProviderBuild[];
+  /** The engine a model uses unless it says otherwise; its last launcher
+   *  cannot be removed. */
+  default: boolean;
+  /** How its entries are edited: llama.cpp's form or a server engine's. */
+  form: 'llama' | 'server';
+  icon: string;
+  recommended: EngineRecommendation[];
+  /** Builds of it registered by hand, such as a llama.cpp compiled here. */
+  launchers: string[];
+  /** Model entries that start through any of its launchers. */
+  in_use: string[];
 }
 
 /** A launcher a model entry can be started through. */
@@ -501,6 +545,7 @@ export interface Runtime {
   provider: string;
   vendor: string;
   formats: string[];
+  form: 'llama' | 'server';
   /** False for a build somebody registered by hand, which the store leaves alone. */
   managed: boolean;
   /** Quantisations the runtime applies to bf16 weights as it loads them,
@@ -600,6 +645,13 @@ export const setCardRole = (
 export const comfyAction = (
   name: string, action: 'update' | 'remove', delete_image = false,
 ) => send<{ ok: boolean }>('/runtimes/comfy', 'POST', { name, action, delete_image });
+
+/** Install, update, enable, disable or remove one engine's build for one
+ *  vendor's cards. */
+export const engineAction = (
+  provider: string, vendor: string, action: 'install' | 'update' | 'enable' | 'disable' | 'remove',
+  options: { variant?: string; delete_image?: boolean } = {},
+) => send<unknown>('/runtimes/action', 'POST', { provider, vendor, action, ...options });
 
 export const runtimeAction = (
   vendor: string, action: RuntimeAction,

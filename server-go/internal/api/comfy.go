@@ -204,6 +204,27 @@ type ProviderCard struct {
 	Formats  []string        `json:"formats"`
 	Site     string          `json:"site"`
 	Builds   []ProviderBuild `json:"builds"`
+	// Default is the engine a model uses unless it says otherwise; the
+	// store will not remove its last launcher.
+	Default bool `json:"default"`
+	// Form is how its entries are edited: llama or server.
+	Form string `json:"form"`
+	// Icon is where the store fetches its icon.
+	Icon string `json:"icon"`
+	// Recommended flags per model family, for the model form.
+	Recommended []Recommendation `json:"recommended"`
+	// Launchers are builds of it somebody registered by hand, such as a
+	// llama.cpp compiled on this machine; the store shows them and leaves
+	// them alone.
+	Launchers []string `json:"launchers"`
+	// InUse is every model entry that starts through any of its launchers.
+	InUse []string `json:"in_use"`
+}
+
+type Recommendation struct {
+	Match string   `json:"match"`
+	Flags []string `json:"flags"`
+	Note  string   `json:"note"`
 }
 
 // Runtime is one launcher a model entry can be started through: a
@@ -214,6 +235,7 @@ type Runtime struct {
 	Provider string   `json:"provider"`
 	Vendor   string   `json:"vendor"`
 	Formats  []string `json:"formats"`
+	Form     string   `json:"form"`
 	Managed  bool     `json:"managed"`
 	// Quantizations the runtime can apply to plain weights as it loads
 	// them: the record's, kept to those its image reports having.

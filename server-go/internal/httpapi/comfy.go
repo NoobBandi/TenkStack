@@ -650,8 +650,16 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, rec)
 		return
 	case "enable", "disable":
+		if in.Action == "disable" && s.lastOfDefault(in.Provider, in.Vendor) {
+			err = &backends.Invalid{Msg: "llama.cpp 是預設引擎，至少要留一個能用的，不能停用最後一個"}
+			break
+		}
 		err = s.Installer.Enable(ctx, in.Provider, in.Vendor, in.Action == "enable")
 	case "remove":
+		if s.lastOfDefault(in.Provider, in.Vendor) {
+			err = &backends.Invalid{Msg: "llama.cpp 是預設引擎，至少要留一個能用的，不能移除最後一個"}
+			break
+		}
 		err = s.Installer.Remove(ctx, in.Provider, in.Vendor, in.DeleteImage)
 	default:
 		err = &backends.Invalid{Msg: "不認識的動作：" + in.Action}
@@ -853,4 +861,32 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 	}
 	log.Printf("ComfyUI still holds VRAM after 30s; loading %s anyway", modelID)
 	return 0, ""
+}
+
+// lastOfDefault says whether a launcher is the default engine's only one:
+// a model form defaults to it, so taking it away leaves nothing to make a
+// model with. A build compiled on this machine and registered by hand
+// counts, since it serves the same models.
+func (s *Server) lastOfDefault(key, vendor string) bool {
+	p := providers.Get(key)
+	if p == nil || !p.Default {
+		return false
+	}
+	target := p.Macro(vendor)
+	others, isOne := 0, false
+	for _, l := range s.Config.LauncherList() {
+		owner, _, managed := providers.Resolve(l.Name)
+		if managed && owner.Key != p.Key {
+			continue
+		}
+		if !managed && p.Key != providers.LlamaCpp {
+			continue
+		}
+		if l.Name == target {
+			isOne = true
+		} else {
+			others++
+		}
+	}
+	return isOne && others == 0
 }

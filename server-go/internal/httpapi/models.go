@@ -42,7 +42,7 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		proxy, _ := entry["proxy"].(string)
 		// /props and /slots are llama-server's; another provider answers
 		// 404 twice a poll, which is noise in its log for nothing.
-		if proxy == "" || providerOf[id] != providers.LlamaCpp {
+		if proxy == "" || formOf(providerOf[id]) != providers.FormLlama {
 			continue
 		}
 		wg.Add(1)
@@ -101,9 +101,9 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 			row["slots"] = sl
 		}
 		caps := api.Capabilities{Source: "config", Vision: declared[id]}
-		// vLLM has no /props to ask. Tool calling is a launch flag the
-		// form writes for every vLLM entry, so it is declared here.
-		if providerOf[id] == providers.VLLM {
+		// A server engine has no /props to ask. Tool calling is a launch
+		// flag its record's recommended flags write, so the record says.
+		if p := providers.Get(providerOf[id]); p != nil && p.Tools {
 			caps.Tools = true
 		}
 		if live != nil {
@@ -118,7 +118,7 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		// grouped by it; an entry named by hand is llama.cpp.
 		key := providerOf[id]
 		if key == "" {
-			key = providers.LlamaCpp
+			key = providers.DefaultProvider().Key
 		}
 		row["provider"] = key
 		if p := providers.Get(key); p != nil {

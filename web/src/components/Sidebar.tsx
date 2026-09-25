@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Layout, Menu, Tooltip, Typography } from 'antd';
 import {
   ApiOutlined, AppstoreOutlined, CloudDownloadOutlined, ContainerOutlined,
-  DashboardOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined,
+  DashboardOutlined, DeploymentUnitOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined,
   MessageOutlined, PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Link, useLocation } from 'react-router-dom';
@@ -34,6 +34,7 @@ export const NAV_GROUPS = [
     items: [
       { key: '/models', icon: <AppstoreOutlined />, label: '模型' },
       { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
+      { key: '/engines', icon: <DeploymentUnitOutlined />, label: '推論引擎' },
       { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
       { key: '/runtime', icon: <ContainerOutlined />, label: '執行環境' },
       { key: '/connections', icon: <ApiOutlined />, label: '連線' },

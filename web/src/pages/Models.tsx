@@ -7,13 +7,14 @@ import {
   DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
   PoweroffOutlined, ReloadOutlined,
 } from '@ant-design/icons';
+import { Link } from 'react-router-dom';
 import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
   fetchModelLocations, fetchModelSpec, fetchPartials, fetchProviders, fetchQuant,
   fetchRecommendedSampling, loadModel, locationName, modelFileRefs, saveModel, unloadAll,
   unloadModel, withinLocation,
-  type BackendDevice, type ModelFile, type ModelFileRef, type ModelInfo, type ModelLocation,
+  type BackendDevice, type EngineRecommendation, type ModelFile, type ProviderCard, type ModelFileRef, type ModelInfo, type ModelLocation,
   type ModelSpec, type ModelWeight, type PartialFile, type QuantJob, type Runtime,
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -71,19 +72,18 @@ const fileLabel = (f: ModelFile, where: Where) =>
 type Where = (key?: string, always?: boolean) => string;
 
 /**
- * The vLLM flags a model family needs, offered when its folder is picked.
- *
- * Reasoning and tool-call parsers are per family: without them the
+ * The flags a model family needs on a server engine, offered when its folder
+ * is picked. They come from the engine's registry record: reasoning and
+ * tool-call parsers are per family and per engine, and without them the
  * thinking arrives inline in the answer and tool calls come back as text.
- * The Qwen3.5/3.8 hybrid models also corrupt their output under
- * torch.compile on the Intel build, so they run eager.
  */
-function recommendedFlags(architecture?: string): string[] {
-  if (!architecture) return [];
+function recommendedFlags(rules: EngineRecommendation[] | undefined, architecture?: string): string[] {
+  if (!architecture || !rules) return [];
   const flags: string[] = [];
-  if (/^Qwen3_5/i.test(architecture)) flags.push('--enforce-eager');
-  if (/^Qwen3/i.test(architecture)) {
-    flags.push('--reasoning-parser qwen3', '--enable-auto-tool-choice', '--tool-call-parser hermes');
+  for (const rule of rules) {
+    let hit = false;
+    try { hit = new RegExp(rule.match, 'i').test(architecture); } catch { hit = false; }
+    if (hit) rule.flags.forEach((f) => { if (!flags.includes(f)) flags.push(f); });
   }
   return flags;
 }
@@ -276,13 +276,20 @@ export default function Models() {
    * files are offered and which fields the rest of the form shows.
    */
   const [runtimes, setRuntimes] = useState<Runtime[]>([]);
+  const [engineCards, setEngineCards] = useState<ProviderCard[]>([]);
   const runtime = Form.useWatch('runtime', form);
-  const provider = runtimes.find((r) => r.macro === runtime)?.provider
-    ?? runtimes[0]?.provider ?? 'llamacpp';
-  const vllm = provider === 'vllm';
+  const current = runtimes.find((r) => r.macro === runtime) ?? runtimes[0];
+  const provider = current?.provider ?? 'llamacpp';
+  const formEngine = engineCards.find((e) => e.key === provider);
+  // A server engine's form: a folder of weights, a context length, cards and
+  // a memory share, whichever engine it is.
+  const serverForm = current?.form === 'server';
+  // safetensors models on disk that nothing installed can run: the form says
+  // where to get an engine for them rather than hiding them silently.
+  const noServerEngine = !runtimes.some((r) => r.formats.includes('safetensors'));
   const chosenFile = Form.useWatch('model_file', form);
   const chosenQuant = Form.useWatch('quantization', form) ?? '';
-  const folder = vllm ? files.find((f) => f.filename === chosenFile) : undefined;
+  const folder = serverForm ? files.find((f) => f.filename === chosenFile) : undefined;
   // The online quantisations come from the runtime's own image, not from a
   // list written here; the first option is always to load as published.
   const online = runtimes.find((r) => r.macro === runtime)?.quantizations ?? [];
@@ -352,7 +359,8 @@ export default function Models() {
   useEffect(() => { if (quantDone) refresh(); }, [quantDone, refresh]);
   useEffect(() => {
     fetchBackendDevices().then(setDevices).catch(() => setDevices([]));
-    fetchProviders().then((p) => setRuntimes(p.runtimes)).catch(() => setRuntimes([]));
+    fetchProviders().then((p) => { setRuntimes(p.runtimes); setEngineCards(p.providers); })
+      .catch(() => setRuntimes([]));
   }, []);
 
   // The runtime decides which format the file list shows, so a change of one
@@ -360,11 +368,11 @@ export default function Models() {
   // Picking a folder fills in the flags its family needs, when the box is
   // still empty: what is there was typed on purpose.
   const onFolder = (name: string) => {
-    if (!vllm) return;
+    if (!serverForm) return;
     const picked = files.find((f) => f.filename === name);
     const current: string = form.getFieldValue('extra') ?? '';
     if (picked && !current.trim()) {
-      form.setFieldValue('extra', recommendedFlags(picked.architecture).join('\n'));
+      form.setFieldValue('extra', recommendedFlags(formEngine?.recommended, picked.architecture).join('\n'));
     }
   };
 
@@ -549,7 +557,7 @@ export default function Models() {
     }
   };
 
-  const wanted = vllm ? 'safetensors' : 'gguf';
+  const wanted = serverForm ? 'safetensors' : 'gguf';
   const ggufFiles = files.filter((f) => !f.is_mmproj && (f.format ?? 'gguf') === wanted);
   const mmprojFiles = files.filter((f) => f.is_mmproj);
   const orphans = files.filter((f) => f.used_by.length === 0);
@@ -697,7 +705,7 @@ export default function Models() {
             ...(engines.length > 1 && shownEngine === 'all' ? [{
               title: '推論引擎', width: 100,
               render: (_: unknown, row: ModelInfo) => (
-                <Tag color={row.provider === 'vllm' ? 'geekblue' : 'default'}
+                <Tag color={row.provider && row.provider !== 'llamacpp' ? 'geekblue' : 'default'}
                      style={{ fontSize: 11, marginInlineEnd: 0 }}>
                   {row.provider_name ?? 'llama.cpp'}
                 </Tag>
@@ -1123,25 +1131,32 @@ export default function Models() {
           </Form.Item>
           <Form.Item name="name" label="顯示名稱"><Input /></Form.Item>
           <Form.Item name="description" label="說明"><Input.TextArea rows={2} /></Form.Item>
+          {noServerEngine && files.some((f) => f.format === 'safetensors') && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="磁碟上有 safetensors 模型，但還沒安裝能跑它的推論引擎"
+              description={<>到 <Link to="/engines">推論引擎</Link> 安裝 vLLM 或 SGLang 之後，這裡就能選它們。</>}
+            />
+          )}
           {runtimes.length > 1 && (
             <Form.Item name="runtime" label="執行環境"
-                       extra={vllm
-                         ? 'vLLM 跑 Hugging Face 的 safetensors 模型，載入時預先佔滿顯存，同時多人使用最快。'
-                         : 'llama.cpp 跑 GGUF 模型，可以只放一部分進顯存。'}>
+                       extra={formEngine?.summary}>
               <Select
                 onChange={onRuntime}
                 options={runtimes.map((r) => ({ value: r.macro, label: r.label }))}
               />
             </Form.Item>
           )}
-          <Form.Item name="model_file" label={vllm ? '模型資料夾' : '模型檔'} rules={[{ required: true }]}
-                     extra={vllm && !ggufFiles.length
+          <Form.Item name="model_file" label={serverForm ? '模型資料夾' : '模型檔'} rules={[{ required: true }]}
+                     extra={serverForm && !ggufFiles.length
                        ? '模型目錄裡沒有 safetensors 模型。到「模型目錄」下載一個，或把 Hugging Face 的整個 repo 放進 ~/ai/models/<作者>/<名稱>/。'
                        : undefined}>
             <Select
               showSearch
               onChange={onFolder}
-              placeholder={vllm ? '從 ~/ai/models 選一個資料夾' : '從 ~/ai/models 選擇'}
+              placeholder={serverForm ? '從 ~/ai/models 選一個資料夾' : '從 ~/ai/models 選擇'}
               // The basename first, the repo after it: with weights under
               // <owner>/<repo>/ the path leads with a directory, and a list of
               // twenty quants would sort and read by publisher rather than by
@@ -1152,7 +1167,7 @@ export default function Models() {
               }))}
             />
           </Form.Item>
-          {!vllm && (
+          {!serverForm && (
           <Form.Item name="mmproj" label="視覺投影檔（選用）"
                      extra="視覺模型才需要，會額外佔用顯存">
             <Select
@@ -1171,7 +1186,7 @@ export default function Models() {
               // picked here. A segmented control asking it first was a second place
               // for the same answer to live, and one that could disagree with the
               // list right underneath it.
-              extra={vllm
+              extra={serverForm
                 ? '選到的卡就是這個模型會用到的卡；選幾張，tensor-parallel 就是幾。不選就是第一張。'
                 : '選到的卡就是這個模型會用到的卡，不選就是不指定、由 llama-server 自己挑。選一張以上時模型會分攤過去，預設 --split-mode layer（按層切）。另一種 tensor（按張量切）在部分機器上比較快，但限制較多：必須開 flash attention、KV 快取不能是量化的（-ctk/-ctv 要 f16），而且部分模型架構不支援。要試就在額外參數寫 --split-mode tensor。'}
             >
@@ -1198,7 +1213,7 @@ export default function Models() {
               value they will find in the file, and whoever is not reads past
               it to the part that answers the question. */}
           <Form.Item name="group" label="載入策略"
-                     extra={vllm
+                     extra={serverForm
                        ? 'vLLM 一啟動就把整張卡的顯存佔走，所以要獨佔：載入時會把其他模型卸下來。'
                        : '獨佔在載入時會把其他模型卸下來，共存不會。前面的名字就是寫進設定檔的值，在設定頁看得到。'}>
             <Select
@@ -1217,8 +1232,8 @@ export default function Models() {
               one field and none under the other left the pair with different
               heights and no bottom edge to share. */}
           <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-            <Form.Item name="ctx_size" label={vllm ? '最大長度（max-model-len）' : 'Context 長度'} style={{ flex: 1 }}
-                       extra={vllm ? '一個請求的輸入加輸出上限，也決定 KV 快取要留多少' : '每個 slot 分到的是這個數字除以 --parallel'}>
+            <Form.Item name="ctx_size" label={serverForm ? '最大長度' : 'Context 長度'} style={{ flex: 1 }}
+                       extra={serverForm ? '一個請求的輸入加輸出上限，也決定 KV 快取要留多少' : '每個 slot 分到的是這個數字除以 --parallel'}>
               <InputNumber min={512} max={1048576} step={1024} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="ttl" label="閒置卸載（秒）" style={{ flex: 1 }}
@@ -1226,7 +1241,7 @@ export default function Models() {
               <InputNumber min={0} step={60} style={{ width: '100%' }} />
             </Form.Item>
           </div>
-          {vllm ? (
+          {serverForm ? (
             <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
               {/* The precision is the folder's, not the entry's. A repo the
                   publisher quantised says so in its config.json and vLLM
@@ -1264,7 +1279,7 @@ export default function Models() {
               machine's own config spells them three different ways. Blank means
               the flag is not written at all, which is not the same as writing
               llama.cpp's current default and staying wrong when it moves. */}
-          {!vllm && (
+          {!serverForm && (
           <Form.Item
             label={(
               <Space size={8}>
@@ -1295,9 +1310,9 @@ export default function Models() {
             </div>
           </Form.Item>
           )}
-          {vllm ? (
+          {serverForm ? (
             <Form.Item name="extra" label="額外參數"
-                       extra="vllm serve 的其他旗標，一行一個。選資料夾時會依模型家族帶入需要的（思考、工具呼叫的解析器，Qwen3.5/3.8 要 --enforce-eager），可以改。模型、長度、卡數、量化和佔用比例由上面的欄位負責。">
+                       extra={`${formEngine?.name ?? '這個引擎'} 的其他旗標，一行一個。選資料夾時會依模型家族帶入需要的（思考、工具呼叫的解析器等），可以改。模型、長度、卡數、量化和佔用比例由上面的欄位負責。`}>
               <Input.TextArea rows={3} style={{ fontFamily: MONO, fontSize: 12 }} />
             </Form.Item>
           ) : (

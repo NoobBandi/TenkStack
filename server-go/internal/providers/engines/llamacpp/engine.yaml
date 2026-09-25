@@ -1,0 +1,40 @@
+# llama.cpp: the engine every model uses unless it says otherwise.
+key: llamacpp
+name: llama.cpp
+order: 0
+default: true
+program: llama-server
+summary: GGUF 模型的標準執行環境，任何顯示卡都能跑，也能把一部分放到 CPU 上
+category: llm
+formats: [gguf]
+site: https://github.com/ggml-org/llama.cpp
+icon: icon.svg
+icon_source: https://github.com/ggml-org/llama.cpp/blob/master/media/llama1-icon-transparent.svg
+
+# The model form with GGUF files, layers, a projector and sampling, and the
+# /props and /slots endpoints the console reads from a running server.
+form: llama
+
+env_prefix: LLAMA
+# The names llama.cpp had before the registry existed. A config written then
+# names ${llama-intel} and llama-server-intel.sh, so they stay.
+macro_prefix: llama-
+script_prefix: llama-server-
+
+builds:
+  intel:
+    image: ghcr.io/ggml-org/llama.cpp:server-intel
+  amd:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+  nvidia:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    requires: nvidia-container-toolkit
+    verified: true
+
+# Runs on any vendor's card, offered as a variant rather than a default: it
+# is slower and needs a Vulkan driver on the host.
+fallback:
+  label: Vulkan（通用備援）
+  image: ghcr.io/ggml-org/llama.cpp:server-vulkan
+  requires: vulkan ICD
+  flags: [--device, /dev/dri, --gpus, all, -e, "NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility"]

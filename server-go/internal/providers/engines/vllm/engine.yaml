@@ -1,0 +1,72 @@
+# vLLM: Hugging Face safetensors served for throughput.
+key: vllm
+name: vLLM
+order: 10
+program: vllm serve
+summary: 高吞吐的推論伺服器，直接跑 Hugging Face 的 safetensors 模型，多人同時使用時最快
+category: llm
+formats: [safetensors]
+site: https://github.com/vllm-project/vllm
+icon: icon.png
+icon_source: https://github.com/vllm-project/vllm/blob/main/docs/assets/logos/vllm-logo-only-light.png
+
+# An OpenAI-compatible server: one directory of weights, a context length, a
+# card count and a memory share. `flags` is how this engine spells each.
+form: server
+flags:
+  model: --model
+  served_name: --served-model-name
+  context: --max-model-len
+  tensor_parallel: --tensor-parallel-size
+  memory: --gpu-memory-utilization
+  quantization: --quantization
+# Refuses a request whose max_tokens reaches the context length, where
+# llama-server treats it as a ceiling; the proxy leaves it out.
+drop_max_tokens: true
+# Tool calls work once the entry names a tool parser, which the recommended
+# flags below do for the families that have one.
+tools: true
+
+env_prefix: VLLM
+
+builds:
+  intel:
+    image: intel/llm-scaler-vllm:0.26.0-b2
+    verified: true
+    # OneCCL opens every render node by path, so by-path goes in read-only.
+    flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --shm-size, 16g, -e, HF_HUB_OFFLINE=1]
+    cache_dir: /root/.cache/vllm
+  nvidia:
+    image: vllm/vllm-openai:latest
+    requires: nvidia-container-toolkit
+    flags: [--gpus, all, --ipc, host, -e, HF_HUB_OFFLINE=1]
+    cache_dir: /root/.cache/vllm
+  amd:
+    image: rocm/vllm:latest
+    flags: [--device, /dev/dri, --device, /dev/kfd, --group-add, video, --security-opt, seccomp=unconfined, --ipc, host, -e, HF_HUB_OFFLINE=1]
+    # The ROCm image's entrypoint is a shell, not the server.
+    command: [vllm, serve]
+    cache_dir: /root/.cache/vllm
+
+# Quantisations applied while bf16 weights load. The image is asked which it
+# has; a publisher's own quantisation (fp8, awq, gptq) needs none of these.
+online_quantization:
+  - value: fp8
+    label: FP8（線上量化）
+    note: 顯存減半，品質幾乎不變
+    shrink: 0.5
+  - value: sym_int4
+    label: Int4（線上量化）
+    note: 顯存四分之一，品質略降
+    shrink: 0.25
+
+# Flags a model family needs, offered when its folder is picked. The first
+# matching rule wins for each flag; `match` is a regular expression against
+# the architecture in config.json.
+recommended:
+  - match: ^Qwen3_5
+    flags: [--enforce-eager]
+    note: torch.compile 在 Intel 版會讓 Qwen3.5/3.8 輸出亂碼
+  - match: ^Qwen3
+    flags: [--reasoning-parser qwen3, --enable-auto-tool-choice, --tool-call-parser hermes]
+    note: 思考過程與工具呼叫分開回傳

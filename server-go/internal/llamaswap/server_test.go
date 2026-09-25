@@ -205,3 +205,48 @@ func TestSplitGGUFIsItsShards(t *testing.T) {
 		}
 	}
 }
+
+// A second server engine goes through the same form under its own
+// spelling, read from its record: SGLang's --model-path, --context-length,
+// --tp-size and --mem-fraction-static.
+func TestSGLangEntryRoundTrip(t *testing.T) {
+	s, m := tempStore(t)
+	ctx := context.Background()
+	if err := s.AddMacro(ctx, "sglang-intel", "/somewhere/sglang-intel.sh"); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(m.Dir, "Qwen", "Qwen3-8B")
+	os.MkdirAll(dir, 0o755)
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644)
+	os.WriteFile(filepath.Join(dir, "model.safetensors"), make([]byte, 100), 0o644)
+
+	spec := api.ModelSpec{ID: "qwen3-8b-sg", ModelFile: "Qwen/Qwen3-8B", CtxSize: 32768, TTL: 300,
+		Runtime: "sglang-intel", GpuMemoryUtilization: 0.8, Extra: "--reasoning-parser qwen3\n"}
+	err := s.Upsert(ctx, spec, map[string]string{"ONEAPI_DEVICE_SELECTOR": "level_zero:0,1"},
+		map[string]bool{"ONEAPI_DEVICE_SELECTOR": true}, "${sglang-intel}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := s.Raw()
+	for _, want := range []string{
+		"      ${sglang-intel}\n      --model-path ${models-dir}/Qwen/Qwen3-8B\n      --served-model-name qwen3-8b-sg\n",
+		"      --context-length 32768\n      --tp-size 2\n      --mem-fraction-static 0.8\n      --reasoning-parser qwen3\n",
+		"    cmdStop: docker stop sglang-intel-qwen3-8b-sg\n",
+		"      - SGLANG_NAME=sglang-intel-qwen3-8b-sg\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	read := m.ReadSpec("qwen3-8b-sg")
+	if read == nil || read.Provider != "sglang" || read.ModelFile != "Qwen/Qwen3-8B" || read.CtxSize != 32768 ||
+		read.GpuMemoryUtilization != 0.8 || read.Extra != "--reasoning-parser qwen3" {
+		t.Errorf("ReadSpec = %+v", read)
+	}
+	if got := m.ContextSizes()["qwen3-8b-sg"]; got != 32768 {
+		t.Errorf("context size %d", got)
+	}
+	if w := m.Weights()["qwen3-8b-sg"]; len(w) != 1 || w[0].Filename != "Qwen/Qwen3-8B" {
+		t.Errorf("weights = %+v", w)
+	}
+}
