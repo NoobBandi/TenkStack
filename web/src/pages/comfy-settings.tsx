@@ -101,7 +101,7 @@ function Row({ label, children, note, action }: {
 }) {
   return (
     <div style={{
-      display: 'flex', gap: 16, alignItems: 'flex-start',
+      display: 'flex', flexWrap: 'wrap', columnGap: 16, rowGap: 8, alignItems: 'flex-start',
       padding: '12px 0', borderTop: `1px solid ${LINE.faint}`,
     }}>
       <Text type="secondary" style={{
@@ -109,7 +109,7 @@ function Row({ label, children, note, action }: {
       }}>
         {label}
       </Text>
-      <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+      <div style={{ flex: '1 1 200px', minWidth: 0 }}>
         {children}
         {note && (
           <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 6 }}>

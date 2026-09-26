@@ -96,6 +96,7 @@ export default function Users() {
           rowKey="id"
           size="small"
           pagination={false}
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: '尚未建立任何帳號' }}
           columns={[
             {
@@ -156,6 +157,7 @@ export default function Users() {
           rowKey="id"
           size="small"
           pagination={false}
+          scroll={{ x: 'max-content' }}
           locale={{ emptyText: '尚未建立 API key' }}
           columns={[
             { title: '名稱', dataIndex: 'name' },

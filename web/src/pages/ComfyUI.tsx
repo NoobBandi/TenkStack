@@ -232,7 +232,7 @@ function Hero({ instance, slot, onChanged }: {
 
       <div style={{
         display: 'grid', gap: 16,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
       }}>
         {steps.map((step, i) => (
           <div key={step.title} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
@@ -354,7 +354,7 @@ function Resources({ instance, storage }: {
     >
       <div style={{
         display: 'grid', gap: 20,
-        gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(300px, 100%), 1fr))',
       }}>
         <MetricChart
           label="CPU"

@@ -59,7 +59,7 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
     <div style={{
       display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', minWidth: 0,
     }}>
-      <Space size={9} style={{ flex: '1 1 240px', minWidth: 0 }}>
+      <Space size={9} style={{ flex: '1 1 120px', minWidth: 0 }}>
         <Tooltip title={live?.busy ? '運算中' : '閒置'}>
           <span style={{
             width: 7, height: 7, borderRadius: '50%', flex: 'none',

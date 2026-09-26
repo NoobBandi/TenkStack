@@ -309,7 +309,8 @@ export default function Dashboard() {
       */}
       <div style={{
         display: 'grid', gap: 16, alignItems: 'stretch',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))',
+        // min(): below 460px of room one column takes what there is.
+        gridTemplateColumns: 'repeat(auto-fit, minmax(min(460px, 100%), 1fr))',
       }}>
         {gpus.length === 0 ? (
           <StatTile label="GPU" value="—" footnote="偵測不到顯示卡" />
@@ -399,6 +400,7 @@ export default function Dashboard() {
               rowKey="id"
               size="small"
               pagination={false}
+              scroll={{ x: 'max-content' }}
               locale={{ emptyText: '設定檔中沒有模型' }}
               columns={[
                 {

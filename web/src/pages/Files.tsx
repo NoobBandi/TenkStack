@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  App as AntApp, Button, Dropdown, Empty, Input, Modal, Progress, Segmented, Space,
-  Spin, Tag, Tooltip, Typography,
+  App as AntApp, Button, Drawer, Dropdown, Empty, Input, Modal, Progress, Segmented, Select,
+  Space, Spin, Tag, Tooltip, Typography,
 } from 'antd';
 import type { InputRef, MenuProps } from 'antd';
 import {
@@ -17,6 +17,7 @@ import {
   type FsEntry, type FsRoot,
 } from '../api';
 import FilePreview from '../components/FilePreview';
+import { useMedia } from '../media';
 import FolderPicker from '../components/FolderPicker';
 import Details from '../components/files/Details';
 import Editor from '../components/files/Editor';
@@ -96,7 +97,15 @@ export default function Files() {
   // Grid where there are pictures, until somebody says otherwise; a choice
   // survives stepping into a subfolder.
   const [view, setView] = useState<'auto' | 'list' | 'grid'>('auto');
-  const [detailsOpen, setDetailsOpen] = useState(true);
+  // The panel takes 300 px beside the list, which a window under about 1200
+  // cannot spare without the file names going: there it slides in when asked
+  // for instead, and starts closed.
+  const detailsBeside = useMedia('(min-width: 1200px)');
+  const [detailsOpen, setDetailsOpen] = useState(() => window.matchMedia('(min-width: 1200px)').matches);
+  // Narrower still, the locations list becomes a dropdown on the toolbar, and
+  // the list drops its date column so the names keep the room.
+  const locationsBeside = useMedia('(min-width: 900px)');
+  const compact = useMedia('(max-width: 699px)');
   const [sizes, setSizes] = useState<Record<string, Measured>>({});
 
   // ---- what is happening -------------------------------------------------------
@@ -542,7 +551,7 @@ export default function Files() {
   ];
 
   const rowStyle = (entry: FsEntry, isSelected: boolean): React.CSSProperties => ({
-    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 96px 110px', alignItems: 'center',
+    display: 'grid', gridTemplateColumns: compact ? 'minmax(0, 1fr) 72px' : 'minmax(0, 1fr) 96px 110px', alignItems: 'center',
     gap: 12, padding: '0 12px', height: 32, cursor: 'default', userSelect: 'none',
     background: isSelected ? 'rgba(255,255,255,0.08)' : undefined,
     opacity: entry.kind === 'other' ? 0.45 : 1,
@@ -558,7 +567,7 @@ export default function Files() {
       <input ref={picker} type="file" multiple hidden onChange={onPick} />
 
       {/* ---- locations ------------------------------------------------------- */}
-      <aside style={{
+      {locationsBeside && <aside style={{
         width: SIDEBAR_W, flex: 'none', borderRight: `1px solid ${LINE.faint}`,
         display: 'flex', flexDirection: 'column', minHeight: 0,
       }}>
@@ -629,7 +638,7 @@ export default function Files() {
             </div>
           ))}
         </div>
-      </aside>
+      </aside>}
 
       {/* ---- main ------------------------------------------------------------ */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -680,6 +689,17 @@ export default function Files() {
             display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
             borderBottom: `1px solid ${LINE.faint}`, flex: 'none',
           }}>
+            {/* The locations list, when there is no room for it beside. */}
+            {!locationsBeside && (
+              <Select
+                size="small"
+                value={root}
+                onChange={(key: string) => go(key, '')}
+                options={roots.map((r) => ({ value: r.key, label: r.label }))}
+                style={{ width: 120, flex: 'none' }}
+                popupMatchSelectWidth={false}
+              />
+            )}
             {editingPath ? (
               <Input
                 ref={pathInput}
@@ -857,7 +877,7 @@ export default function Files() {
                   <div style={{ ...rowStyle({ kind: 'dir' } as FsEntry, false), height: 26, cursor: 'default' }}>
                     <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2 }}>名稱</Text>
                     <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2, textAlign: 'right' }}>大小</Text>
-                    <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2, textAlign: 'right' }}>修改時間</Text>
+                    {!compact && <Text type="secondary" style={{ fontSize: 10, letterSpacing: 1.2, textAlign: 'right' }}>修改時間</Text>}
                   </div>
                   {entries.map((entry) => {
                     const isSelected = selected.includes(keyOf(entry));
@@ -885,9 +905,11 @@ export default function Files() {
                               ? (measured && measured !== 'working' ? bytes(measured.bytes) : '—')
                               : entry.size !== null ? bytes(entry.size) : ''}
                           </Text>
-                          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, textAlign: 'right' }}>
-                            {when(entry.modified)}
-                          </Text>
+                          {!compact && (
+                            <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO, textAlign: 'right' }}>
+                              {when(entry.modified)}
+                            </Text>
+                          )}
                         </div>
                       </Dropdown>
                     );
@@ -897,8 +919,8 @@ export default function Files() {
             </div>
             </Dropdown>
 
-            {detailsOpen && (
-              <div style={{ width: DETAILS_W, flex: 'none', borderLeft: `1px solid ${LINE.faint}`, overflowY: 'auto' }}>
+            {detailsOpen && (() => {
+              const details = (
                 <Details
                   root={root} rootPath={rootPath} path={path} entries={entries} chosen={chosen}
                   writable={writable} free={free} total={total} sizes={sizes}
@@ -910,8 +932,19 @@ export default function Files() {
                   onDelete={confirmDelete}
                   onCopyPath={(entry) => void copyPath(entry)}
                 />
-              </div>
-            )}
+              );
+              return detailsBeside ? (
+                <div style={{ width: DETAILS_W, flex: 'none', borderLeft: `1px solid ${LINE.faint}`, overflowY: 'auto' }}>
+                  {details}
+                </div>
+              ) : (
+                <Drawer open onClose={() => setDetailsOpen(false)} placement="right"
+                        width={Math.min(DETAILS_W + 40, window.innerWidth - 24)}
+                        title="詳細資料" styles={{ body: { padding: 0 } }}>
+                  {details}
+                </Drawer>
+              );
+            })()}
           </div>
         </div>
       </div>

@@ -11,12 +11,19 @@ import {
 } from '../api';
 import { ACCENT, LINE, MONO } from '../theme';
 import { deviceTag } from '../hardware';
+import { useMedia } from '../media';
 
 const { Sider } = Layout;
 const { Text } = Typography;
 
 export const SIDEBAR_WIDTH = 208;
 export const SIDEBAR_COLLAPSED = 64;
+/** Below this the sidebar is a drawer: fixed at 208 px it left a phone 176 px
+ *  of page, and every page scrolled sideways. */
+export const NARROW_BELOW = 768;
+
+/** Whether the window is narrower than the sidebar can stand beside. */
+export const useNarrow = () => useMedia(`(max-width: ${NARROW_BELOW - 1}px)`);
 
 /** Grouped by what the user is doing, not by which service implements it. */
 export const NAV_GROUPS = [
@@ -49,6 +56,10 @@ export const NAV_GROUPS = [
 interface Props {
   collapsed: boolean;
   onCollapse: (collapsed: boolean) => void;
+  /** Rendered inside the small-screen drawer: in the flow, never collapsed,
+   *  and closing it when a page is picked. */
+  drawer?: boolean;
+  onNavigate?: () => void;
   gpus: GpuSample[];
   models: ModelInfo[];
   system: SystemSample | null;
@@ -75,7 +86,10 @@ function Meter({ label, value, percent, warn }: {
   );
 }
 
-export default function Sidebar({ collapsed, onCollapse, gpus, models, system }: Props) {
+export default function Sidebar({
+  collapsed: collapsedProp, onCollapse, gpus, models, system, drawer, onNavigate,
+}: Props) {
+  const collapsed = drawer ? false : collapsedProp;
   const [version, setVersion] = useState('');
   const [newer, setNewer] = useState<string | null>(null);
   useEffect(() => {
@@ -98,14 +112,14 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
 
   return (
     <Sider
-      collapsible
+      collapsible={!drawer}
       collapsed={collapsed}
       onCollapse={onCollapse}
       width={SIDEBAR_WIDTH}
       collapsedWidth={SIDEBAR_COLLAPSED}
       // Fixed, not sticky: the nav is a frame around the page, and scrolling a
-      // long model list should never move it.
-      style={{
+      // long model list should never move it. In the drawer it is the drawer.
+      style={drawer ? { height: '100%', overflow: 'hidden' } : {
         position: 'fixed', insetInlineStart: 0, top: 0, bottom: 0,
         height: '100vh', overflow: 'hidden',
         borderInlineEnd: `1px solid ${LINE.faint}`,
@@ -159,6 +173,7 @@ export default function Sidebar({ collapsed, onCollapse, gpus, models, system }:
         <Menu
           mode="inline"
           selectedKeys={[location.pathname]}
+          onClick={() => onNavigate?.()}
           style={{ borderInlineEnd: 0, background: 'transparent' }}
           items={NAV_GROUPS.map((group) => ({
             key: group.label,

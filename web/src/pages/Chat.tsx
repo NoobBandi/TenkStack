@@ -16,6 +16,7 @@ import Trace from '../components/Trace';
 import { useStream } from '../stream';
 import { foldExchanges, useChat, type Turn } from '../chat';
 import { LINE, MONO } from '../theme';
+import { useNarrow } from '../components/Sidebar';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -122,6 +123,7 @@ function ChatInner() {
   // nav and a 232px panel from a narrow window leaves ~200px, which is less
   // than the composer's own controls need. It overlays instead.
   const roomForPanel = screens.lg ?? false;
+  const narrow = useNarrow();
   // Settings need a higher bar than history, because the two can be open at
   // once. At lg the pair would eat ~600px and leave the conversation under
   // 150px; xl is the first width where both fit and the reply still reads.
@@ -326,7 +328,7 @@ function ChatInner() {
       display: 'flex',
       // Fill the viewport below the sticky header and the page padding, so the
       // composer sits at the bottom instead of below the fold.
-      height: 'calc(100vh - 56px - 48px)',
+      height: narrow ? 'calc(100vh - 56px - 24px)' : 'calc(100vh - 56px - 48px)',
     }}>
       {roomForPanel && (
         // The outer width has to include the padding, because box-sizing is
@@ -376,7 +378,8 @@ function ChatInner() {
                 <Empty description="開始一段對話" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                 <Space wrap size={8} style={{ justifyContent: 'center', width: '100%', marginTop: 16 }}>
                   {SUGGESTIONS.map((s) => (
-                    <Button key={s} size="small" onClick={() => send(s)} disabled={!model}>
+                    <Button key={s} size="small" onClick={() => send(s)} disabled={!model}
+                            style={{ maxWidth: '100%', height: 'auto', whiteSpace: 'normal' }}>
                       {s}
                     </Button>
                   ))}

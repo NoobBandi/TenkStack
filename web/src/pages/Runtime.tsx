@@ -446,7 +446,10 @@ export default function Runtime() {
           />
         </Card>
         </div>
-        <div style={{ flex: '3 1 520px', minWidth: 0, display: 'flex' }}>
+        {/* 900px: the containers table with its three traces needs about
+            that much, so below it the card goes under the other rather than
+            beside it with half the table scrolled out of sight. */}
+        <div style={{ flex: '3 1 900px', minWidth: 0, display: 'flex' }}>
         <Card
           title="容器"
           size="small"
@@ -467,6 +470,11 @@ export default function Runtime() {
             rowKey="name"
             size="small"
             pagination={false}
+            // Scrolls inside the card rather than pushing the page sideways,
+            // but only below this width: max-content kept every cell on one
+            // line and pushed the state off the card even on a wide screen.
+            // The traces give way first on a narrow screen.
+            scroll={{ x: 760 }}
             columns={[
               {
                 // The name with the ports under it. They were separate columns
@@ -522,7 +530,7 @@ export default function Runtime() {
                 render: (state: string, row) => (
                   <Tooltip title={row.status}>
                     <Space size={6}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>{since(row.status)}</Text>
+                      <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{since(row.status)}</Text>
                       <Tag color={STATE_COLOUR[state] ?? 'default'} style={{ marginInlineEnd: 0 }}>
                         {STATE_LABEL[state] ?? state}
                       </Tag>
@@ -541,17 +549,17 @@ export default function Runtime() {
               // line on the floor, which is true and useless; what the reader
               // wants to see is whether this container is doing more than it was
               // a minute ago.
-              title: 'CPU', width: 130, align: 'right' as const,
+              title: 'CPU', width: 130, align: 'right' as const, responsive: ['lg'],
               render: (_, row) => trace(usage[row.name], (p) => p.cpu,
                                         (v) => `${v.toFixed(1)}%`, '#6ea8d8'),
             },
             {
-              title: '記憶體', width: 130, align: 'right' as const,
+              title: '記憶體', width: 130, align: 'right' as const, responsive: ['lg'],
               render: (_, row) => trace(usage[row.name], (p) => p.memory,
                                         mib, '#7fb069'),
             },
             {
-              title: '網路', width: 150, align: 'right' as const,
+              title: '網路', width: 150, align: 'right' as const, responsive: ['xl'],
               render: (_, row) => {
                 const points = usage[row.name] ?? [];
                 const live = points.length ? points[points.length - 1] : null;

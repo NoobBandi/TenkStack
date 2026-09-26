@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  App as AntApp, Button, ConfigProvider, Dropdown, Layout, Space, Spin, Typography,
+  App as AntApp, Button, ConfigProvider, Drawer, Dropdown, Layout, Space, Spin, Typography,
 } from 'antd';
-import { LogoutOutlined, UserOutlined } from '@ant-design/icons';
+import { LogoutOutlined, MenuOutlined, UserOutlined } from '@ant-design/icons';
 import zhTW from 'antd/locale/zh_TW';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import Sidebar, { NAV_GROUPS, SIDEBAR_COLLAPSED, SIDEBAR_WIDTH } from './components/Sidebar';
+import Sidebar, { NAV_GROUPS, SIDEBAR_COLLAPSED, SIDEBAR_WIDTH, useNarrow } from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Models from './pages/Models';
@@ -57,6 +57,9 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('sider') === 'collapsed');
   const { gpus, models, system } = useStream();
+  // A phone or a narrow window: the sidebar becomes a drawer behind a button.
+  const narrow = useNarrow();
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('sider', collapsed ? 'collapsed' : 'expanded');
@@ -72,24 +75,47 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
     <ConfigProvider locale={zhTW} theme={darkTheme}>
       <AntApp>
         <Layout style={{ minHeight: '100vh' }}>
-          <Sidebar collapsed={collapsed} onCollapse={setCollapsed}
-                   gpus={gpus} models={models} system={system} />
+          {narrow ? (
+            <Drawer
+              open={drawerOpen}
+              onClose={() => setDrawerOpen(false)}
+              placement="left"
+              width={SIDEBAR_WIDTH}
+              closable={false}
+              styles={{ body: { padding: 0 } }}
+            >
+              <Sidebar collapsed={false} onCollapse={setCollapsed} drawer
+                       onNavigate={() => setDrawerOpen(false)}
+                       gpus={gpus} models={models} system={system} />
+            </Drawer>
+          ) : (
+            <Sidebar collapsed={collapsed} onCollapse={setCollapsed}
+                     gpus={gpus} models={models} system={system} />
+          )}
 
           {/* The sider is fixed, so the content needs the space reserved. */}
           <Layout style={{
-            marginInlineStart: collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_WIDTH,
+            marginInlineStart: narrow ? 0 : collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_WIDTH,
             transition: 'margin-inline-start 200ms',
+            minWidth: 0,
           }}>
             <Header style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              paddingInline: 24, position: 'sticky', top: 0, zIndex: 10,
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+              paddingInline: narrow ? 12 : 24, position: 'sticky', top: 0, zIndex: 10,
               borderBottom: `1px solid ${LINE.faint}`,
             }}>
-              <Title level={5} style={{
-                margin: 0, fontFamily: MONO, letterSpacing: 1, fontWeight: 400,
-              }}>
-                {TITLES[location.pathname] ?? 'TenkStack'}
-              </Title>
+              <Space size={8} style={{ minWidth: 0 }}>
+                {narrow && (
+                  <Button type="text" icon={<MenuOutlined />} aria-label="選單"
+                          onClick={() => setDrawerOpen(true)} />
+                )}
+                <Title level={5} style={{
+                  margin: 0, fontFamily: MONO, letterSpacing: 1, fontWeight: 400,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {TITLES[location.pathname] ?? 'TenkStack'}
+                </Title>
+              </Space>
               <Space size={16}>
                 {auth.identity ? (
                   <Dropdown
@@ -106,7 +132,7 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
               </Space>
             </Header>
 
-            <Content style={{ padding: 24 }}>
+            <Content style={{ padding: narrow ? 12 : 24, minWidth: 0 }}>
               <Routes>
                 {ROUTES.map(({ path, element }) => (
                   <Route key={path} path={path} element={element} />

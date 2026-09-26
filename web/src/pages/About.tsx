@@ -110,7 +110,7 @@ export default function About() {
       alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '24px 0 48px',
     }}>
       {/* The sidebar's mark, served from the console itself. */}
-      <img src="/logo.webp" alt="TenkStack" style={{ height: 96, display: 'block', opacity: 0.95 }} />
+      <img src="/logo.webp" alt="TenkStack" style={{ height: 96, maxWidth: '100%', objectFit: 'contain', display: 'block', opacity: 0.95 }} />
       <Text style={{ fontSize: 12, fontFamily: MONO, letterSpacing: 2, opacity: 0.45, marginTop: 14 }}>
         {version ? `v${version}` : ''}
       </Text>

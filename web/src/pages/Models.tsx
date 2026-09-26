@@ -726,6 +726,9 @@ export default function Models() {
           // Fixed: under auto the long filenames widened their column past
           // its width and the name was squeezed into three lines.
           tableLayout="fixed"
+          // On a narrow screen the table scrolls rather than squeezing the
+          // name to nothing; the file and TTL columns wait for a wide one.
+          scroll={{ x: 700 }}
           locale={{ emptyText: '設定檔中沒有模型' }}
           expandable={{
             expandedRowRender: (row) => (
@@ -764,7 +767,7 @@ export default function Models() {
               // different quantisations, which is now an ordinary thing to
               // have: the name, the description and the capabilities are all
               // identical between them, and only the file is not.
-              title: '模型檔', width: 300,
+              title: '模型檔', width: 300, responsive: ['xl'],
               render: (_, row) => {
                 const weights = row.weights ?? [];
                 if (weights.length === 0) return <Text type="secondary">—</Text>;
@@ -819,7 +822,7 @@ export default function Models() {
               render: (state: string) => <Tag color={STATE_COLOURS[state] ?? 'default'}>{stateLabel(state)}</Tag>,
             },
             {
-              title: 'TTL', dataIndex: 'ttl', width: 90,
+              title: 'TTL', dataIndex: 'ttl', width: 90, responsive: ['xl'],
               render: (ttl: number | null | undefined) => (ttl ? `${Math.round(ttl / 60)} 分` : '—'),
             },
             {
@@ -909,6 +912,10 @@ export default function Models() {
           size="small"
           pagination={false}
           showHeader={false}
+          // Fixed with a floor, so a narrow screen scrolls the table rather
+          // than folding the repo's name into a letter a line.
+          tableLayout="fixed"
+          scroll={{ x: 640 }}
           locale={{ emptyText: '模型位置裡沒有模型檔' }}
           // A repo with something unused in it is the one worth opening, so it
           // opens itself.
@@ -920,6 +927,7 @@ export default function Models() {
                 rowKey="filename"
                 size="small"
                 pagination={false}
+                scroll={{ x: 'max-content' }}
                 showHeader={false}
                 columns={[
                   {
@@ -1002,7 +1010,7 @@ export default function Models() {
               // What the repo is made of, which is the thing the flat list
               // could not say: two quants of the same weights and one projector
               // is a different situation from two unrelated models.
-              title: '內容', width: 250,
+              title: '內容', width: 250, responsive: ['lg'],
               render: (_, group) => (
                 <Space size={4} wrap>
                   {ROLE_ORDER.map((role) => [role, group.roles[role] ?? 0] as const)

@@ -207,6 +207,9 @@ export default function Connections() {
           rowKey={(row) => row.endpoint.key}
           size="small"
           pagination={false}
+          // Scrolls inside the card on a narrow screen rather than squeezing
+          // the addresses to a character a line.
+          scroll={{ x: 680 }}
           locale={{ emptyText: '讀取中…' }}
           columns={[
             {
@@ -241,7 +244,7 @@ export default function Connections() {
                       instead of two, and the bigger one. */}
                   {urls(row).map((url) => (
                     <Tooltip key={url} title="點一下複製">
-                      <Text code style={{ fontSize: 14, cursor: 'pointer' }}
+                      <Text code style={{ fontSize: 14, cursor: 'pointer', whiteSpace: 'nowrap' }}
                             onClick={() => copy(url)}>
                         {url}
                       </Text>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Button, DatePicker, Input, Segmented, Tooltip, Typography,
+  Button, DatePicker, Input, Segmented, Select, Tooltip, Typography,
 } from 'antd';
 import type { InputRef } from 'antd';
 import {
@@ -14,6 +14,8 @@ import {
 import { useStream } from '../stream';
 import LogList, { LEVEL_COLOUR, sourceColour } from '../components/logs/LogList';
 import { ACCENT, LINE, MONO } from '../theme';
+import { useMedia } from '../media';
+import { useNarrow } from '../components/Sidebar';
 
 const { Text } = Typography;
 
@@ -50,6 +52,9 @@ const stamp = (t: number) => dayjs(t * 1000).format('MM/DD HH:mm');
 export default function Logs() {
   const { requests } = useStream();
   const [sources, setSources] = useState<LogSources | null>(null);
+  // Below this the source list is a dropdown in the toolbar instead.
+  const sourcesBeside = useMedia('(min-width: 900px)');
+  const narrow = useNarrow();
   const [windowSec, setWindowSec] = useState(3600);
   const [custom, setCustom] = useState<[number, number] | null>(null);
   const [units, setUnits] = useState<Set<string>>(() => new Set());
@@ -186,12 +191,12 @@ export default function Logs() {
 
   return (
     <div style={{
-      height: 'calc(100vh - 56px - 48px)', display: 'flex',
+      height: narrow ? 'calc(100vh - 56px - 24px)' : 'calc(100vh - 56px - 48px)', display: 'flex',
       border: `1px solid ${LINE.faint}`, borderRadius: 8, overflow: 'hidden',
       background: 'rgba(255,255,255,0.015)',
     }}>
       {/* ---- sources ---------------------------------------------------- */}
-      <aside style={{
+      {sourcesBeside && <aside style={{
         width: SIDEBAR_W, flex: 'none', borderRight: `1px solid ${LINE.faint}`,
         display: 'flex', flexDirection: 'column', minHeight: 0,
       }}>
@@ -250,7 +255,7 @@ export default function Logs() {
             </div>
           )}
         </div>
-      </aside>
+      </aside>}
 
       {/* ---- main ----------------------------------------------------------- */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -274,6 +279,22 @@ export default function Logs() {
               onChange={(v) => { if (v && v[0] && v[1]) setCustom([v[0].unix(), v[1].unix()]); }}
             />
           )}
+          {!sourcesBeside && (
+            <Select
+              size="small"
+              mode="multiple"
+              allowClear
+              placeholder="全部來源"
+              maxTagCount="responsive"
+              value={[...units]}
+              onChange={(v: string[]) => setUnits(new Set(v))}
+              options={(sources?.sources ?? []).map((s) => ({
+                value: s.unit,
+                label: s.kind === 'container' ? `${s.label} ${s.unit.replace(/^comfyui-/, '')}` : s.label,
+              }))}
+              style={{ flex: '1 1 160px', minWidth: 0, maxWidth: 280 }}
+            />
+          )}
           <Input
             ref={search}
             size="small"
@@ -282,7 +303,7 @@ export default function Logs() {
             placeholder="搜尋這段時間（/）"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
-            style={{ width: 240, marginLeft: 'auto' }}
+            style={{ flex: '0 1 240px', minWidth: 140, marginLeft: 'auto' }}
           />
           <Tooltip title={windowSec > 0 ? (follow ? '暫停跟隨' : '跟隨新行') : '自訂區間不會有新行'}>
             <Button size="small" type={follow ? 'primary' : 'default'} ghost={follow}

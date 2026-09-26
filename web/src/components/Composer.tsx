@@ -206,8 +206,9 @@ export default function Composer({
             value={model}
             onChange={onModelChange}
             // Shrinks rather than forcing the row to wrap: on a narrow window a
-            // 190px minimum pushed the send button onto its own line.
-            style={{ minWidth: 110, maxWidth: 210 }}
+            // 190px minimum pushed the send button onto its own line, and on a
+            // phone even 110px pushed it off the edge.
+            style={{ flex: '0 1 210px', minWidth: 0 }}
             popupMatchSelectWidth={240}
             variant="borderless"
             options={models.map((m) => ({

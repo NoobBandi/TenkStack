@@ -352,7 +352,7 @@ export default function Engines() {
   const open = page.providers.find((p) => p.key === openKey) ?? null;
 
   const grid: React.CSSProperties = {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(300px, 100%), 1fr))', gap: 12,
   };
 
   return (

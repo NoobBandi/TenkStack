@@ -64,19 +64,23 @@ function Line({ label, note, right }: {
   label: React.ReactNode; note?: React.ReactNode; right: React.ReactNode;
 }) {
   return (
+    // Wraps: on a narrow screen the control goes under its label rather
+    // than squeezing the label to a word a line.
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 16, minHeight: 40,
-      padding: '8px 0', borderBottom: `1px solid ${LINE.faint}`,
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 16, rowGap: 8,
+      minHeight: 40, padding: '8px 0', borderBottom: `1px solid ${LINE.faint}`,
     }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: '1 1 240px', minWidth: 0 }}>
         <div style={{ fontSize: 13 }}>{label}</div>
         {note && (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 2, lineHeight: 1.6 }}>
+          <Text type="secondary" style={{
+            fontSize: 12, display: 'block', marginTop: 2, lineHeight: 1.6, overflowWrap: 'anywhere',
+          }}>
             {note}
           </Text>
         )}
       </div>
-      <div style={{ flex: 'none' }}>{right}</div>
+      <div style={{ flex: 'none', maxWidth: '100%' }}>{right}</div>
     </div>
   );
 }
@@ -531,7 +535,7 @@ function HuggingFaceCard() {
   };
 
   const form = (
-    <Space.Compact style={{ width: 360 }}>
+    <Space.Compact style={{ width: 360, maxWidth: '100%' }}>
       <Input.Password
         placeholder="hf_…"
         value={draft}

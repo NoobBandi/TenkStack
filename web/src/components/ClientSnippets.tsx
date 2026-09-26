@@ -560,7 +560,7 @@ print(resp.choices[0].message.content)`,
             holding the selection shows one -- Segmented renders nothing as
             chosen when its value is not among its options. */}
         {groups.map((g) => (
-          <Space key={g.key} size={10} wrap>
+          <div key={g.key} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <Text style={{ fontSize: 12, opacity: 0.6, width: 84, display: 'inline-block' }}>
               {/* Numbered once: the two rows are one choice, and numbering both
                   would make picking a tool look like two steps. */}
@@ -572,8 +572,10 @@ print(resp.choices[0].message.content)`,
               onChange={(v) => onTab(v as string)}
               options={snippets.filter((s) => s.group === g.key)
                 .map((s) => ({ label: s.label, value: s.key }))}
+              // Scrolls on a phone: five tools side by side are wider than it.
+              style={{ maxWidth: '100%', overflowX: 'auto' }}
             />
-          </Space>
+          </div>
         ))}
 
         <Paragraph type="secondary" style={{ fontSize: 12, margin: 0 }}>
