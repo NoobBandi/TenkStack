@@ -476,9 +476,8 @@ func installError(w http.ResponseWriter, err error) {
 	fail(w, http.StatusBadRequest, err.Error())
 }
 
-// setCardRole turns one of a card's two jobs on or off. Images are a
-// container; models are a launcher that belongs to a backend, so the first
-// On may be a pull and the switch may move two cards of one vendor.
+// setCardRole turns ComfyUI on or off on one card. Models are not a card's
+// switch: an engine is installed for a vendor on the engines page.
 func (s *Server) setCardRole(w http.ResponseWriter, r *http.Request) {
 	if _, d := s.Auth.RequireOwner(r); d != nil {
 		denied(w, d)
@@ -488,7 +487,6 @@ func (s *Server) setCardRole(w http.ResponseWriter, r *http.Request) {
 		Address    string `json:"pci_bdf_address"`
 		Capability string `json:"capability"`
 		On         bool   `json:"on"`
-		Variant    string `json:"variant"`
 	}
 	if err := readJSON(r, &in); err != nil {
 		fail(w, http.StatusUnprocessableEntity, "invalid JSON body")
@@ -523,29 +521,6 @@ func (s *Server) setCardRole(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, box := range held {
 			s.Docker.Control(ctx, box.Name, verb)
-		}
-		writeJSON(w, http.StatusOK, api.OK{OK: true})
-	case "llm":
-		vendor := cards[i].Vendor
-		if backends.RuntimeFor(vendor) != nil {
-			st := s.Installer.State(ctx, providers.LlamaCpp, vendor)
-			if in.On && !st.Managed {
-				variant := in.Variant
-				if variant == "" {
-					variant = "vendor"
-				}
-				rec, err := s.Installer.Install(ctx, providers.LlamaCpp, vendor, variant)
-				if err != nil {
-					installError(w, err)
-					return
-				}
-				writeJSON(w, http.StatusOK, rec)
-				return
-			}
-		}
-		if err := s.Installer.Enable(ctx, providers.LlamaCpp, vendor, in.On); err != nil {
-			installError(w, err)
-			return
 		}
 		writeJSON(w, http.StatusOK, api.OK{OK: true})
 	default:

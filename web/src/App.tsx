@@ -18,7 +18,6 @@ import Settings from './pages/Settings';
 import Gpu from './pages/Gpu';
 import Connections from './pages/Connections';
 import Logs from './pages/Logs';
-import Runtime from './pages/Runtime';
 import About from './pages/About';
 import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
@@ -39,7 +38,9 @@ const ROUTES = [
   { path: '/catalog', element: <Catalog /> },
   { path: '/engines', element: <Engines /> },
   { path: '/comfyui', element: <ComfyUI /> },
-  { path: '/runtime', element: <Runtime /> },
+  // The runtime page is gone: its switch was llama.cpp's install, now on
+  // the engines page. An old bookmark lands there.
+  { path: '/runtime', element: <Navigate to="/engines" replace /> },
   { path: '/files', element: <Files /> },
   { path: '/users', element: <Users /> },
   { path: '/gpu', element: <Gpu /> },

@@ -128,6 +128,8 @@ func TestAuthorization(t *testing.T) {
 		{"GET", "/api/settings/huggingface"},
 		{"PUT", "/api/settings/huggingface"},
 		{"DELETE", "/api/settings/huggingface"},
+		{"GET", "/api/search/service"},
+		{"POST", "/api/search/restart"},
 	} {
 		code, _ := call(asMember, c.method, c.path, map[string]any{})
 		expect("member "+c.method+" "+c.path, code, 403)

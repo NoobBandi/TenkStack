@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Layout, Menu, Tooltip, Typography } from 'antd';
 import {
-  ApiOutlined, AppstoreOutlined, CloudDownloadOutlined, ContainerOutlined,
+  ApiOutlined, AppstoreOutlined, CloudDownloadOutlined,
   DashboardOutlined, DeploymentUnitOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined,
   MessageOutlined, PictureOutlined, SettingOutlined, TeamOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -43,7 +43,6 @@ export const NAV_GROUPS = [
       { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
       { key: '/engines', icon: <DeploymentUnitOutlined />, label: '推論引擎' },
       { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
-      { key: '/runtime', icon: <ContainerOutlined />, label: '執行環境' },
       { key: '/connections', icon: <ApiOutlined />, label: '連線' },
       { key: '/logs', icon: <FileTextOutlined />, label: '日誌' },
       { key: '/users', icon: <TeamOutlined />, label: '使用者' },

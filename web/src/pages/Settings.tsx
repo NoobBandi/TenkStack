@@ -10,10 +10,11 @@ import LocationForm from '../components/LocationForm';
 import { bytes } from '../components/files/kit';
 import {
   addModelLocation, clearHuggingFace, fetchConfig, fetchHuggingFace, fetchMachine,
-  fetchModelLocations, fetchSettings, locationName, removeModelLocation, saveConfigRaw,
-  saveHuggingFace, saveSettings, setModelLocationDefaults, updateModelLocation,
+  fetchModelLocations, fetchSearchService, fetchSettings, locationName, removeModelLocation,
+  restartSearch, saveConfigRaw, saveHuggingFace, saveSettings, setModelLocationDefaults,
+  updateModelLocation,
   type HuggingFaceToken, type MachinePath, type MachineUnit, type ModelFormat, type ModelLocations,
-  type Setting,
+  type SearchService, type Setting,
 } from '../api';
 import { useIsOwner } from '../identity';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -469,7 +470,7 @@ function Advanced() {
                   />
                 ))}
                 <div style={{ marginTop: 14 }}>
-                  <Heading note="容器在「執行環境」頁">systemd 服務</Heading>
+                  <Heading>systemd 服務</Heading>
                   {units.map((unit) => (
                     <Line
                       key={unit.name}
@@ -491,6 +492,60 @@ function Advanced() {
         ]}
       />
     </Section>
+  );
+}
+
+/**
+ * The web search the agent uses, and a way to bring it back. It is a
+ * container of its own, and when it stops the chat quietly stops offering
+ * search -- so whether it answers is said here, beside the agent's settings,
+ * rather than on a page of containers.
+ */
+function SearchServiceLine() {
+  const { message } = AntApp.useApp();
+  const [svc, setSvc] = useState<SearchService | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    fetchSearchService().then(setSvc).catch(() => setSvc(null));
+  }, []);
+  useEffect(load, [load]);
+
+  const restart = async () => {
+    setBusy(true);
+    try {
+      await restartSearch();
+      message.success('已重啟搜尋服務');
+      // SearXNG takes a few seconds to answer after it starts.
+      window.setTimeout(load, 4000);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!svc) return null;
+  const tag = svc.available
+    ? <Tag color="green" style={{ marginInlineEnd: 0 }}>可以使用</Tag>
+    : svc.installed
+      ? <Tag color="error" style={{ marginInlineEnd: 0 }}>沒有回應</Tag>
+      : <Tag style={{ marginInlineEnd: 0 }}>未安裝</Tag>;
+  return (
+    <Line
+      label="網頁搜尋"
+      note={svc.installed
+        ? <>SearXNG，讓 Agent 能上網查資料。停掉時對話頁不會提供搜尋工具。{' '}<span style={{ fontFamily: MONO, opacity: 0.7 }}>{svc.unit ?? svc.container}</span></>
+        : '沒有安裝 SearXNG，對話頁不會提供搜尋工具。用 install.sh --searxng 重新安裝即可加上。'}
+      right={(
+        <Space size={8}>
+          <Tooltip title={svc.since || undefined}>{tag}</Tooltip>
+          {svc.installed && (
+            <Button size="small" loading={busy} onClick={() => void restart()}>重啟</Button>
+          )}
+        </Space>
+      )}
+    />
   );
 }
 
@@ -619,6 +674,7 @@ export default function Settings() {
           {section.names.map((name) => byName.get(name)).filter((s): s is Setting => !!s).map((s) => (
             <SettingRow key={s.name} setting={s} onSaved={setSettings} />
           ))}
+          {section.title === '對話' && <SearchServiceLine />}
         </Section>
       ))}
       <Advanced />

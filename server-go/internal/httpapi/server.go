@@ -128,6 +128,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/activity", s.readActivity)
 	mux.HandleFunc("GET /api/models/last-used", s.readLastUsed)
 	mux.HandleFunc("GET /api/containers/history", s.readContainerHistory)
+	mux.HandleFunc("GET /api/containers/orphaned", s.readOrphaned)
 
 	mux.HandleFunc("GET /api/models", s.readModels)
 	mux.HandleFunc("POST /api/models", s.createModel)
@@ -186,6 +187,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/search", s.webSearch)
 	mux.HandleFunc("GET /api/search/read", s.webRead)
 	mux.HandleFunc("GET /api/search/available", s.webAvailable)
+	mux.HandleFunc("GET /api/search/service", s.readSearchService)
+	mux.HandleFunc("POST /api/search/restart", s.restartSearch)
 	mux.HandleFunc("GET /v1/{path...}", s.proxyV1)
 	mux.HandleFunc("POST /v1/{path...}", s.proxyV1)
 	mux.HandleFunc("OPTIONS /v1/{path...}", s.proxyV1)
@@ -212,7 +215,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/runtimes/action", s.runtimeAction)
 
 	mux.HandleFunc("GET /api/backends/devices", s.readBackendDevices)
-	mux.HandleFunc("GET /api/runtime", s.readRuntime)
 	mux.HandleFunc("POST /api/runtime/container", s.runtimeContainer)
 	mux.HandleFunc("GET /api/flags/llama-server", s.readLlamaFlags)
 	mux.HandleFunc("GET /api/flags/comfyui", s.readComfyFlags)

@@ -155,13 +155,15 @@ Then the parts only real hardware can answer, and these are what a pull request
 should report:
 
 1. `/api/runtimes` lists your card with `llm` and `images` reflecting reality.
-2. Turning the model switch on installs and enables a launcher, and
-   `llama-server --list-devices` through it enumerates your card.
+2. Installing llama.cpp for your vendor on the 推論引擎 page installs and
+   enables a launcher, and `llama-server --list-devices` through it
+   enumerates your card.
 3. A model pinned to your card writes your selector into `config.yaml`, and
    the VRAM check before a load measures *your* card's free VRAM rather than
    device 0's.
 4. A ComfyUI container created on your card is claimed back by `Claims` — check
-   `/api/runtime` shows it holding the right card, not none and not two.
+   `/api/runtimes` shows it on your card's row, not on none and not on two,
+   and `/api/containers/orphaned` does not list it.
 5. Numbers: tokens/sec on a model you name, and VRAM at a stated context. State
    the quantisation. Without this nobody can tell a working port from one that
    silently fell back to the CPU.

@@ -287,6 +287,19 @@ export const webRead = (url: string, query = '') =>
 
 export const searchAvailable = () =>
   get<{ available: boolean }>('/search/available');
+
+/** How the agent's web search (SearXNG) runs here: a unit or a container. */
+export interface SearchService {
+  installed: boolean;
+  /** It answered just now. */
+  available: boolean;
+  unit?: string;
+  container?: string;
+  state: string;
+  since: string;
+}
+export const fetchSearchService = () => get<SearchService>('/search/service');
+export const restartSearch = () => send<{ ok: boolean }>('/search/restart', 'POST', {});
 export const fetchModels = () => get<ModelInfo[]>('/models');
 /** The model id of the most recent request, or null on a box with no history.
  *  For naming a model in a config file when none is loaded. */
@@ -664,14 +677,10 @@ export interface RuntimeCoverage {
   } | null;
 }
 
-export type RuntimeAction = 'install' | 'update' | 'enable' | 'disable' | 'remove';
-
 export const fetchRuntimes = () => get<RuntimeCoverage[]>('/runtimes');
 export const setCardRole = (
-  pci_bdf_address: string, capability: 'llm' | 'images', on: boolean,
-  variant?: string,
-) => send<unknown>('/runtimes/card', 'POST',
-  { pci_bdf_address, capability, on, variant });
+  pci_bdf_address: string, capability: 'images', on: boolean,
+) => send<unknown>('/runtimes/card', 'POST', { pci_bdf_address, capability, on });
 
 export const comfyAction = (
   name: string, action: 'update' | 'remove', delete_image = false,
@@ -683,11 +692,6 @@ export const engineAction = (
   provider: string, vendor: string, action: 'install' | 'update' | 'enable' | 'disable' | 'remove',
   options: { variant?: string; delete_image?: boolean } = {},
 ) => send<unknown>('/runtimes/action', 'POST', { provider, vendor, action, ...options });
-
-export const runtimeAction = (
-  vendor: string, action: RuntimeAction,
-  options: { variant?: string; delete_image?: boolean } = {},
-) => send<unknown>('/runtimes/action', 'POST', { vendor, action, ...options });
 
 /** One container's CPU and memory at one moment, read from cgroup. */
 export interface ContainerSample {
@@ -871,16 +875,8 @@ export interface RuntimeContainer {
   orphaned: boolean;
 }
 
-export interface RuntimeSurvey {
-  /** False when there is no Docker on this host at all. */
-  available: boolean;
-  containers: RuntimeContainer[];
-  /** Cards no container has claimed. Stated, not offered: creating one is
-   *  `docker run`, which the console deliberately cannot do. */
-  idle_gpus: RuntimeCard[];
-}
-
-export const fetchRuntime = () => get<RuntimeSurvey>('/runtime');
+/** Containers given a card this machine no longer has. */
+export const fetchOrphanedContainers = () => get<RuntimeContainer[]>('/containers/orphaned');
 export const controlContainer = (name: string, verb: 'restart' | 'start' | 'stop') =>
   send<{ ok: boolean }>('/runtime/container', 'POST', { name, verb });
 

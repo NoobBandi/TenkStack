@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Alert, Card, Collapse, Empty, Space, Tag, Tooltip, Typography } from 'antd';
-import { fetchGpuDevices, type GpuDevice, type GpuSample } from '../api';
+import {
+  fetchGpuDevices, fetchOrphanedContainers, type GpuDevice, type GpuSample, type RuntimeContainer,
+} from '../api';
 import { useStream } from '../stream';
 import { deviceTag } from '../hardware';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -173,6 +175,11 @@ export default function Gpu() {
   const { gpus } = useStream();
   const [devices, setDevices] = useState<GpuDevice[] | null>(null);
   const [open, setOpen] = useState<string[]>([]);
+  const [orphaned, setOrphaned] = useState<RuntimeContainer[]>([]);
+
+  useEffect(() => {
+    fetchOrphanedContainers().then(setOrphaned).catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     fetchGpuDevices()
@@ -207,6 +214,20 @@ export default function Gpu() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {/* A container given a card that is no longer in the machine: docker
+          keeps starting it, and nothing else says why it does nothing. */}
+      {orphaned.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          message="有容器指定的顯示卡不在這台機器上"
+          description={<>
+            {orphaned.map((c) => c.name).join('、')}
+            ：建立時指定的卡已經找不到（換過卡、或插槽位置變了），容器仍會啟動但用不到顯示卡。
+            ComfyUI 的容器到 ComfyUI 頁重建即可。
+          </>}
+        />
+      )}
       {/* Open to begin with, and remembered once closed. A row's header holds
           the readings and its body the specifications, and with two cards the
           two bodies are not a wall -- hiding them by default would mean two

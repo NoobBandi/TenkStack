@@ -53,10 +53,6 @@ func (s *Server) readBackendDevices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, backends.Match(usable, s.Gpu.ListDevices(r.Context())))
 }
 
-func (s *Server) readRuntime(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.Docker.Survey(r.Context(), cardsOf(s.Gpu.ListDevices(r.Context()))))
-}
-
 // runtimeContainer restarts one container. Owner-only: an API key pasted
 // into a chat client implies no right to bounce the image generator.
 func (s *Server) runtimeContainer(w http.ResponseWriter, r *http.Request) {

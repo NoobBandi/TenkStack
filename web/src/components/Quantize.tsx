@@ -188,7 +188,7 @@ export function QuantizeModal({ source, gpus, open, onClose, onStarted }: {
               showIcon
               message={
                 tool.state === 'building' ? '正在建立量化工具…'
-                  : tool.state === 'no-base' ? '先到「執行環境」安裝 vLLM'
+                  : tool.state === 'no-base' ? '先到「推論引擎」安裝 vLLM'
                     : tool.state === 'unsupported' ? '這張卡沒有 vLLM 的版本，量化工具建立不了'
                       : tool.state === 'error' ? '量化工具建立失敗' : '還沒有量化工具'
               }

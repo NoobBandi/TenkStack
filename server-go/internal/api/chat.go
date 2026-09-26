@@ -43,3 +43,16 @@ type SearchResponse struct {
 type Available struct {
 	Available bool `json:"available"`
 }
+
+// SearchService is how the agent's web search runs on this machine.
+type SearchService struct {
+	// Installed: a unit or a container for it exists.
+	Installed bool `json:"installed"`
+	// Available: it answered just now.
+	Available bool `json:"available"`
+	// One of these names what runs it.
+	Unit      string `json:"unit,omitempty"`
+	Container string `json:"container,omitempty"`
+	State     string `json:"state"`
+	Since     string `json:"since"`
+}
