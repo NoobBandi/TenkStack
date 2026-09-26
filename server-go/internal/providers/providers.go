@@ -53,6 +53,10 @@ type Build struct {
 	// MultiCard is what an entry spanning several of the vendor's cards
 	// needs on top of Flags.
 	MultiCard *MultiCard `yaml:"multi_card"`
+	// Precisions are the stored precisions (as hfmodel names them: bf16,
+	// fp8, int4, …) a model has been loaded in on this build. The catalog
+	// marks any other 未驗證 rather than refusing it.
+	Precisions []string `yaml:"precisions"`
 }
 
 // MultiCard is applied by the launcher only when an entry's card selector

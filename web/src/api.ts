@@ -577,6 +577,9 @@ export interface Runtime {
   /** Quantisations the runtime applies to bf16 weights as it loads them,
    *  from its own image. Empty for llama.cpp, whose quantisation is the file. */
   quantizations: { value: string; label: string; note: string; shrink: number }[];
+  /** Stored precisions a model has been loaded in on this runtime (bf16, fp8,
+   *  int4, …); any other is untested here rather than refused. */
+  precisions?: string[];
 }
 
 export interface ProvidersPage {
@@ -791,6 +794,12 @@ export interface DownloadStatus {
   state: string;
   error: string | null;
   mib_per_second: number;
+  /** A GGUF file, or a repository downloaded whole; a folder has no filename. */
+  kind?: 'file' | 'folder';
+  files?: number;
+  files_done?: number;
+  /** The file a folder download is on. */
+  current?: string;
 }
 
 /** What a GGUF would do on this machine, worked out from its header without
@@ -871,8 +880,43 @@ export const fetchRuntime = () => get<RuntimeSurvey>('/runtime');
 export const controlContainer = (name: string, verb: 'restart' | 'start' | 'stop') =>
   send<{ ok: boolean }>('/runtime/container', 'POST', { name, verb });
 
-export const searchCatalog = (q: string) =>
-  get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20`);
+/** What the catalog searches for: one GGUF file per model for llama.cpp, or a
+ *  repository of safetensors a server engine loads as a folder. */
+export type CatalogFormat = 'gguf' | 'safetensors';
+
+export const searchCatalog = (q: string, format: CatalogFormat = 'gguf') =>
+  get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20&format=${format}`);
+
+/** A repository as a server engine loads it: what it needs of it, and what
+ *  its config.json says the model is. */
+export interface CatalogFolder {
+  repo_id: string;
+  files: { name: string; size_bytes: number }[];
+  size_bytes: number;
+  size_gib: number;
+  /** It has safetensors weights and a config.json. */
+  loadable: boolean;
+  architecture: string;
+  /** bf16, fp16, fp8, int4, awq, gptq, … as the model page names them. */
+  precision: string;
+  quantized: boolean;
+  vision: boolean;
+  mtp: boolean;
+  context_length: number;
+  /** All of it is in `location`; otherwise `location` is where a download
+   *  would put it and `present_bytes` how much is already there. */
+  on_disk: boolean;
+  present_bytes: number;
+  location: string;
+  local_path: string;
+}
+
+export const catalogFolder = (repoId: string) =>
+  get<CatalogFolder>(`/catalog/folder?repo_id=${encodeURIComponent(repoId)}`);
+
+/** The whole repository; `location` left out is the safetensors default. */
+export const startFolderDownload = (repo_id: string, location?: string) =>
+  send<DownloadStatus>('/catalog/download', 'POST', { repo_id, folder: true, location });
 export const catalogFiles = (repoId: string) =>
   get<CatalogFile[]>(`/catalog/files?repo_id=${encodeURIComponent(repoId)}`);
 /** `location` is a model location's key; left out, the GGUF default. */

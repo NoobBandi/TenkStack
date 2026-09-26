@@ -248,6 +248,9 @@ type Runtime struct {
 	// Quantizations the runtime can apply to plain weights as it loads
 	// them: the record's, kept to those its image reports having.
 	Quantizations []Quantization `json:"quantizations"`
+	// Precisions a model has been loaded in on this runtime; empty when
+	// the record says nothing.
+	Precisions []string `json:"precisions"`
 }
 
 type Quantization struct {

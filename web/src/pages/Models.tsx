@@ -7,7 +7,7 @@ import {
   DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
   PoweroffOutlined, ReloadOutlined,
 } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useStream } from '../stream';
 import {
   deleteFile, deleteModel, deletePartial, fetchBackendDevices, fetchModelFiles,
@@ -279,6 +279,10 @@ export default function Models() {
    * configured, with nobody having to remember to switch it on.
    */
   const [devices, setDevices] = useState<BackendDevice[]>([]);
+  const [filesLoaded, setFilesLoaded] = useState(false);
+  const [devicesLoaded, setDevicesLoaded] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
   /**
    * The launchers a model can be started through. One is no question and the
    * picker stays hidden; a second -- vLLM beside llama.cpp -- decides which
@@ -337,7 +341,7 @@ export default function Models() {
 
   const refresh = useCallback(() => {
     refreshModels().catch(() => undefined);
-    fetchModelFiles().then(setFiles).catch(() => undefined);
+    fetchModelFiles().then(setFiles).catch(() => undefined).finally(() => setFilesLoaded(true));
     fetchModelLocations().then((l) => setLocations(l.locations)).catch(() => undefined);
     fetchPartials().then(setPartials).catch(() => undefined);
   }, [refreshModels]);
@@ -367,7 +371,8 @@ export default function Models() {
   const quantDone = quantJobs.filter((j) => j.state !== 'running').length;
   useEffect(() => { if (quantDone) refresh(); }, [quantDone, refresh]);
   useEffect(() => {
-    fetchBackendDevices().then(setDevices).catch(() => setDevices([]));
+    fetchBackendDevices().then(setDevices).catch(() => setDevices([]))
+      .finally(() => setDevicesLoaded(true));
     fetchProviders().then((p) => { setRuntimes(p.runtimes); setEngineCards(p.providers); })
       .catch(() => setRuntimes([]));
   }, []);
@@ -384,6 +389,40 @@ export default function Models() {
       form.setFieldValue('extra', recommendedFlags(formEngine?.recommended, picked.architecture, current?.vendor).join('\n'));
     }
   };
+
+  // Arrived from the catalog with a folder it just downloaded: a new entry
+  // for it, filled in the way the catalog's estimate suggested. Once the
+  // launchers, the files and the cards are known, and only once -- the
+  // state is cleared so a reload does not open the form again.
+  useEffect(() => {
+    const create = (location.state as { create?: {
+      runtime: string; model_file: string; repo: string; cards: number;
+      quantization: string; context: number;
+    } } | null)?.create;
+    if (!create || runtimes.length === 0 || !filesLoaded || !devicesLoaded) return;
+    const rt = runtimes.find((r) => r.macro === create.runtime);
+    if (!rt) return;
+    const engine = engineCards.find((e) => e.key === rt.provider);
+    const picked = files.find((f) => f.filename === create.model_file);
+    const base = create.repo.split('/').pop() ?? create.repo;
+    form.setFieldsValue({
+      ...EMPTY,
+      runtime: rt.macro,
+      model_file: create.model_file,
+      id: base.toLowerCase().replace(/[^a-z0-9.-]+/g, '-'),
+      name: base,
+      device: devices.slice(0, create.cards).map((d) => `${d.backend}:${d.index}`),
+      quantization: create.quantization,
+      // A context the cards can hold with room to spare; raised here when
+      // the estimate said there is room.
+      ctx_size: create.context ? Math.min(create.context, 32768) : EMPTY.ctx_size,
+      extra: recommendedFlags(engine?.recommended, picked?.architecture, rt.vendor).join('\n'),
+    });
+    setEditing(null);
+    setOpen(true);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, runtimes, engineCards, files, filesLoaded, devices,
+      devicesLoaded, form, navigate]);
 
   const onRuntime = (macro: string) => {
     const next = runtimes.find((r) => r.macro === macro);

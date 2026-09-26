@@ -1,11 +1,15 @@
-// Package catalog searches Hugging Face and downloads GGUF files. Downloads
-// are segmented because one TCP stream to the CDN could not exceed about
-// 8 MiB/s here while seven reached 41; the limit is the bandwidth-delay
-// product of one connection, not the server.
+// Package catalog searches Hugging Face and downloads models: a GGUF file
+// for llama.cpp, or a whole repository of safetensors for a server engine
+// such as vLLM. Downloads are segmented because one TCP stream to the CDN
+// could not exceed about 8 MiB/s here while seven reached 41; the limit is
+// the bandwidth-delay product of one connection, not the server. Every file
+// the Hub lists a sha256 for is checked against it before it is kept.
 package catalog
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,11 +31,12 @@ import (
 	"time"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
+	"github.com/NoobBandi/TenkStack/server-go/internal/hfmodel"
 	"github.com/NoobBandi/TenkStack/server-go/internal/locations"
 )
 
 const (
-	hfAPI       = "https://huggingface.co/api"
+	huggingFace = "https://huggingface.co"
 	chunk       = 1 << 20
 	segmentSize = 32 << 20 // resumable unit: little lost, negligible overhead
 	parallel    = 8        // past this the gain flattens while throttling odds rise
@@ -46,7 +51,9 @@ type Places interface {
 
 type Catalog struct {
 	Places Places
-	http   *http.Client
+	// Hub is Hugging Face's address; a test points it elsewhere.
+	Hub  string
+	http *http.Client
 
 	mu        sync.Mutex
 	downloads map[string]*download
@@ -54,7 +61,7 @@ type Catalog struct {
 }
 
 func New(places Places) *Catalog {
-	return &Catalog{Places: places, http: &http.Client{Timeout: 20 * time.Second}, downloads: map[string]*download{}}
+	return &Catalog{Places: places, Hub: huggingFace, http: &http.Client{Timeout: 20 * time.Second}, downloads: map[string]*download{}}
 }
 
 // safe keeps a repo or file segment usable as a directory name: traversal
@@ -91,13 +98,21 @@ func relPath(repoID, filename string) string {
 	return filepath.Join(segments...)
 }
 
-// Search lists GGUF repos, sorted by downloads, a hundred at a time since
-// the page pages through them locally.
-func (c *Catalog) Search(ctx context.Context, query string, limit int) []api.CatalogRepo {
+// Formats are the file formats the catalog can search for.
+var Formats = []string{"gguf", "safetensors"}
+
+// Search lists repos of one format, sorted by downloads, a hundred at a
+// time since the page pages through them locally. A repository of GGUF
+// files also carries a few safetensors now and then; those are left out of
+// a safetensors search, which is for a model an engine loads as a folder.
+func (c *Catalog) Search(ctx context.Context, query string, limit int, format string) []api.CatalogRepo {
 	out := []api.CatalogRepo{}
+	if format != "safetensors" {
+		format = "gguf"
+	}
 	q := url.Values{}
 	q.Set("search", query)
-	q.Set("filter", "gguf")
+	q.Set("filter", format)
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("sort", "downloads")
 	q.Set("direction", "-1")
@@ -106,7 +121,7 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int) []api.Cat
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, hfAPI+"/models?"+q.Encode(), nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/api/models?"+q.Encode(), nil)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		log.Printf("HF search failed: %v", err)
@@ -122,6 +137,9 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int) []api.Cat
 		return out
 	}
 	for _, m := range repos {
+		if format == "safetensors" && notForServer(m) {
+			continue
+		}
 		tags := []any{}
 		if list, _ := m["tags"].([]any); list != nil {
 			for _, t := range list {
@@ -143,6 +161,24 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int) []api.Cat
 		out = append(out, r)
 	}
 	return out
+}
+
+// notForServer is a repository a server engine cannot load as a folder even
+// though it holds safetensors: GGUF files with a few extras, or an export for
+// Apple's MLX, whose tensors are laid out for that runtime only.
+func notForServer(m map[string]any) bool {
+	id, _ := m["id"].(string)
+	lower := strings.ToLower(id)
+	if strings.HasSuffix(lower, "gguf") || strings.Contains(lower, "-mlx") {
+		return true
+	}
+	list, _ := m["tags"].([]any)
+	for _, t := range list {
+		if s, _ := t.(string); s == "gguf" || s == "mlx" {
+			return true
+		}
+	}
+	return false
 }
 
 // A model too large for one file is uploaded as …-00001-of-00003.gguf.
@@ -241,52 +277,194 @@ func (c *Catalog) groupSplits(raw [][2]any, repoID string) []api.CatalogFile {
 	return out
 }
 
-// ListFiles is the GGUF files in a repo with sizes, so the UI can warn
-// before a 40 GiB pull.
-func (c *Catalog) ListFiles(ctx context.Context, repoID string) []api.CatalogFile {
+// remoteFile is one file of a repository as the Hub lists it.
+type remoteFile struct {
+	Name string
+	Size int64
+	// SHA256 is the Hub's own digest of an LFS file, which every weight
+	// file is; empty for a small file kept in git.
+	SHA256 string
+}
+
+// remoteFiles lists a repository's files with sizes and digests.
+func (c *Catalog) remoteFiles(ctx context.Context, repoID string) ([]remoteFile, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, hfAPI+"/models/"+repoID+"?blobs=true", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/api/models/"+repoID+"?blobs=true", nil)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		log.Printf("HF file listing for %s failed: %v", repoID, err)
-		return []api.CatalogFile{}
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		log.Printf("HF file listing for %s failed: HTTP %d", repoID, resp.StatusCode)
-		return []api.CatalogFile{}
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	var data struct {
 		Siblings []struct {
 			Name string `json:"rfilename"`
 			Size *int64 `json:"size"`
+			LFS  *struct {
+				SHA256 string `json:"sha256"`
+				Size   int64  `json:"size"`
+			} `json:"lfs"`
 		} `json:"siblings"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&data) != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+	out := make([]remoteFile, 0, len(data.Siblings))
+	for _, s := range data.Siblings {
+		f := remoteFile{Name: s.Name}
+		if s.Size != nil {
+			f.Size = *s.Size
+		}
+		if s.LFS != nil {
+			f.SHA256 = s.LFS.SHA256
+			if f.Size == 0 {
+				f.Size = s.LFS.Size
+			}
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// ListFiles is the GGUF files in a repo with sizes, so the UI can warn
+// before a 40 GiB pull.
+func (c *Catalog) ListFiles(ctx context.Context, repoID string) []api.CatalogFile {
+	files, err := c.remoteFiles(ctx, repoID)
+	if err != nil {
+		log.Printf("HF file listing for %s failed: %v", repoID, err)
 		return []api.CatalogFile{}
 	}
 	var raw [][2]any
-	for _, s := range data.Siblings {
-		if !strings.HasSuffix(strings.ToLower(s.Name), ".gguf") {
-			continue
+	for _, f := range files {
+		if strings.HasSuffix(strings.ToLower(f.Name), ".gguf") {
+			raw = append(raw, [2]any{f.Name, f.Size})
 		}
-		var size int64
-		if s.Size != nil {
-			size = *s.Size
-		}
-		raw = append(raw, [2]any{s.Name, size})
 	}
 	return c.groupSplits(raw, repoID)
 }
 
+// folderFiles is what a server engine needs of a repository: the weights,
+// every config and tokenizer file, the chat template and any code the
+// model class ships. Left out: a second copy of the weights in an older
+// format, the original checkpoints some publishers add under original/,
+// GGUF and ONNX exports, and pictures for the model card.
+func folderFiles(all []remoteFile) []remoteFile {
+	hasSafetensors := false
+	for _, f := range all {
+		if strings.HasSuffix(strings.ToLower(f.Name), ".safetensors") {
+			hasSafetensors = true
+		}
+	}
+	var out []remoteFile
+	for _, f := range all {
+		lower := strings.ToLower(f.Name)
+		dir := strings.SplitN(lower, "/", 2)[0]
+		if strings.Contains(lower, "/") && (dir == "original" || dir == "consolidated" || dir == "onnx" ||
+			dir == "gguf" || dir == "images" || dir == "assets" || dir == "figures") {
+			continue
+		}
+		base := path.Base(lower)
+		if strings.HasPrefix(base, ".") || strings.HasPrefix(base, "consolidated") || base == "readme.md" {
+			continue
+		}
+		switch path.Ext(base) {
+		case ".gguf", ".onnx", ".onnx_data", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".mp4", ".pdf":
+			continue
+		case ".bin", ".pt", ".pth", ".ckpt", ".h5", ".msgpack":
+			if hasSafetensors {
+				continue
+			}
+		}
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// Folder is a repository as a server engine would load it: what it needs of
+// it, what its config says the model is, and whether it is on disk.
+func (c *Catalog) Folder(ctx context.Context, repoID string) (api.CatalogFolder, error) {
+	all, err := c.remoteFiles(ctx, repoID)
+	if err != nil {
+		return api.CatalogFolder{}, err
+	}
+	files := folderFiles(all)
+	out := api.CatalogFolder{RepoID: repoID, Files: []api.CatalogFolderFile{}}
+	hasWeights := false
+	for _, f := range files {
+		out.Files = append(out.Files, api.CatalogFolderFile{Name: f.Name, SizeBytes: f.Size})
+		out.SizeBytes += f.Size
+		if strings.HasSuffix(strings.ToLower(f.Name), ".safetensors") {
+			hasWeights = true
+		}
+	}
+	out.SizeGiB = gib(out.SizeBytes)
+	out.Loadable = hasWeights
+	if raw, err := c.fetchSmall(ctx, repoID, "config.json"); err == nil {
+		cfg := hfmodel.Parse(raw)
+		out.Architecture, out.Precision, out.Quantized = cfg.Architecture, cfg.Precision, cfg.Quantized
+		out.Vision, out.MTP, out.ContextLength = cfg.Vision, cfg.MTP, cfg.ContextLength
+	} else {
+		out.Loadable = false
+	}
+	// On disk when every file is where a download would have put it, at its
+	// size, in one location; otherwise where the default would put it, and
+	// how much of it is already there.
+	home := c.Places.DefaultLocation("safetensors")
+	for _, loc := range c.Places.Locations() {
+		have := int64(0)
+		for _, f := range files {
+			if st, err := os.Stat(LocalPath(loc, repoID, f.Name)); err == nil && st.Size() == f.Size {
+				have += f.Size
+			}
+		}
+		if have > 0 && have == out.SizeBytes {
+			home, out.OnDisk, out.PresentBytes = loc, true, have
+			break
+		}
+		if loc.Key == home.Key {
+			out.PresentBytes = have
+		}
+	}
+	out.Location = home.Key
+	out.LocalPath = locations.Ref(home.Key, filepath.ToSlash(relPath(repoID, "")))
+	return out, nil
+}
+
+// fetchSmall reads a small file of a repository whole.
+func (c *Catalog) fetchSmall(ctx context.Context, repoID, name string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/"+repoID+"/resolve/main/"+name, nil)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+}
+
 type download struct {
 	repoID, filename string
-	location         locations.Location
-	total, done      int64
-	state            string
-	err              string
-	startedAt        time.Time
+	// files is set for a whole repository, a server engine's folder; a
+	// single GGUF has none and is filename.
+	files       []remoteFile
+	location    locations.Location
+	total, done int64
+	// base is the bytes of the files already finished, which a file's own
+	// progress is counted on top of.
+	base      int64
+	filesDone int
+	current   string
+	state     string
+	err       string
+	startedAt time.Time
 	// resumed is what was on disk when this run began, excluded from the
 	// rate so a resume does not report an inflated speed.
 	resumed int64
@@ -309,12 +487,22 @@ func (d *download) snapshot() api.Download {
 	out := api.Download{RepoID: d.repoID, Filename: d.filename, Location: d.location.Key,
 		LocalPath:  locations.Ref(d.location.Key, filepath.ToSlash(relPath(d.repoID, d.filename))),
 		TotalBytes: d.total, DownloadedBytes: d.done,
-		Percent: percent, State: d.state, MiBPerSecond: math.RoundToEven(float64(fresh)/elapsed/1024/1024*10) / 10}
+		Percent: percent, State: d.state, MiBPerSecond: math.RoundToEven(float64(fresh)/elapsed/1024/1024*10) / 10,
+		Kind: "file"}
+	if d.files != nil {
+		out.Kind, out.Files, out.FilesDone, out.Current = "folder", len(d.files), d.filesDone, d.current
+	}
 	if d.err != "" {
 		e := d.err
 		out.Error = &e
 	}
 	return out
+}
+
+// active is a download still running: queued, fetching, or checking what
+// it fetched.
+func (d *download) active() bool {
+	return d.state == "queued" || d.state == "downloading" || d.state == "verifying"
 }
 
 func key(repoID, filename string) string { return repoID + "/" + filename }
@@ -327,7 +515,27 @@ func (e *UnknownLocation) Error() string { return "沒有這個下載位置：" 
 // Start begins a download into a location -- the GGUF default when none
 // is named -- or reports the one already running for that file.
 func (c *Catalog) Start(repoID, filename, location string) (api.Download, error) {
-	loc := c.Places.DefaultLocation("gguf")
+	return c.start(repoID, filename, nil, location, "gguf")
+}
+
+// StartFolder begins downloading what a server engine needs of a
+// repository, into a location -- the safetensors default when none is
+// named -- or reports the one already running for it. Files already there
+// at their size are kept.
+func (c *Catalog) StartFolder(ctx context.Context, repoID, location string) (api.Download, error) {
+	all, err := c.remoteFiles(ctx, repoID)
+	if err != nil {
+		return api.Download{}, fmt.Errorf("讀不到 %s 的檔案清單：%w", repoID, err)
+	}
+	files := folderFiles(all)
+	if len(files) == 0 {
+		return api.Download{}, fmt.Errorf("%s 沒有可以下載的模型檔案", repoID)
+	}
+	return c.start(repoID, "", files, location, "safetensors")
+}
+
+func (c *Catalog) start(repoID, filename string, files []remoteFile, location, format string) (api.Download, error) {
+	loc := c.Places.DefaultLocation(format)
 	if location != "" {
 		found := false
 		for _, l := range c.Places.Locations() {
@@ -342,11 +550,11 @@ func (c *Catalog) Start(repoID, filename, location string) (api.Download, error)
 	k := key(repoID, filename)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if existing, ok := c.downloads[k]; ok && (existing.state == "queued" || existing.state == "downloading") {
+	if existing, ok := c.downloads[k]; ok && existing.active() {
 		return existing.snapshot(), nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &download{repoID: repoID, filename: filename, location: loc, state: "queued", startedAt: time.Now(), cancel: cancel}
+	d := &download{repoID: repoID, filename: filename, files: files, location: loc, state: "queued", startedAt: time.Now(), cancel: cancel}
 	if _, ok := c.downloads[k]; !ok {
 		c.order = append(c.order, k)
 	}
@@ -361,7 +569,7 @@ func (c *Catalog) ActiveIn(location string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, d := range c.downloads {
-		if d.location.Key == location && (d.state == "queued" || d.state == "downloading") {
+		if d.location.Key == location && d.active() {
 			return true
 		}
 	}
@@ -372,7 +580,7 @@ func (c *Catalog) Cancel(repoID, filename string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	d, ok := c.downloads[key(repoID, filename)]
-	if !ok || (d.state != "queued" && d.state != "downloading") {
+	if !ok || !d.active() {
 		return false
 	}
 	d.cancel()
@@ -396,7 +604,7 @@ func (c *Catalog) ActiveCount() int {
 	defer c.mu.Unlock()
 	n := 0
 	for _, d := range c.downloads {
-		if d.state == "queued" || d.state == "downloading" {
+		if d.active() {
 			n++
 		}
 	}
@@ -537,128 +745,11 @@ func (c *Catalog) set(d *download, fn func()) {
 }
 
 func (c *Catalog) run(ctx context.Context, d *download) {
-	url := "https://huggingface.co/" + d.repoID + "/resolve/main/" + d.filename
-	target := LocalPath(d.location, d.repoID, d.filename)
-	partial := target + ".part"
-	statePath := partial + ".state"
 	c.set(d, func() { d.state = "downloading"; d.startedAt = time.Now() })
-
-	err := func() error {
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		client := &http.Client{Timeout: 0, Transport: &http.Transport{MaxConnsPerHost: parallel + 2,
-			MaxIdleConnsPerHost: parallel, ResponseHeaderTimeout: 30 * time.Second}}
-		total, err := totalSize(ctx, client, url)
-		if err != nil {
-			return err
-		}
-		if total <= 0 {
-			return errors.New("could not determine the remote file size")
-		}
-		segments := int((total + segmentSize - 1) / segmentSize)
-		done := loadDone(statePath, partial, segments, total)
-		var have int64
-		for i := range done {
-			end := int64(i+1) * segmentSize
-			if end > total {
-				end = total
-			}
-			have += end - int64(i)*segmentSize
-		}
-		if len(done) > 0 {
-			log.Printf("resuming %s with %d/%d segments already present", d.filename, len(done), segments)
-		}
-		c.set(d, func() { d.total = total; d.done = have; d.resumed = have })
-
-		f, err := os.OpenFile(partial, os.O_RDWR|os.O_CREATE, 0o644)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		// Sparse until written, so preallocating costs no disk up front.
-		if err := f.Truncate(total); err != nil {
-			return err
-		}
-		pending := make(chan int, segments)
-		for i := 0; i < segments; i++ {
-			if !done[i] {
-				pending <- i
-			}
-		}
-		close(pending)
-		var ledgerMu sync.Mutex
-		var wg sync.WaitGroup
-		var firstErr error
-		var errMu sync.Mutex
-		workers := parallel
-		if segments < workers {
-			workers = segments
-		}
-		workCtx, stop := context.WithCancel(ctx)
-		defer stop()
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for index := range pending {
-					if workCtx.Err() != nil {
-						return
-					}
-					var err error
-					for attempt := 0; attempt < 3; attempt++ {
-						err = c.fetchSegment(workCtx, client, url, f, index, total, d)
-						if err == nil || workCtx.Err() != nil {
-							break
-						}
-						log.Printf("segment %d of %s failed (%v); retrying", index, d.filename, err)
-						select {
-						case <-workCtx.Done():
-							return
-						case <-time.After(time.Duration(1+attempt) * time.Second):
-						}
-					}
-					if err != nil {
-						errMu.Lock()
-						if firstErr == nil {
-							firstErr = err
-						}
-						errMu.Unlock()
-						stop()
-						return
-					}
-					ledgerMu.Lock()
-					done[index] = true
-					saveDone(statePath, done, total)
-					ledgerMu.Unlock()
-				}
-			}()
-		}
-		wg.Wait()
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if firstErr != nil {
-			return firstErr
-		}
-		// Two independent checks: the ledger proves every range was fetched,
-		// the allocated size proves the writes reached the disk.
-		if missing := segments - len(done); missing > 0 {
-			return fmt.Errorf("%d/%d 個段落未完成", missing, segments)
-		}
-		if actual := materialised(partial); float64(actual) < float64(total)*0.99 {
-			return fmt.Errorf("檔案不完整：實際寫入 %.2f GiB，應為 %.2f GiB", float64(actual)/(1<<30), float64(total)/(1<<30))
-		}
-		f.Close()
-		if err := os.Rename(partial, target); err != nil {
-			return err
-		}
-		os.Remove(statePath)
-		c.set(d, func() { d.done = total; d.state = "done" })
-		log.Printf("downloaded %s (%.1f GiB)", filepath.Base(target), float64(total)/(1<<30))
-		return nil
-	}()
+	err := c.fetchAll(ctx, d)
 	if err == nil {
+		c.set(d, func() { d.done = d.total; d.state = "done"; d.current = "" })
+		log.Printf("downloaded %s (%.1f GiB)", path.Join(d.repoID, d.filename), float64(d.total)/(1<<30))
 		return
 	}
 	if errors.Is(err, context.Canceled) {
@@ -667,5 +758,212 @@ func (c *Catalog) run(ctx context.Context, d *download) {
 		return
 	}
 	c.set(d, func() { d.state = "error"; d.err = err.Error() })
-	log.Printf("download of %s failed: %v", d.filename, err)
+	log.Printf("download of %s failed: %v", path.Join(d.repoID, d.filename), err)
+}
+
+// fetchAll fetches a download's files one after another, each in parallel
+// segments. A single GGUF is looked up in the listing for its digest; if
+// the listing cannot be read it is fetched unchecked, as before.
+func (c *Catalog) fetchAll(ctx context.Context, d *download) error {
+	files := d.files
+	if files == nil {
+		files = []remoteFile{{Name: d.filename}}
+		if listed, err := c.remoteFiles(ctx, d.repoID); err == nil {
+			for _, f := range listed {
+				if f.Name == d.filename {
+					files[0] = f
+				}
+			}
+		}
+	} else {
+		var total int64
+		for _, f := range files {
+			total += f.Size
+		}
+		c.set(d, func() { d.total = total })
+	}
+	client := &http.Client{Timeout: 0, Transport: &http.Transport{MaxConnsPerHost: parallel + 2,
+		MaxIdleConnsPerHost: parallel, ResponseHeaderTimeout: 30 * time.Second}}
+	for _, f := range files {
+		target := LocalPath(d.location, d.repoID, f.Name)
+		if st, err := os.Stat(target); err == nil && d.files != nil && f.Size > 0 && st.Size() == f.Size {
+			c.set(d, func() { d.base += f.Size; d.done = d.base; d.resumed += f.Size; d.filesDone++ })
+			continue
+		}
+		c.set(d, func() { d.current = f.Name })
+		if err := c.fetchFile(ctx, client, d, f, target); err != nil {
+			if d.files != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("%s：%w", f.Name, err)
+			}
+			return err
+		}
+		c.set(d, func() { d.filesDone++ })
+	}
+	return nil
+}
+
+// fetchFile fetches one file in parallel segments into a .part beside its
+// target, checks it, and moves it into place.
+func (c *Catalog) fetchFile(ctx context.Context, client *http.Client, d *download, f remoteFile, target string) error {
+	url := c.Hub + "/" + d.repoID + "/resolve/main/" + f.Name
+	partial := target + ".part"
+	statePath := partial + ".state"
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	total, err := totalSize(ctx, client, url)
+	if err != nil {
+		return err
+	}
+	if total <= 0 {
+		// An empty file is a real file (an __init__.py, say): made, not fetched.
+		if total == 0 && d.files != nil {
+			return os.WriteFile(target, nil, 0o644)
+		}
+		return errors.New("could not determine the remote file size")
+	}
+	segments := int((total + segmentSize - 1) / segmentSize)
+	done := loadDone(statePath, partial, segments, total)
+	var have int64
+	for i := range done {
+		end := int64(i+1) * segmentSize
+		if end > total {
+			end = total
+		}
+		have += end - int64(i)*segmentSize
+	}
+	if len(done) > 0 {
+		log.Printf("resuming %s with %d/%d segments already present", f.Name, len(done), segments)
+	}
+	c.set(d, func() {
+		if d.files == nil {
+			d.total = total
+		}
+		d.done = d.base + have
+		d.resumed += have
+	})
+
+	file, err := os.OpenFile(partial, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	// Sparse until written, so preallocating costs no disk up front.
+	if err := file.Truncate(total); err != nil {
+		return err
+	}
+	pending := make(chan int, segments)
+	for i := 0; i < segments; i++ {
+		if !done[i] {
+			pending <- i
+		}
+	}
+	close(pending)
+	var ledgerMu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	workers := parallel
+	if segments < workers {
+		workers = segments
+	}
+	workCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range pending {
+				if workCtx.Err() != nil {
+					return
+				}
+				var err error
+				for attempt := 0; attempt < 3; attempt++ {
+					err = c.fetchSegment(workCtx, client, url, file, index, total, d)
+					if err == nil || workCtx.Err() != nil {
+						break
+					}
+					log.Printf("segment %d of %s failed (%v); retrying", index, f.Name, err)
+					select {
+					case <-workCtx.Done():
+						return
+					case <-time.After(time.Duration(1+attempt) * time.Second):
+					}
+				}
+				if err != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					errMu.Unlock()
+					stop()
+					return
+				}
+				ledgerMu.Lock()
+				done[index] = true
+				saveDone(statePath, done, total)
+				ledgerMu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	// Two independent checks: the ledger proves every range was fetched,
+	// the allocated size proves the writes reached the disk.
+	if missing := segments - len(done); missing > 0 {
+		return fmt.Errorf("%d/%d 個段落未完成", missing, segments)
+	}
+	if actual := materialised(partial); float64(actual) < float64(total)*0.99 {
+		return fmt.Errorf("檔案不完整：實際寫入 %.2f GiB，應為 %.2f GiB", float64(actual)/(1<<30), float64(total)/(1<<30))
+	}
+	// And the one that proves the bytes are the right ones.
+	if f.SHA256 != "" {
+		c.set(d, func() { d.state = "verifying" })
+		sum, err := sha256Of(ctx, partial)
+		if err != nil {
+			return err
+		}
+		if sum != f.SHA256 {
+			os.Remove(partial)
+			os.Remove(statePath)
+			return fmt.Errorf("校驗不符（sha256 %s，應為 %s），已刪除，重新下載即可", sum[:12], f.SHA256[:12])
+		}
+		c.set(d, func() { d.state = "downloading" })
+	}
+	file.Close()
+	if err := os.Rename(partial, target); err != nil {
+		return err
+	}
+	os.Remove(statePath)
+	c.set(d, func() { d.base += total; d.done = d.base })
+	return nil
+}
+
+// sha256Of hashes a file, stopping when asked to.
+func sha256Of(ctx context.Context, p string) (string, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	buf := make([]byte, 4<<20)
+	for {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		n, err := f.Read(buf)
+		h.Write(buf[:n])
+		if err == io.EOF {
+			return hex.EncodeToString(h.Sum(nil)), nil
+		}
+		if err != nil {
+			return "", err
+		}
+	}
 }

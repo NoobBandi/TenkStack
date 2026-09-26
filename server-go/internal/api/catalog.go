@@ -34,7 +34,40 @@ type Download struct {
 	TotalBytes      int64   `json:"total_bytes"`
 	DownloadedBytes int64   `json:"downloaded_bytes"`
 	Percent         float64 `json:"percent"`
-	State           string  `json:"state"` // queued, downloading, done, error, cancelled
+	State           string  `json:"state"` // queued, downloading, verifying, done, error, cancelled
 	Error           *string `json:"error"`
 	MiBPerSecond    float64 `json:"mib_per_second"`
+	// Kind is file for a GGUF, folder for a repository a server engine
+	// loads whole; a folder's Filename is empty.
+	Kind      string `json:"kind"`
+	Files     int    `json:"files"`
+	FilesDone int    `json:"files_done"`
+	Current   string `json:"current"`
+}
+
+// CatalogFolder is a repository as a server engine loads it.
+type CatalogFolder struct {
+	RepoID    string              `json:"repo_id"`
+	Files     []CatalogFolderFile `json:"files"`
+	SizeBytes int64               `json:"size_bytes"`
+	SizeGiB   float64             `json:"size_gib"`
+	// Loadable: it has safetensors weights and a config.json.
+	Loadable      bool   `json:"loadable"`
+	Architecture  string `json:"architecture"`
+	Precision     string `json:"precision"`
+	Quantized     bool   `json:"quantized"`
+	Vision        bool   `json:"vision"`
+	MTP           bool   `json:"mtp"`
+	ContextLength int    `json:"context_length"`
+	// OnDisk: all of it is in Location. Otherwise Location is where a
+	// download would put it and PresentBytes how much of it is there.
+	OnDisk       bool   `json:"on_disk"`
+	PresentBytes int64  `json:"present_bytes"`
+	Location     string `json:"location"`
+	LocalPath    string `json:"local_path"`
+}
+
+type CatalogFolderFile struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes"`
 }

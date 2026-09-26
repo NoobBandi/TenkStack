@@ -165,6 +165,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/catalog/search", s.catalogSearch)
 	mux.HandleFunc("GET /api/catalog/files", s.catalogFiles)
+	mux.HandleFunc("GET /api/catalog/folder", s.catalogFolder)
 	mux.HandleFunc("POST /api/catalog/estimate", s.catalogEstimate)
 	mux.HandleFunc("POST /api/catalog/download", s.catalogDownload)
 	mux.HandleFunc("POST /api/catalog/cancel", s.catalogCancel)

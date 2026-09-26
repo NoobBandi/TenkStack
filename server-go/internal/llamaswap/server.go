@@ -1,7 +1,6 @@
 package llamaswap
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/NoobBandi/TenkStack/server-go/internal/hfmodel"
 	"github.com/NoobBandi/TenkStack/server-go/internal/providers"
 )
 
@@ -163,104 +163,23 @@ func dirsInCmd(cmd string) []string {
 }
 
 // precisionOf reads what a safetensors model is stored as, from its
-// config.json. A publisher's quantisation is recorded there under
-// quantization_config, and vLLM applies it on its own; asking for online
-// quantisation on top would be refused or wrong. Everything else is the
-// dtype the weights were saved in.
+// config.json: a publisher's quantisation, which vLLM applies on its own and
+// online quantisation on top would get wrong, or the dtype it was saved in.
 func precisionOf(dir string) (precision string, quantized bool) {
-	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
-	if err != nil {
-		return "", false
-	}
-	var cfg struct {
-		TorchDtype string `json:"torch_dtype"`
-		Dtype      string `json:"dtype"`
-		// A multimodal model keeps the language model's config nested.
-		Text struct {
-			TorchDtype string `json:"torch_dtype"`
-			Dtype      string `json:"dtype"`
-		} `json:"text_config"`
-		Quant struct {
-			Method string `json:"quant_method"`
-			Bits   int    `json:"bits"`
-			// compressed-tensors: the first group's weight scheme.
-			Groups map[string]struct {
-				Weights struct {
-					Type    string `json:"type"`
-					NumBits int    `json:"num_bits"`
-				} `json:"weights"`
-			} `json:"config_groups"`
-		} `json:"quantization_config"`
-	}
-	if json.Unmarshal(raw, &cfg) != nil {
-		return "", false
-	}
-	if q := cfg.Quant; q.Method != "" {
-		switch q.Method {
-		case "fp8":
-			return "fp8", true
-		case "awq", "gptq":
-			return q.Method, true
-		case "mxfp4":
-			return "mxfp4", true
-		case "compressed-tensors":
-			for _, g := range q.Groups {
-				if g.Weights.Type == "float" && g.Weights.NumBits == 8 {
-					return "fp8", true
-				}
-				if g.Weights.NumBits == 4 {
-					return "int4", true
-				}
-				if g.Weights.NumBits == 8 {
-					return "int8", true
-				}
-			}
-			return "compressed", true
-		}
-		if q.Bits == 4 {
-			return "int4", true
-		}
-		return q.Method, true
-	}
-	dtype := cfg.TorchDtype
-	for _, alt := range []string{cfg.Dtype, cfg.Text.TorchDtype, cfg.Text.Dtype} {
-		if dtype == "" {
-			dtype = alt
-		}
-	}
-	switch dtype {
-	case "bfloat16":
-		return "bf16", false
-	case "float16":
-		return "fp16", false
-	case "float32":
-		return "fp32", false
-	}
-	return dtype, false
+	cfg := configOf(dir)
+	return cfg.Precision, cfg.Quantized
 }
 
 // architectureOf is the model class a safetensors directory declares.
-func architectureOf(dir string) string {
+func architectureOf(dir string) string { return configOf(dir).Architecture }
+
+func configOf(dir string) hfmodel.Config {
 	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err != nil {
-		return ""
+		return hfmodel.Config{}
 	}
-	var cfg struct {
-		Architectures []string `json:"architectures"`
-	}
-	if json.Unmarshal(raw, &cfg) != nil || len(cfg.Architectures) == 0 {
-		return ""
-	}
-	return cfg.Architectures[0]
+	return hfmodel.Parse(raw)
 }
 
-// seesImages says whether an architecture takes images: the multimodal
-// classes are named for it, one way or another.
-func seesImages(architecture string) bool {
-	for _, mark := range []string{"ConditionalGeneration", "VL", "Vision", "Omni", "Image"} {
-		if strings.Contains(architecture, mark) {
-			return true
-		}
-	}
-	return false
-}
+// seesImages says whether an architecture takes images.
+func seesImages(architecture string) bool { return hfmodel.SeesImages(architecture) }

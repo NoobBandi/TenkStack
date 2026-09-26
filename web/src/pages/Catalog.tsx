@@ -1,22 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Select, Space, Table,
-  Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Segmented, Select,
+  Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   CloseOutlined, CloudDownloadOutlined, InfoCircleOutlined, StopOutlined,
 } from '@ant-design/icons';
 import { LINE, MONO } from '../theme';
 import {
-  cancelDownload, catalogFiles, estimateFile, fetchDownloads, fetchModelLocations, locationName,
-  searchCatalog, startDownload, subscribe, withinLocation,
-  type CatalogFile, type CatalogRepo, type DownloadStatus, type FileEstimate, type ModelLocation,
+  cancelDownload, catalogFiles, catalogFolder, estimateFile, fetchDownloads, fetchGpuDevices,
+  fetchModelLocations, fetchProviders, locationName, searchCatalog, startDownload,
+  startFolderDownload, subscribe, withinLocation,
+  type CatalogFile, type CatalogFolder, type CatalogFormat, type CatalogRepo, type DownloadStatus,
+  type FileEstimate, type GpuDevice, type ModelLocation, type ProviderCard, type Runtime,
 } from '../api';
+import CatalogFolderPanel, { type Plan } from '../components/CatalogFolder';
 
 const { Text } = Typography;
 
-/** The card holds 32 GiB. Anything at or above this cannot be fully resident,
- *  so the UI says so before the download rather than after. */
+/** Used until the cards have been read: one B70's 32 GiB. */
 const VRAM_GIB = 32;
 
 /** What an estimate rests on, said beside it rather than in a footnote.
@@ -184,6 +187,7 @@ const STATE_VIEW: Record<string, { status: 'active' | 'success' | 'exception' | 
                                    label: string; tag?: string }> = {
   queued: { status: 'active', label: '排隊中' },
   downloading: { status: 'active', label: '下載中' },
+  verifying: { status: 'active', label: '驗證中' },
   done: { status: 'success', label: '完成', tag: 'success' },
   error: { status: 'exception', label: '失敗', tag: 'error' },
   cancelled: { status: 'normal', label: '已取消' },
@@ -191,7 +195,30 @@ const STATE_VIEW: Record<string, { status: 'active' | 'success' | 'exception' | 
 
 export default function Catalog() {
   const { message } = AntApp.useApp();
+  const navigate = useNavigate();
   const [query, setQuery] = useState('');
+  // Which kind of model is being looked for. GGUF is llama.cpp's and always
+  // offered; safetensors is offered when an engine in the registry runs it,
+  // installed or not, so a newcomer finds out what it would take.
+  const [format, setFormat] = useState<CatalogFormat>('gguf');
+  const [runtimes, setRuntimes] = useState<Runtime[]>([]);
+  const [engines, setEngines] = useState<ProviderCard[]>([]);
+  const [gpus, setGpus] = useState<GpuDevice[]>([]);
+  const [folder, setFolder] = useState<CatalogFolder | null>(null);
+  useEffect(() => {
+    fetchProviders().then((p) => { setRuntimes(p.runtimes); setEngines(p.providers); })
+      .catch(() => undefined);
+    fetchGpuDevices().then(setGpus).catch(() => undefined);
+  }, []);
+  // The installed launcher a safetensors download is for: the first one that
+  // runs the format. Its vendor decides which cards the estimate counts.
+  const serverRuntime = runtimes.find((r) => r.formats.includes('safetensors'));
+  const serverEngines = engines.filter((e) => e.formats.includes('safetensors'));
+  // Cards for the GGUF size warning: the smallest one, and how many there are.
+  const cardGiB = gpus.length
+    ? Math.min(...gpus.map((g) => (g.live?.memory_total_mib ?? VRAM_GIB * 1024) / 1024))
+    : VRAM_GIB;
+  const cardCount = Math.max(1, gpus.length);
   const [repos, setRepos] = useState<CatalogRepo[]>([]);
   // Reset on every search rather than remembered: a new query is a new set, and
   // landing on page 4 of it is never what was meant.
@@ -203,6 +230,8 @@ export default function Catalog() {
   const tableRef = useRef<HTMLDivElement>(null);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
   const [files, setFiles] = useState<CatalogFile[]>([]);
   // Speed estimates, filled in one row at a time and never on load. Reading a
   // GGUF header costs a few MiB of transfer per file; a repo listing seventy-six
@@ -222,6 +251,11 @@ export default function Catalog() {
       setTarget((t) => t ?? l.locations.find((x) => x.default_for.includes('gguf'))?.key);
     }).catch(() => undefined);
   }, []);
+  // Each format has its own default place; switching format switches to it.
+  useEffect(() => {
+    const found = locations.find((x) => x.default_for.includes(format))?.key;
+    if (found) setTarget(found);
+  }, [format, locations]);
   /** A name as an entry has it, with the location it is in spelt out. */
   const placed = (ref: string) => {
     const key = /^\$\{(models-dir-[2-5])\}\//.exec(ref)?.[1] ?? 'models-dir';
@@ -254,29 +288,43 @@ export default function Catalog() {
     for (const d of list) {
       if (seeded.current && d.state === 'done' && !announced.current.has(keyOf(d))) {
         announced.current.add(keyOf(d));
-        message.success(`${d.filename} 下載完成`);
+        message.success(`${d.filename || d.repo_id} 下載完成`);
+        // A folder that finished is the one on the right: show it as on disk.
+        if (d.kind === 'folder' && d.repo_id === selectedRef.current) {
+          catalogFolder(d.repo_id).then(setFolder).catch(() => undefined);
+        }
       }
     }
     setDownloads(list);
   }), [message]);
 
-  const onSearch = useCallback(async (value: string) => {
+  const onSearch = useCallback(async (value: string, as?: CatalogFormat) => {
     if (!value.trim()) return;
     setSearching(true);
     setSelected(null);
     setFiles([]);
+    setFolder(null);
     setEstimates({});
     setPage(1);
     setPageSize(10);
     setFilePageSize(10);
     try {
-      setRepos(await searchCatalog(value));
+      setRepos(await searchCatalog(value, as ?? format));
     } catch (error) {
       message.error((error as Error).message);
     } finally {
       setSearching(false);
     }
-  }, [message]);
+  }, [message, format]);
+
+  const onFormat = (next: CatalogFormat) => {
+    setFormat(next);
+    setRepos([]);
+    setSelected(null);
+    setFiles([]);
+    setFolder(null);
+    if (query.trim()) void onSearch(query, next);
+  };
 
   const onPick = async (repoId: string) => {
     setSelected(repoId);
@@ -284,8 +332,11 @@ export default function Catalog() {
     setFilePage(1);
     setFilePageSize(10);
     setLoadingFiles(true);
+    setFiles([]);
+    setFolder(null);
     try {
-      setFiles(await catalogFiles(repoId));
+      if (format === 'safetensors') setFolder(await catalogFolder(repoId));
+      else setFiles(await catalogFiles(repoId));
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -315,6 +366,29 @@ export default function Catalog() {
     }
   };
 
+  const onFolderDownload = async () => {
+    if (!selected) return;
+    try {
+      await startFolderDownload(selected, target);
+      message.success('已開始下載整個資料夾');
+      setDownloads(await fetchDownloads());
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  /** To the model page, with a new entry for this folder filled in the way the
+   *  estimate suggests: the launcher, the cards, and a quantisation if the
+   *  published precision would leave no room. */
+  const onCreate = (plan: Plan | undefined) => {
+    if (!folder || !serverRuntime) return;
+    navigate('/models', { state: { create: {
+      runtime: serverRuntime.macro, model_file: folder.local_path, repo: folder.repo_id,
+      cards: plan?.cards ?? 1, quantization: plan?.quantization ?? '',
+      context: folder.context_length,
+    } } });
+  };
+
   const onEstimate = async (file: CatalogFile) => {
     if (!selected || estimates[file.filename]) return;
     setEstimates((prev) => ({ ...prev, [file.filename]: 'loading' }));
@@ -329,7 +403,9 @@ export default function Catalog() {
   const shown = downloads.filter((d) => !dismissed.has(keyOf(d)));
   const running = shown.filter((d) => !ENDED.includes(d.state)).length;
 
-  const oversized = files.some((f) => f.size_gib >= VRAM_GIB * 0.9);
+  // Past every card together a GGUF does not fit even split; past one card it
+  // needs the model split across more.
+  const oversized = files.some((f) => f.size_gib >= cardGiB * cardCount * 0.9);
   // Both cards are given the same height and each pins its own paginator, so
   // their floors line up without anyone estimating what sits on them.
   const columnHeight = useFillToTrigger(columnsRef, 0, [shown.length > 0, repos.length]);
@@ -368,8 +444,10 @@ export default function Catalog() {
                   <List.Item.Meta
                     title={
                       <Space size={8}>
-                        <span>{d.filename}</span>
+                        <span>{d.kind === 'folder' ? d.repo_id : d.filename}</span>
+                        {d.kind === 'folder' && <Tag>整個資料夾</Tag>}
                         {view.tag && <Tag color={view.tag}>{view.label}</Tag>}
+                        {d.state === 'verifying' && <Tag color="processing">驗證中</Tag>}
                       </Space>
                     }
                     description={
@@ -389,7 +467,11 @@ export default function Catalog() {
                               ? `${d.error || '下載失敗'} ・ ${d.repo_id}`
                               : `${(d.downloaded_bytes / 1024 ** 3).toFixed(1)} / `
                                 + `${(d.total_bytes / 1024 ** 3).toFixed(1)} GiB `
-                                + `・ ${d.mib_per_second} MiB/s ・ ${d.repo_id}`}
+                                + `・ ${d.mib_per_second} MiB/s`
+                                + (d.kind === 'folder'
+                                  ? ` ・ 第 ${Math.min((d.files_done ?? 0) + 1, d.files ?? 0)}/${d.files} 個檔案`
+                                    + (d.current ? `：${d.current}` : '')
+                                  : ` ・ ${d.repo_id}`)}
                         </Text>
                       </div>
                     }
@@ -402,18 +484,41 @@ export default function Catalog() {
       )}
 
       <Card size="small">
+        {serverEngines.length > 0 && (
+          <Segmented<CatalogFormat>
+            style={{ marginBottom: 10 }}
+            value={format}
+            onChange={onFormat}
+            options={[
+              { value: 'gguf', label: 'GGUF · llama.cpp' },
+              { value: 'safetensors', label: `safetensors · ${serverEngines.map((e) => e.name).join(' / ')}` },
+            ]}
+          />
+        )}
         <Input.Search
-          placeholder="搜尋 Hugging Face 上的 GGUF 模型，例如 qwen3 coder"
+          placeholder={format === 'gguf'
+            ? '搜尋 Hugging Face 上的 GGUF 模型，例如 qwen3 coder'
+            : '搜尋 Hugging Face 上的 safetensors 模型，例如 Qwen3.8-27B'}
           enterButton="搜尋"
           size="large"
           loading={searching}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onSearch={onSearch}
+          onSearch={(value) => void onSearch(value)}
         />
         <Text type="secondary" style={{ fontSize: 12 }}>
-          只列出 GGUF 儲存庫——這台機器的推論後端是 llama.cpp，其他格式無法執行。
+          {format === 'gguf'
+            ? '一個 GGUF 檔就是一個模型，給 llama.cpp 用：從右邊挑一個量化版本下載。'
+            : '一個儲存庫就是一個模型，給伺服器引擎整個資料夾載入：權重、設定檔和 tokenizer 會一起下載。'}
         </Text>
+        {format === 'safetensors' && !serverRuntime && (
+          <Alert
+            style={{ marginTop: 10 }}
+            type="info"
+            showIcon
+            message={<>還沒有安裝能跑 safetensors 的推論引擎。先到 <Link to="/engines">推論引擎</Link> 安裝 {serverEngines.map((e) => e.name).join(' 或 ')}，下載的模型才有地方跑。</>}
+          />
+        )}
       </Card>
 
       {(repos.length > 0 || selected) && (
@@ -519,7 +624,7 @@ export default function Catalog() {
         title={
           selected
             ? <Slide style={{ fontSize: 13, fontFamily: MONO }}>{selected}</Slide>
-            : <span style={{ fontSize: 13 }}>檔案</span>
+            : <span style={{ fontSize: 13 }}>{format === 'gguf' ? '檔案' : '模型資料夾'}</span>
         }
         extra={locations.length > 1 && (
           <Space size={6}>
@@ -541,6 +646,20 @@ export default function Catalog() {
         {!selected ? (
           <Empty description="從左邊選一個儲存庫" image={Empty.PRESENTED_IMAGE_SIMPLE}
                  style={{ margin: 'auto' }} />
+        ) : format === 'safetensors' ? (
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            {folder && (
+              <CatalogFolderPanel
+                folder={folder}
+                runtime={serverRuntime}
+                gpus={gpus}
+                placed={placed}
+                download={downloads.find((d) => d.kind === 'folder' && d.repo_id === folder.repo_id)}
+                onDownload={onFolderDownload}
+                onCreate={onCreate}
+              />
+            )}
+          </div>
         ) : (
           <>
           <div ref={tableRef} style={{ flex: 1, overflow: 'hidden', padding: '0 12px' }}>
@@ -593,8 +712,12 @@ export default function Catalog() {
                   render: (gib: number) => (
                     <Space size={4}>
                       <span>{gib} GiB</span>
-                      {gib >= VRAM_GIB * 0.9 && !Number.isNaN(gib) && (
+                      {gib >= cardGiB * cardCount * 0.9 && !Number.isNaN(gib) ? (
                         <Tag color="warning">超出顯存</Tag>
+                      ) : gib >= cardGiB * 0.9 && !Number.isNaN(gib) && (
+                        <Tooltip title="單張卡放不下，把模型分到多張卡（在「模型」頁選多張卡）就放得下">
+                          <Tag color="blue">需 {Math.ceil(gib / (cardGiB * 0.9))} 張卡</Tag>
+                        </Tooltip>
                       )}
                     </Space>
                   ),

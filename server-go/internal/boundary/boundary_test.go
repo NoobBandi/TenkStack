@@ -25,6 +25,8 @@ var allowed = map[string][]string{
 	"webdist": {},
 	// How model locations and the files in them are named.
 	"locations": {},
+	// What a Hugging Face model's config.json says about it.
+	"hfmodel": {},
 	// Data about software rather than cards; a leaf like vendors, and it
 	// may name vendors because a build is per vendor.
 	"providers": {"api", "vendors"},
@@ -38,7 +40,7 @@ var allowed = map[string][]string{
 	"gpuhistory":       {"api"},
 	"journal":          {"api"},
 	"activity":         {"api"},
-	"llamaswap":        {"api", "providers", "locations"},
+	"llamaswap":        {"api", "providers", "locations", "hfmodel"},
 	"containers":       {"api", "vendors"},
 	"containerhistory": {"api"},
 	"backends":         {"api", "vendors", "providers"},
@@ -50,7 +52,7 @@ var allowed = map[string][]string{
 	"images":           {},
 	"visioncache":      {},
 	"search":           {"api"},
-	"catalog":          {"api", "locations"},
+	"catalog":          {"api", "locations", "hfmodel"},
 	"files":            {"api"},
 	"comfy":            {"api", "vendors"},
 	"network":          {"api"},

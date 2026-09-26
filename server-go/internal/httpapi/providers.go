@@ -70,7 +70,7 @@ func (s *Server) readProviders(w http.ResponseWriter, r *http.Request) {
 		page.Providers = append(page.Providers, card)
 	}
 	for _, l := range s.Config.LauncherList() {
-		rt := api.Runtime{Macro: l.Name, Quantizations: []api.Quantization{}}
+		rt := api.Runtime{Macro: l.Name, Quantizations: []api.Quantization{}, Precisions: []string{}}
 		if p, vendor, ok := providers.Resolve(l.Name); ok {
 			label := p.Name
 			if v := vendors.Get(vendor); v != nil {
@@ -79,6 +79,9 @@ func (s *Server) readProviders(w http.ResponseWriter, r *http.Request) {
 			rt.Label, rt.Provider, rt.Vendor, rt.Formats, rt.Managed = label, p.Key, vendor, p.Formats, true
 			rt.Form = p.Form
 			rt.Quantizations = s.onlineQuantizations(ctx, p, vendor)
+			if b, ok := p.Builds[vendor]; ok && b.Precisions != nil {
+				rt.Precisions = b.Precisions
+			}
 		} else {
 			// A launcher registered by hand is a llama.cpp build: that is
 			// what every launcher was before there was a choice.

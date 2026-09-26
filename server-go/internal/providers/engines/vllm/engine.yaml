@@ -67,6 +67,12 @@ builds:
             -e, VLLM_XPU_ENABLE_XPU_GRAPH=1, -e, TRITON_CACHE_DIR=/root/.cache/vllm/triton,
             -e, TORCHINDUCTOR_CACHE_DIR=/root/.cache/vllm/inductor]
     cache_dir: /root/.cache/vllm
+    # Stored precisions a model has loaded in here: bf16 (Qwen3-8B, Qwen3.8-27B),
+    # fp8 (unsloth/Qwen3.8-27B-FP8, Qwen's own block layout), int4 (auto-round
+    # W4A16 in GPTQ packing). A compressed-tensors FP8_BLOCK export did not
+    # load ("only support per-channel and per-tensor"), so fp8 from
+    # llm-compressor is worth checking before a long download.
+    precisions: [bf16, fp8, int4]
     # Verified on two Arc Pro B70 on a desktop board (no direct link between
     # the cards): FP8 27B, same tok/s, host RAM 73 -> 16 GB. Tied to this
     # image: its compute-runtime is where the mirroring comes from, so a tag

@@ -59,6 +59,8 @@ builds:                     # one per vendor key in internal/vendors
     flags: [--device, /dev/dri, --ipc, host]   # docker run flags that hand over the cards
     command: [sglang, serve, --device, xpu]    # run inside the image before llama-swap's flags
     cache_dir: /root/.cache/…                  # kept on the host between runs
+    precisions: [bf16, fp8] # stored precisions a model has loaded in on this build;
+                            # the catalog marks any other 未驗證 rather than refusing it
     multi_card:             # optional: only when an entry's selector names several cards
       note: …               # why, copied into the launcher as a comment
       setup: fix.py         # beside this file (.py or .sh), run in the image before the server

@@ -13,7 +13,22 @@ func (s *Server) catalogSearch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Catalog.Search(r.Context(), r.URL.Query().Get("q"), limit))
+	writeJSON(w, http.StatusOK, s.Catalog.Search(r.Context(), r.URL.Query().Get("q"), limit, r.URL.Query().Get("format")))
+}
+
+// catalogFolder is a repository as a server engine would load it.
+func (s *Server) catalogFolder(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo_id")
+	if repo == "" {
+		fail(w, http.StatusBadRequest, "repo_id is required")
+		return
+	}
+	out, err := s.Catalog.Folder(r.Context(), repo)
+	if err != nil {
+		fail(w, http.StatusBadGateway, "讀不到 "+repo+" 的檔案清單："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) catalogFiles(w http.ResponseWriter, r *http.Request) {
@@ -74,14 +89,23 @@ func (s *Server) catalogDownload(w http.ResponseWriter, r *http.Request) {
 		RepoID   string `json:"repo_id"`
 		Filename string `json:"filename"`
 		// Location is the key of the model location to write to; empty is
-		// the GGUF default.
+		// the format's default.
 		Location string `json:"location"`
+		// Folder: the whole repository as a server engine loads it, in
+		// place of one file.
+		Folder bool `json:"folder"`
 	}
-	if err := readJSON(r, &in); err != nil || in.RepoID == "" || in.Filename == "" {
-		fail(w, http.StatusBadRequest, "repo_id and filename are required")
+	if err := readJSON(r, &in); err != nil || in.RepoID == "" || (in.Filename == "" && !in.Folder) {
+		fail(w, http.StatusBadRequest, "repo_id and filename (or folder) are required")
 		return
 	}
-	out, err := s.Catalog.Start(in.RepoID, in.Filename, in.Location)
+	var out api.Download
+	var err error
+	if in.Folder {
+		out, err = s.Catalog.StartFolder(r.Context(), in.RepoID, in.Location)
+	} else {
+		out, err = s.Catalog.Start(in.RepoID, in.Filename, in.Location)
+	}
 	if err != nil {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
