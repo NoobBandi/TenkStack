@@ -59,6 +59,11 @@ builds:                     # one per vendor key in internal/vendors
     flags: [--device, /dev/dri, --ipc, host]   # docker run flags that hand over the cards
     command: [sglang, serve, --device, xpu]    # run inside the image before llama-swap's flags
     cache_dir: /root/.cache/…                  # kept on the host between runs
+    multi_card:             # optional: only when an entry's selector names several cards
+      note: …               # why, copied into the launcher as a comment
+      setup: fix.py         # beside this file (.py or .sh), run in the image before the server
+      entrypoint: exec my-server "$@"   # the image's own start command, which setup replaces
+      flags: [--ipc, host]  # docker run flags added for such an entry
 
 online_quantization:        # applied to bf16 weights while they load
   - {value: fp8, label: FP8（線上量化）, note: 顯存減半, shrink: 0.5}
@@ -76,6 +81,18 @@ The first matching rule wins for each flag name. A rule that works around one
 vendor's image names that vendor under `vendors`, so the same engine on
 another vendor's card keeps its own defaults; a rule about the model itself
 (its tool-call format, its reasoning parser) names none.
+
+`multi_card` is for a workaround one vendor's image needs when a model spans
+several cards, and nothing else: a launcher applies it only when the card
+selector names more than one card, and gives those runs their own kernel
+cache (`cache/<launcher>-multi`), because kernels compiled under one
+arrangement can deadlock a run of the other. vLLM's Intel build uses it to give
+each tensor-parallel worker only its own card; its note and
+`intel-worker-affinity.py` say why. The setup script is copied beside the
+launcher at install and refreshed each time the console starts, so a fix to
+it reaches installed machines. A launcher written before its build had
+`multi_card` is rewritten at start only if it is exactly what the console
+wrote; one edited by hand is left alone and named in the log.
 
 `fallback` (llama.cpp only so far) is a build that runs on any vendor's card,
 offered as a variant: `label`, `image`, `requires`, `flags`.

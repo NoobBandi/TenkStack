@@ -119,11 +119,15 @@ builds: {intel: {image: x/a}}
 		"speculation no --":  good + "speculation: {flag: spec, refuses: [min_p]}\n",
 		"refuses nothing":    good + "speculation: {flag: --spec}\n",
 		"rule for no build":  good + "recommended: [{match: x, flags: [--x], vendors: [nvidia]}]\n",
+		"setup not there":    strings.Replace(good, "{image: x/a}", "{image: x/a, multi_card: {setup: nope.py, entrypoint: x}}", 1),
+		"setup not a script": strings.Replace(good, "{image: x/a}", "{image: x/a, multi_card: {setup: icon.png, entrypoint: x}}", 1),
+		"setup, no entry":    strings.Replace(good, "{image: x/a}", "{image: x/a, multi_card: {setup: s.py}}", 1),
 	}
 	for name, yaml := range cases {
 		files := fstest.MapFS{
 			"engines/a/engine.yaml": {Data: []byte(yaml)},
 			"engines/a/icon.png":    {Data: []byte("png")},
+			"engines/a/s.py":        {Data: []byte("print(1)")},
 			"engines/d/engine.yaml": {Data: []byte(def)},
 			"engines/d/icon.png":    {Data: []byte("png")},
 		}

@@ -62,6 +62,25 @@ builds:
             -e, VLLM_XPU_ENABLE_XPU_GRAPH=1, -e, TRITON_CACHE_DIR=/root/.cache/vllm/triton,
             -e, TORCHINDUCTOR_CACHE_DIR=/root/.cache/vllm/inductor]
     cache_dir: /root/.cache/vllm
+    # Verified on two Arc Pro B70 on a desktop board (no direct link between
+    # the cards): FP8 27B, same tok/s, host RAM 73 -> 16 GB. Tied to this
+    # image: its compute-runtime is where the mirroring comes from, so a tag
+    # with a fixed runtime can drop it. A board where the cards do reach each
+    # other directly was not tested.
+    multi_card:
+      note: >-
+        Several cards: each tensor-parallel worker sees only its own card. With
+        both cards in every worker, this image's compute-runtime (26.14) pins a
+        host-memory mirror of each worker's device memory for the other card
+        (intel/compute-runtime#953), about 64 GB for a 27B at FP8. oneCCL then
+        stays on algorithms that never open the other card's memory
+        (intel/llm-scaler#594), which exchange handles between the worker
+        processes: that needs --ipc host and SYS_PTRACE.
+      setup: intel-worker-affinity.py
+      entrypoint: source /opt/intel/oneapi/setvars.sh --force >/dev/null && source /opt/intel/oneapi/ccl/2021.15/env/vars.sh --force && exec vllm serve "$@"
+      flags: [--ipc, host, --cap-add, SYS_PTRACE,
+              -e, CCL_SYCL_ALLREDUCE_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_REDUCE_SCATTER_SIMPLE_THRESHOLD=4294967296,
+              -e, CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_ALLTOALL_TMP_BUF=1]
   nvidia:
     image: vllm/vllm-openai:latest
     requires: nvidia-container-toolkit

@@ -218,6 +218,13 @@ func main() {
 			log.Printf("launcher %s now mounts every model location", filepath.Base(path))
 		}
 	}
+	if changed, err := srv.Installer.UpgradeMultiCard(); err != nil {
+		log.Printf("could not give the launchers their multi-card settings: %v", err)
+	} else {
+		for _, path := range changed {
+			log.Printf("launcher %s now runs an entry across several cards the way its build says", filepath.Base(path))
+		}
+	}
 	// What the root ComfyUI container writes is taken back for the files
 	// page when the owner is all that stops a delete or a rename.
 	srv.Files.Reclaim = func(dir string) error {

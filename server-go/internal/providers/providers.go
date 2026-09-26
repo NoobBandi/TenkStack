@@ -50,6 +50,38 @@ type Build struct {
 	// CacheDir is where the image keeps compiled kernels between runs, to
 	// be mounted from the host so a restart does not compile again.
 	CacheDir string `yaml:"cache_dir"`
+	// MultiCard is what an entry spanning several of the vendor's cards
+	// needs on top of Flags.
+	MultiCard *MultiCard `yaml:"multi_card"`
+}
+
+// MultiCard is applied by the launcher only when an entry's card selector
+// names more than one card, and those runs keep their own kernel cache: a
+// cache written by one arrangement can deadlock a run of the other.
+type MultiCard struct {
+	// Note is why, written into the launcher as a comment.
+	Note string `yaml:"note"`
+	// Setup is a script beside engine.yaml, .py or .sh, run inside the
+	// image before the server. It is copied beside the launcher.
+	Setup string `yaml:"setup"`
+	// Entrypoint is the image's own start command as one shell line, which
+	// running Setup first replaces; it belongs to the image tag above it.
+	Entrypoint string `yaml:"entrypoint"`
+	// Flags are docker run arguments added for such an entry.
+	Flags []string `yaml:"flags"`
+
+	script []byte
+}
+
+// Script is the setup script's bytes.
+func (m *MultiCard) Script() []byte { return m.script }
+
+// Runner is the interpreter for the setup script.
+func (m *MultiCard) Runner() string {
+	if path.Ext(m.Setup) == ".sh" {
+		return "bash"
+	}
+	return "python3"
 }
 
 // Quant is one quantisation a provider can apply to plain weights as it
@@ -333,6 +365,25 @@ func loadOne(files fs.FS, dir string) (Provider, error) {
 		}
 		if b.Image == "" {
 			return p, fmt.Errorf("build for %s has no image", vendor)
+		}
+		if m := b.MultiCard; m != nil {
+			if vendors.Get(vendor).SelectorVar == "" {
+				return p, fmt.Errorf("multi_card for %s: the vendor has no card selector to tell one card from several", vendor)
+			}
+			if m.Setup == "" {
+				continue
+			}
+			if ext := path.Ext(m.Setup); ext != ".py" && ext != ".sh" {
+				return p, fmt.Errorf("multi_card.setup %q: .py or .sh", m.Setup)
+			}
+			if m.Entrypoint == "" || len(b.Command) > 0 {
+				return p, fmt.Errorf("multi_card.setup for %s needs the image's entrypoint restated, and no command", vendor)
+			}
+			script, err := fs.ReadFile(files, path.Join("engines", dir, m.Setup))
+			if err != nil {
+				return p, fmt.Errorf("multi_card.setup: %w", err)
+			}
+			m.script = script
 		}
 	}
 	if p.Fallback != nil && (p.Fallback.Image == "" || p.FallbackLabel == "") {
