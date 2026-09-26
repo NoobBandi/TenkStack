@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Alert, Card, Collapse, Empty, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Card, Collapse, Space, Tag, Tooltip, Typography } from 'antd';
 import {
-  fetchGpuDevices, fetchOrphanedContainers, type GpuDevice, type GpuSample, type RuntimeContainer,
+  fetchGpuDevices, fetchGpuOccupants, fetchOrphanedContainers,
+  type GpuDevice, type GpuOccupant, type GpuSample, type RuntimeContainer,
 } from '../api';
 import { useStream } from '../stream';
 import { deviceTag } from '../hardware';
@@ -61,7 +62,10 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
     <div style={{
       display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', minWidth: 0,
     }}>
-      <Space size={9} style={{ flex: '1 1 120px', minWidth: 0 }}>
+      {/* A flex row rather than a Space: Space's items do not shrink, so on a
+          phone the name ran under the memory bar beside it instead of
+          ending in an ellipsis. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 220px', minWidth: 0 }}>
         <Tooltip title={live?.busy ? '運算中' : '閒置'}>
           <span style={{
             width: 7, height: 7, borderRadius: '50%', flex: 'none',
@@ -73,12 +77,12 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
         {/* 18 against the 12px name beside it. The mark is the fastest thing
             to recognise in the row, so it leads rather than matches. */}
         <VendorMark vendor={device.vendor} size={18} style={{ opacity: 0.85 }} />
-        <Text style={{ fontSize: 12 }} ellipsis>{device.name}</Text>
+        <Text style={{ fontSize: 12, minWidth: 0 }} ellipsis>{device.name}</Text>
         <Tag color={VENDOR_COLOUR[device.vendor]}
-             style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>
+             style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0, flex: 'none' }}>
           {deviceTag(device.vendor, device.index)}
         </Tag>
-      </Space>
+      </div>
 
       {/* Memory gets the bar because it is the one that decides something:
           whether the next model fits. The rest are numbers. */}
@@ -122,52 +126,133 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
   );
 }
 
-/** One card's specifications, packed rather than gridded. */
-function Specs({ device }: { device: GpuDevice }) {
-  if (device.groups.length === 0) {
-    return <Empty description="驅動沒有回報詳細規格" image={Empty.PRESENTED_IMAGE_SIMPLE} />;
-  }
+/** What holds the card now: the answer to a card that looks full. */
+function Occupants({ list }: { list: GpuOccupant[] | undefined }) {
+  if (!list) return null;
   return (
-    <>
-      <Text style={{ fontSize: 10, opacity: 0.35, fontFamily: MONO, display: 'block', marginBottom: 10 }}>
-        {[device.pci_bdf_address, device.drm_device].filter(Boolean).join(' ・ ')}
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 14px',
+      // Under the name, past the status dot and the vendor mark.
+      paddingInlineStart: 34, marginTop: 6, fontSize: 12,
+    }}>
+      {list.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>沒有模型或容器在用這張卡</Text>}
+      {list.map((o) => (
+        <div key={`${o.kind}-${o.name}`} style={{
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minWidth: 0,
+        }}>
+          <Tag color={o.kind === 'model' ? 'geekblue' : 'default'}
+               style={{ fontSize: 11, marginInlineEnd: 0 }}>
+            {o.kind === 'model' ? (o.engine ?? '模型') : '容器'}
+          </Tag>
+          <Text style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{o.name}</Text>
+          <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+            {[
+              o.cards > 1 && `跨 ${o.cards} 張卡`,
+              OCCUPANT_STATE[o.state] ?? o.state,
+            ].filter(Boolean).join(' ・ ')}
+          </Text>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const OCCUPANT_STATE: Record<string, string> = {
+  ready: '已載入', starting: '載入中', stopping: '卸載中',
+  running: '執行中', exited: '已停止', created: '已建立', paused: '已暫停', restarting: '重啟中',
+};
+
+/** One label and value, as the specification lists draw them. */
+function SpecRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', gap: 12,
+      padding: '4px 0', borderBottom: `1px solid ${LINE.faint}`,
+    }}>
+      <Text style={{ fontSize: 11, opacity: 0.5, whiteSpace: 'nowrap' }}>{label}</Text>
+      <Text style={{ fontSize: 11, fontFamily: MONO, textAlign: 'right', wordBreak: 'break-all' }}>
+        {children}
       </Text>
-      {/* A column flow, not a row of columns. Five groups of unequal height
-          across three columns leave a ragged hole wherever the tallest one
-          lands; `columns` packs them by height instead. Taking a width rather
-          than a count means it reflows on its own, with no breakpoints to keep
-          in step. */}
-      <div style={{ columns: '250px', columnGap: 14 }}>
-        {device.groups.map((group) => (
-          <Card
-            key={group.title}
-            size="small"
-            title={<span style={{ fontSize: 11, opacity: 0.6 }}>{group.title}</span>}
-            styles={{ body: { padding: '4px 12px 8px' } }}
-            style={{ breakInside: 'avoid', marginBottom: 14 }}
-          >
-            {group.rows.map((row) => (
-              <div
-                key={row.key}
-                style={{
-                  display: 'flex', justifyContent: 'space-between', gap: 12,
-                  padding: '4px 0', borderBottom: `1px solid ${LINE.faint}`,
-                }}
-              >
-                <Text style={{ fontSize: 11, opacity: 0.5, whiteSpace: 'nowrap' }}>
-                  {row.label}
-                </Text>
-                <Text style={{
-                  fontSize: 11, fontFamily: MONO, textAlign: 'right', wordBreak: 'break-all',
-                }}>
-                  {row.value}
-                </Text>
-              </div>
-            ))}
-          </Card>
-        ))}
+    </div>
+  );
+}
+
+/**
+ * One card's specifications: the few that decide something first, the rest
+ * folded. The vendor tool reports twenty-odd fields -- slices, SIMD width,
+ * firmware names -- and a page that opens on all of them buries the four a
+ * person running models needs: how much memory, how it is connected, which
+ * driver.
+ */
+function Specs({ device }: { device: GpuDevice }) {
+  const field = (key: string) =>
+    device.groups.flatMap((g) => g.rows).find((r) => r.key === key)?.value;
+  const totalMiB = device.live?.memory_total_mib;
+  const pcie = device.pcie;
+  const rows: [string, React.ReactNode][] = [
+    ['型號', device.name],
+    ['顯存', totalMiB ? `${(totalMiB / 1024).toFixed(1)} GiB` : undefined],
+    ['PCIe', pcie && (
+      <Space size={6} wrap style={{ justifyContent: 'flex-end' }}>
+        <span>{pcie.link}</span>
+        {pcie.slot_limited && (
+          <Tooltip title="卡片放在比它慢或窄的插槽上。單卡跑模型影響不大；多張卡一起跑同一個模型時，卡之間的資料都要走這條，速度會受限。">
+            <Tag color="warning" style={{ marginInlineEnd: 0, fontFamily: 'inherit' }}>
+              卡支援 {pcie.card.replace('PCIe ', '')}，受插槽限制
+            </Tag>
+          </Tooltip>
+        )}
+        {!!pcie.narrower_now && (
+          <Tooltip title="實際接上的通道比插槽和卡都支援的少，常見原因是卡沒插緊，或這個插槽和其他裝置共用通道。">
+            <Tag color="error" style={{ marginInlineEnd: 0, fontFamily: 'inherit' }}>
+              目前只接上 x{pcie.narrower_now}
+            </Tag>
+          </Tooltip>
+        )}
+      </Space>
+    )],
+    ['驅動版本', field('driver_version')],
+    ['核心版本', field('kernel_version')],
+    ['PCI 位址', [device.pci_bdf_address, device.drm_device].filter(Boolean).join(' ・ ') || undefined],
+  ];
+  const summary = rows.filter(([, value]) => !!value);
+
+  return (
+    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <div style={{ maxWidth: 560 }}>
+        {summary.map(([label, value]) => <SpecRow key={label} label={label}>{value}</SpecRow>)}
       </div>
-    </>
+      {device.groups.length > 0 && (
+        <Collapse
+          ghost
+          size="small"
+          items={[{
+            key: 'all',
+            label: <Text type="secondary" style={{ fontSize: 12 }}>完整規格</Text>,
+            children: (
+              // A column flow, not a row of columns: groups of unequal height
+              // across columns leave a ragged hole wherever the tallest one
+              // lands; `columns` packs them by height instead.
+              <div style={{ columns: '250px', columnGap: 14 }}>
+                {device.groups.map((group) => (
+                  <Card
+                    key={group.title}
+                    size="small"
+                    title={<span style={{ fontSize: 11, opacity: 0.6 }}>{group.title}</span>}
+                    styles={{ body: { padding: '4px 12px 8px' } }}
+                    style={{ breakInside: 'avoid', marginBottom: 14 }}
+                  >
+                    {group.rows.map((row) => (
+                      <SpecRow key={row.key} label={row.label}>{row.value}</SpecRow>
+                    ))}
+                  </Card>
+                ))}
+              </div>
+            ),
+          }]}
+        />
+      )}
+    </Space>
   );
 }
 
@@ -176,9 +261,19 @@ export default function Gpu() {
   const [devices, setDevices] = useState<GpuDevice[] | null>(null);
   const [open, setOpen] = useState<string[]>([]);
   const [orphaned, setOrphaned] = useState<RuntimeContainer[]>([]);
+  const [occupants, setOccupants] = useState<Record<string, GpuOccupant[]> | null>(null);
 
   useEffect(() => {
     fetchOrphanedContainers().then(setOrphaned).catch(() => undefined);
+  }, []);
+
+  // Refreshed while the page is open: a model loading or unloading changes
+  // the answer, and it is the one line here a reader acts on.
+  useEffect(() => {
+    const load = () => fetchGpuOccupants().then(setOccupants).catch(() => undefined);
+    load();
+    const timer = window.setInterval(load, 10_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -238,7 +333,12 @@ export default function Gpu() {
         onChange={(keys) => setOpen(keys as string[])}
         items={devices.map((device) => ({
           key: String(device.index),
-          label: <Header device={device} live={liveFor(device)} />,
+          label: (
+            <div>
+              <Header device={device} live={liveFor(device)} />
+              <Occupants list={occupants?.[device.pci_bdf_address]} />
+            </div>
+          ),
           children: <Specs device={device} />,
           // The header is a row of live figures, and clicking anywhere on it to
           // expand is what makes it a row rather than a card with a control in
@@ -247,17 +347,6 @@ export default function Gpu() {
         }))}
       />
 
-      {/* Only where it applies. This describes xpu-smi's sentinel values and
-          nothing else's, and on a machine with an NVIDIA card beside the Arc it
-          would otherwise read as a statement about both. */}
-      {devices.some((d) => d.vendor === 'intel') && (
-        <Alert
-          type="info"
-          showIcon
-          message="Intel 卡有部分欄位不會顯示"
-          description="xpu-smi 對它不追蹤的項目會回傳哨兵值（未知匯流排寬度回報為 4294967295、未追蹤的可用記憶體回報為 0）。那些欄位在這裡被略過而不是照樣顯示——錯的數字比空白更糟。"
-        />
-      )}
     </Space>
   );
 }

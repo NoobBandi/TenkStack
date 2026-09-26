@@ -75,6 +75,14 @@ func readable(key string, v any) string {
 			return fmt.Sprintf("%.2f GiB", *n/(1024*1024*1024))
 		}
 	}
+	// "32656.00 MiB", in the GiB every other memory figure here is in.
+	if key == "memory_physical_size" {
+		if fields := strings.Fields(text); len(fields) == 2 && fields[1] == "MiB" {
+			if n := gpu.ToFloat(fields[0]); n != nil && *n != 0 {
+				return fmt.Sprintf("%.1f GiB", *n/1024)
+			}
+		}
+	}
 	if key == "core_clock_rate" && isDigits(text) {
 		return text + " MHz"
 	}

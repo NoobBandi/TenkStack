@@ -220,6 +220,7 @@ func (r *Registry) ListDevices(ctx context.Context) []api.GpuDevice {
 			Vendor:        d.Vendor,
 			Groups:        groups,
 			Live:          live,
+			PCIe:          PCIeLink("/sys", deref(d.PCIBDFAddress)),
 		})
 	}
 	return out

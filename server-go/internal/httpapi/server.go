@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/gpu", s.readGpu)
 	mux.HandleFunc("GET /api/gpu/history", s.readGpuHistory)
 	mux.HandleFunc("GET /api/gpu/devices", s.readGpuDevices)
+	mux.HandleFunc("GET /api/gpu/occupants", s.readGpuOccupants)
 
 	mux.HandleFunc("GET /api/stream", s.stream)
 	mux.HandleFunc("GET /api/logs", s.readLogs)

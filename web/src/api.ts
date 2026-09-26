@@ -1504,6 +1504,32 @@ export interface GpuDevice {
   vendor: 'intel' | 'nvidia' | 'amd' | string;
   groups: GpuDeviceGroup[];
   live: GpuSample | null;
+  /** The link into the board, null where sysfs does not say. */
+  pcie: PCIeLink | null;
+}
+
+/** How a card is connected to the board. */
+export interface PCIeLink {
+  /** What the card and its slot agree on: "PCIe 4.0 x8". */
+  link: string;
+  /** What the card itself can do: "PCIe 5.0 x16". */
+  card: string;
+  /** The slot is slower or narrower than the card. */
+  slot_limited: boolean;
+  /** Fewer lanes connected than agreed: a card not fully seated, or a slot
+   *  sharing its lanes. */
+  narrower_now?: number;
+}
+
+/** One thing holding a card: a loaded model or a container. */
+export interface GpuOccupant {
+  kind: 'model' | 'container';
+  name: string;
+  /** The model's inference engine: llama.cpp, vLLM. */
+  engine?: string;
+  state: string;
+  /** How many cards it spans. */
+  cards: number;
 }
 
 /** Series keyed by device index. JSON object keys arrive as strings. */
@@ -1511,6 +1537,8 @@ export const fetchGpuHistory = (seconds = 900, points = 600) =>
   get<{ interval: number; devices: Record<string, GpuPoint[]> }>(
     `/gpu/history?seconds=${seconds}&points=${points}`);
 export const fetchGpuDevices = () => get<GpuDevice[]>('/gpu/devices');
+/** What holds each card now, keyed by PCI address. */
+export const fetchGpuOccupants = () => get<Record<string, GpuOccupant[]>>('/gpu/occupants');
 
 export interface Channel {
   key: string;
