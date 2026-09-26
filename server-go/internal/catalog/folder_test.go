@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/locations"
 )
 
@@ -328,20 +329,72 @@ func TestKindOf(t *testing.T) {
 	for _, c := range []struct {
 		m    map[string]any
 		want string
+		sure bool
 	}{
 		// As the Hub's search returns them, with config and gguf expanded.
-		{map[string]any{"id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", "gguf": map[string]any{"architecture": "qwen3moe"}}, "moe"},
-		{map[string]any{"id": "unsloth/Qwen3.8-27B-GGUF", "gguf": map[string]any{"architecture": "qwen35"}}, "dense"},
-		{map[string]any{"id": "Qwen/Qwen3.6-35B-A3B-FP8", "config": map[string]any{"model_type": "qwen3_5_moe"}}, "moe"},
-		{map[string]any{"id": "Qwen/Qwen3.5-9B", "config": map[string]any{"model_type": "qwen3_5", "architectures": []any{"Qwen3_5ForConditionalGeneration"}}}, "dense"},
-		{map[string]any{"id": "deepseek-ai/DeepSeek-V3", "config": map[string]any{"model_type": "deepseek_v3"}}, "moe"},
+		{map[string]any{"id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", "gguf": map[string]any{"architecture": "qwen3moe"}}, "moe", true},
+		{map[string]any{"id": "unsloth/Qwen3.8-27B-GGUF", "gguf": map[string]any{"architecture": "qwen35"}}, "dense", false},
+		{map[string]any{"id": "Qwen/Qwen3.6-35B-A3B-FP8", "config": map[string]any{"model_type": "qwen3_5_moe"}}, "moe", true},
+		{map[string]any{"id": "deepseek-ai/DeepSeek-V3", "config": map[string]any{"model_type": "deepseek_v3"}}, "moe", true},
 		// Mixtral's GGUF says llama; its name says the rest.
-		{map[string]any{"id": "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF", "gguf": map[string]any{"architecture": "llama"}}, "moe"},
+		{map[string]any{"id": "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF", "gguf": map[string]any{"architecture": "llama"}}, "moe", true},
+		// Flash-Next says neither: only its config can.
+		{map[string]any{"id": "unsloth/Qwen3.8-Flash-Next-GGUF", "gguf": map[string]any{"architecture": "qwen4exp"}}, "dense", false},
 		// Only a vision projector's header: nothing to go on.
-		{map[string]any{"id": "someone/model-GGUF", "gguf": map[string]any{"architecture": "clip"}}, ""},
+		{map[string]any{"id": "someone/model-GGUF", "gguf": map[string]any{"architecture": "clip"}}, "", false},
 	} {
-		if got := kindOf(c.m); got != c.want {
-			t.Errorf("%v: %q, want %q", c.m["id"], got, c.want)
+		if got, _, sure := kindOf(c.m); got != c.want || sure != c.sure {
+			t.Errorf("%v: %q sure %v, want %q sure %v", c.m["id"], got, sure, c.want, c.sure)
 		}
+	}
+}
+
+// An architecture that only looked dense is settled by one config.json --
+// the GGUF's base model's -- and remembered.
+func TestConfirmKinds(t *testing.T) {
+	asked := map[string]int{}
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked[r.URL.Path]++
+		switch r.URL.Path {
+		case "/Qwen/Qwen3.8-Flash-Next/resolve/main/config.json":
+			w.Write([]byte(`{"text_config":{"num_hidden_layers":48,"num_experts":512,"num_experts_per_tok":10}}`))
+		case "/Qwen/Qwen3.8-27B/resolve/main/config.json":
+			w.Write([]byte(`{"text_config":{"num_hidden_layers":64}}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer hub.Close()
+	c := New(onePlace{locations.Location{Key: locations.Primary, Path: t.TempDir()}})
+	c.Hub = hub.URL
+	raw := []map[string]any{
+		{"id": "unsloth/Qwen3.8-Flash-Next-GGUF", "gguf": map[string]any{"architecture": "qwen4exp"},
+			"tags": []any{"gguf", "base_model:Qwen/Qwen3.8-Flash-Next", "base_model:quantized:Qwen/Qwen3.8-Flash-Next"}},
+		{"id": "orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF", "gguf": map[string]any{"architecture": "qwen4exp"}},
+		{"id": "unsloth/Qwen3.8-27B-GGUF", "gguf": map[string]any{"architecture": "qwen35"},
+			"tags": []any{"base_model:quantized:Qwen/Qwen3.8-27B"}},
+		{"id": "meta-llama-quants/Llama-GGUF", "gguf": map[string]any{"architecture": "llama"},
+			"tags": []any{"base_model:quantized:meta-llama/Llama-3.1-8B"}},
+		// The Hub read only its projector's header: its base model says.
+		{"id": "cdiamond/Qwen3.8-27B-iMatrix-NVFP4-MTP-GGUF", "gguf": map[string]any{"architecture": "clip"},
+			"tags": []any{"base_model:quantized:Qwen/Qwen3.8-27B"}},
+	}
+	out := make([]api.CatalogRepo, len(raw))
+	for i, m := range raw {
+		out[i] = api.CatalogRepo{RepoID: m["id"]}
+		out[i].Kind, _, _ = kindOf(m)
+	}
+	c.confirmKinds(context.Background(), raw, out, "gguf")
+	var got []string
+	for _, r := range out {
+		got = append(got, r.Kind)
+	}
+	// The gated Llama base keeps its guess.
+	if want := "moe moe dense dense dense"; strings.Join(got, " ") != want {
+		t.Errorf("kinds %v, want %s", got, want)
+	}
+	c.confirmKinds(context.Background(), raw, out, "gguf")
+	if asked["/Qwen/Qwen3.8-Flash-Next/resolve/main/config.json"] != 1 {
+		t.Errorf("asked about qwen4exp %d times", asked["/Qwen/Qwen3.8-Flash-Next/resolve/main/config.json"])
 	}
 }
