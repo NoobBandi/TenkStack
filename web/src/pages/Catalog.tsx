@@ -617,14 +617,10 @@ export default function Catalog() {
                             ・ {since(repo.last_modified)}
                           </Text>
                         )}
-                        {/* Tags that every GGUF repo carries say nothing about
-                            this one. */}
-                        {repo.tags
-                          .filter((t) => !['gguf', 'safetensors', 'transformers', 'text-generation'].includes(t))
-                          .slice(0, 4)
-                          .map((t) => (
-                            <Tag key={t} style={{ fontSize: 11 }}>{t}</Tag>
-                          ))}
+                        {/* Only what helps choose: the Hub's own tags -- papers,
+                            task names, licences, endpoint flags -- do not, and
+                            were most of what this row said. */}
+                        {repo.vision && <Tag color="purple" style={{ fontSize: 11 }}>看圖</Tag>}
                       </Space>
                     }
                   />

@@ -760,6 +760,8 @@ export interface CatalogRepo {
   gated?: boolean;
   /** How it is offered: a choice of GGUF files, or a folder of safetensors. */
   format?: CatalogFormat;
+  /** It takes images, as far as the Hub's task and tags say. */
+  vision?: boolean;
 }
 
 export interface CatalogFile {
