@@ -1,11 +1,14 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/NoobBandi/TenkStack/server-go/internal/api"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
+	"github.com/NoobBandi/TenkStack/server-go/internal/hftoken"
 )
 
 func (s *Server) catalogSearch(w http.ResponseWriter, r *http.Request) {
@@ -14,6 +17,75 @@ func (s *Server) catalogSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Catalog.Search(r.Context(), r.URL.Query().Get("q"), limit, r.URL.Query().Get("format")))
+}
+
+// catalogVariants is the same model in other precisions.
+func (s *Server) catalogVariants(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo_id")
+	if repo == "" {
+		fail(w, http.StatusBadRequest, "repo_id is required")
+		return
+	}
+	out, err := s.Catalog.Variants(r.Context(), repo, 12)
+	if err != nil {
+		fail(w, http.StatusBadGateway, "讀不到 "+repo+" 的其他版本："+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// huggingFace says whether a Hugging Face token is set and whose it is;
+// the token itself never leaves the machine.
+func (s *Server) huggingFace(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
+	out := api.HuggingFace{}
+	if t := s.HFToken.Get(); t != "" {
+		out.Set, out.Hint = true, hftoken.Hint(t)
+		out.User, _ = s.HFToken.WhoAmI(r.Context(), t)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// setHuggingFace keeps a token once the Hub has said whose it is.
+func (s *Server) setHuggingFace(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
+	var in struct {
+		Token string `json:"token"`
+	}
+	if err := readJSON(r, &in); err != nil || strings.TrimSpace(in.Token) == "" {
+		fail(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	user, err := s.HFToken.WhoAmI(r.Context(), strings.TrimSpace(in.Token))
+	var invalid *hftoken.Invalid
+	if errors.As(err, &invalid) {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err != nil {
+		fail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	if err := s.HFToken.Set(in.Token); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, api.HuggingFace{Set: true, Hint: hftoken.Hint(s.HFToken.Get()), User: user})
+}
+
+func (s *Server) clearHuggingFace(w http.ResponseWriter, r *http.Request) {
+	if !s.owner(w, r) {
+		return
+	}
+	if err := s.HFToken.Clear(); err != nil {
+		fail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, api.HuggingFace{})
 }
 
 // catalogFolder is a repository as a server engine would load it.

@@ -6,6 +6,21 @@ type CatalogRepo struct {
 	Likes        any   `json:"likes"`
 	LastModified any   `json:"last_modified"`
 	Tags         []any `json:"tags"`
+	// Gated: the Hub opens its files only to an accepted, signed-in user.
+	Gated bool `json:"gated"`
+}
+
+// CatalogVariant is the same model in another precision.
+type CatalogVariant struct {
+	RepoID string `json:"repo_id"`
+	// Precision is read from the Hub's tags and tensor counts, before the
+	// config is: bf16, fp8, int4, awq, gptq, nvfp4, …
+	Precision string  `json:"precision"`
+	SizeGiB   float64 `json:"size_gib"`
+	Downloads int64   `json:"downloads"`
+	Gated     bool    `json:"gated"`
+	// Base: the repository the others were quantised from.
+	Base bool `json:"base"`
 }
 
 // CatalogFile is one model, not one file: a split model's parts are one
@@ -59,6 +74,13 @@ type CatalogFolder struct {
 	Vision        bool   `json:"vision"`
 	MTP           bool   `json:"mtp"`
 	ContextLength int    `json:"context_length"`
+	// KVBytesPerToken is a token of context in a 16-bit attention cache,
+	// 0 when the config does not say; Hybrid: only some layers keep one.
+	KVBytesPerToken int64 `json:"kv_bytes_per_token"`
+	Hybrid          bool  `json:"hybrid"`
+	// Gated, and NeedsAccess when the Hub would not open it: what to do.
+	Gated       bool   `json:"gated"`
+	NeedsAccess string `json:"needs_access"`
 	// OnDisk: all of it is in Location. Otherwise Location is where a
 	// download would put it and PresentBytes how much of it is there.
 	OnDisk       bool   `json:"on_disk"`
@@ -70,4 +92,12 @@ type CatalogFolder struct {
 type CatalogFolderFile struct {
 	Name      string `json:"name"`
 	SizeBytes int64  `json:"size_bytes"`
+}
+
+// HuggingFace is the owner's Hugging Face token as the settings page shows
+// it: whether one is set, its last characters, and whose it is.
+type HuggingFace struct {
+	Set  bool   `json:"set"`
+	Hint string `json:"hint"`
+	User string `json:"user"`
 }

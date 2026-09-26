@@ -15,6 +15,26 @@ func TestParseQwen38(t *testing.T) {
 		!c.Vision || !c.MTP || c.ContextLength != 262144 || c.Layers != 64 {
 		t.Errorf("%+v", c)
 	}
+	// 16 of 64 layers attend fully: 2 x 16 x 4 heads x 256 x 2 bytes. vLLM
+	// measured 71.3 KiB a token with its MTP layer and padding on top.
+	if c.KVBytesPerToken != 64<<10 || !c.Hybrid {
+		t.Errorf("kv %d bytes, hybrid %v", c.KVBytesPerToken, c.Hybrid)
+	}
+}
+
+func TestKVBytes(t *testing.T) {
+	for raw, want := range map[string]int64{
+		// Llama 3.1 8B: 32 layers, 8 KV heads of 128.
+		`{"num_hidden_layers":32,"num_attention_heads":32,"num_key_value_heads":8,"hidden_size":4096}`: 2 * 32 * 8 * 128 * 2,
+		// DeepSeek V3: MLA, 61 layers of 512 + 64.
+		`{"num_hidden_layers":61,"kv_lora_rank":512,"qk_rope_head_dim":64,"num_attention_heads":128}`: 61 * 576 * 2,
+		// Too little said.
+		`{"num_hidden_layers":32}`: 0,
+	} {
+		if got := Parse([]byte(raw)).KVBytesPerToken; got != want {
+			t.Errorf("%s: %d, want %d", raw, got, want)
+		}
+	}
 }
 
 func TestParsePrecisions(t *testing.T) {

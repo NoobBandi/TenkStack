@@ -28,6 +28,13 @@ type Config struct {
 	// MTP: the weights carry a multi-token prediction head, which an engine
 	// can use to draft several tokens at once.
 	MTP bool
+	// KVBytesPerToken is what one token of context costs in the attention
+	// cache at 16 bits, the engines' default; 0 when the config does not
+	// say enough to work it out.
+	KVBytesPerToken int64
+	// Hybrid: only some layers attend over the whole context (the rest are
+	// linear attention or state space), so only those hold a per-token cache.
+	Hybrid bool
 }
 
 type textConfig struct {
@@ -37,6 +44,51 @@ type textConfig struct {
 	HiddenLayers int    `json:"num_hidden_layers"`
 	MTPLayers    int    `json:"mtp_num_hidden_layers"`
 	NextNLayers  int    `json:"num_nextn_predict_layers"`
+	// What the attention cache is made of.
+	AttentionHeads int      `json:"num_attention_heads"`
+	KVHeads        int      `json:"num_key_value_heads"`
+	HeadDim        int      `json:"head_dim"`
+	HiddenSize     int      `json:"hidden_size"`
+	LayerTypes     []string `json:"layer_types"`
+	FullInterval   int      `json:"full_attention_interval"`
+	// Multi-head latent attention caches one compressed vector a layer.
+	KVLoraRank    int `json:"kv_lora_rank"`
+	QKRopeHeadDim int `json:"qk_rope_head_dim"`
+}
+
+// kvBytes works out a token's attention cache from a language model config.
+func (t textConfig) kvBytes() (bytes int64, hybrid bool) {
+	const width = 2 // 16-bit cache
+	if t.HiddenLayers == 0 {
+		return 0, false
+	}
+	if t.KVLoraRank > 0 {
+		return int64(t.HiddenLayers) * int64(t.KVLoraRank+t.QKRopeHeadDim) * width, false
+	}
+	layers := t.HiddenLayers
+	if len(t.LayerTypes) > 0 {
+		full := 0
+		for _, kind := range t.LayerTypes {
+			if kind == "full_attention" {
+				full++
+			}
+		}
+		hybrid, layers = full < len(t.LayerTypes), full
+	} else if t.FullInterval > 1 {
+		hybrid, layers = true, t.HiddenLayers/t.FullInterval
+	}
+	heads := t.KVHeads
+	if heads == 0 {
+		heads = t.AttentionHeads
+	}
+	dim := t.HeadDim
+	if dim == 0 && t.AttentionHeads > 0 {
+		dim = t.HiddenSize / t.AttentionHeads
+	}
+	if heads == 0 || dim == 0 {
+		return 0, false
+	}
+	return 2 * int64(layers) * int64(heads) * int64(dim) * width, hybrid
 }
 
 // Parse reads a config.json. A file that is not one gives the zero Config.
@@ -72,6 +124,12 @@ func Parse(raw []byte) Config {
 		out.ContextLength = cfg.Text.MaxPositions
 	}
 	out.MTP = cfg.MTPLayers+cfg.NextNLayers+cfg.Text.MTPLayers+cfg.Text.NextNLayers > 0
+	// A multimodal model's language model is the nested one, when there is one.
+	text := cfg.textConfig
+	if cfg.Text.HiddenLayers > 0 {
+		text = cfg.Text
+	}
+	out.KVBytesPerToken, out.Hybrid = text.kvBytes()
 	out.Layers = cfg.HiddenLayers
 	if out.Layers == 0 {
 		out.Layers = cfg.Text.HiddenLayers

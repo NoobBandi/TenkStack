@@ -106,15 +106,20 @@ builds:
 
 # Quantisations applied while bf16 weights load. The image is asked which it
 # has; a publisher's own quantisation (fp8, awq, gptq) needs none of these.
+# `shrink` is the weights' footprint against bf16. Not all of a model is
+# quantised: embeddings, the output head and a vision tower stay bf16. FP8 is
+# measured (Qwen3.8-27B: 14.31 GiB a card across two, of 51.8 GiB, 0.553);
+# Int4 is worked out from the same split -- 10.6% stays bf16, the rest goes
+# to a quarter -- not measured.
 online_quantization:
   - value: fp8
     label: FP8（線上量化）
-    note: 顯存減半，品質幾乎不變
-    shrink: 0.5
+    note: 顯存約減半，品質幾乎不變
+    shrink: 0.55
   - value: sym_int4
     label: Int4（線上量化）
-    note: 顯存四分之一，品質略降
-    shrink: 0.25
+    note: 顯存約三分之一，品質略降
+    shrink: 0.33
 
 # Flags a model family needs, offered when its folder is picked. The first
 # matching rule wins for each flag; `match` is a regular expression against

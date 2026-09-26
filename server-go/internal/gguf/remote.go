@@ -62,6 +62,9 @@ func (d *Description) ByTypeOrdered() []struct {
 // do not change, so one read per file lasts the life of the process.
 type Remote struct {
 	http *http.Client
+	// Token is the owner's Hugging Face token, "" when none is set; a gated
+	// repository's header is read with it.
+	Token func() string
 
 	mu   sync.Mutex
 	seen map[string]*Description // nil entry: known unreadable
@@ -77,6 +80,11 @@ func (r *Remote) readHead(ctx context.Context, url string, span int) ([]byte, er
 		return nil, err
 	}
 	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", span-1))
+	if r.Token != nil {
+		if t := r.Token(); t != "" {
+			req.Header.Set("Authorization", "Bearer "+t)
+		}
+	}
 	resp, err := r.http.Do(req)
 	if err != nil {
 		return nil, err

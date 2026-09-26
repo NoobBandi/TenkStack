@@ -29,6 +29,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/gguf"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
+	"github.com/NoobBandi/TenkStack/server-go/internal/hftoken"
 	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/server-go/internal/paths"
@@ -71,6 +72,7 @@ type Server struct {
 	Search     *search.Client
 	Catalog    *catalog.Catalog
 	Remote     *gguf.Remote
+	HFToken    *hftoken.Store
 	Files      *files.Files
 	Release    *release.Client
 	// One eviction at a time: two requests arriving together would both
@@ -166,6 +168,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/catalog/search", s.catalogSearch)
 	mux.HandleFunc("GET /api/catalog/files", s.catalogFiles)
 	mux.HandleFunc("GET /api/catalog/folder", s.catalogFolder)
+	mux.HandleFunc("GET /api/catalog/variants", s.catalogVariants)
+	mux.HandleFunc("GET /api/settings/huggingface", s.huggingFace)
+	mux.HandleFunc("PUT /api/settings/huggingface", s.setHuggingFace)
+	mux.HandleFunc("DELETE /api/settings/huggingface", s.clearHuggingFace)
 	mux.HandleFunc("POST /api/catalog/estimate", s.catalogEstimate)
 	mux.HandleFunc("POST /api/catalog/download", s.catalogDownload)
 	mux.HandleFunc("POST /api/catalog/cancel", s.catalogCancel)

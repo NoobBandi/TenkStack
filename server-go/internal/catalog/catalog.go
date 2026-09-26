@@ -52,8 +52,11 @@ type Places interface {
 type Catalog struct {
 	Places Places
 	// Hub is Hugging Face's address; a test points it elsewhere.
-	Hub  string
-	http *http.Client
+	Hub string
+	// Token is the owner's Hugging Face token, "" when none is set; it is
+	// what opens a gated repository.
+	Token func() string
+	http  *http.Client
 
 	mu        sync.Mutex
 	downloads map[string]*download
@@ -62,6 +65,35 @@ type Catalog struct {
 
 func New(places Places) *Catalog {
 	return &Catalog{Places: places, Hub: huggingFace, http: &http.Client{Timeout: 20 * time.Second}, downloads: map[string]*download{}}
+}
+
+// authorize signs a request to the Hub with the owner's token, when there is
+// one. Go does not carry it on to the CDN the Hub redirects a file to.
+func (c *Catalog) authorize(req *http.Request) {
+	if c.Token == nil {
+		return
+	}
+	if t := c.Token(); t != "" {
+		req.Header.Set("Authorization", "Bearer "+t)
+	}
+}
+
+// NeedsAccess is a gated repository the Hub would not open.
+type NeedsAccess struct{ HasToken bool }
+
+func (e *NeedsAccess) Error() string {
+	if e.HasToken {
+		return "這個模型需要授權，目前的 token 還沒有權限：到 Hugging Face 的模型頁同意使用條款（有些要等作者核准）"
+	}
+	return "這個模型需要授權：先到 Hugging Face 的模型頁同意使用條款，再到「設定」填入 Hugging Face token"
+}
+
+// refused turns the Hub's 401 and 403 into NeedsAccess.
+func (c *Catalog) refused(status int) error {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return &NeedsAccess{HasToken: c.Token != nil && c.Token() != ""}
+	}
+	return fmt.Errorf("HTTP %d", status)
 }
 
 // safe keeps a repo or file segment usable as a directory name: traversal
@@ -116,12 +148,13 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int, format st
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("sort", "downloads")
 	q.Set("direction", "-1")
-	for _, f := range []string{"downloads", "likes", "tags", "lastModified"} {
+	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated"} {
 		q.Add("expand[]", f)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/api/models?"+q.Encode(), nil)
+	c.authorize(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		log.Printf("HF search failed: %v", err)
@@ -151,7 +184,8 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int, format st
 				}
 			}
 		}
-		r := api.CatalogRepo{RepoID: m["id"], Downloads: m["downloads"], Likes: m["likes"], LastModified: m["lastModified"], Tags: tags}
+		r := api.CatalogRepo{RepoID: m["id"], Downloads: m["downloads"], Likes: m["likes"], LastModified: m["lastModified"], Tags: tags,
+			Gated: isGated(m["gated"])}
 		if r.Downloads == nil {
 			r.Downloads = 0
 		}
@@ -161,6 +195,12 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int, format st
 		out = append(out, r)
 	}
 	return out
+}
+
+// isGated reads the Hub's gated field: false, or "auto" / "manual".
+func isGated(v any) bool {
+	s, ok := v.(string)
+	return ok && s != "" && s != "false"
 }
 
 // notForServer is a repository a server engine cannot load as a folder even
@@ -288,18 +328,26 @@ type remoteFile struct {
 
 // remoteFiles lists a repository's files with sizes and digests.
 func (c *Catalog) remoteFiles(ctx context.Context, repoID string) ([]remoteFile, error) {
+	files, _, err := c.listing(ctx, repoID)
+	return files, err
+}
+
+// listing is a repository's files and whether it is gated.
+func (c *Catalog) listing(ctx context.Context, repoID string) ([]remoteFile, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/api/models/"+repoID+"?blobs=true", nil)
+	c.authorize(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, false, c.refused(resp.StatusCode)
 	}
 	var data struct {
+		Gated    any `json:"gated"`
 		Siblings []struct {
 			Name string `json:"rfilename"`
 			Size *int64 `json:"size"`
@@ -310,7 +358,7 @@ func (c *Catalog) remoteFiles(ctx context.Context, repoID string) ([]remoteFile,
 		} `json:"siblings"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make([]remoteFile, 0, len(data.Siblings))
 	for _, s := range data.Siblings {
@@ -326,7 +374,7 @@ func (c *Catalog) remoteFiles(ctx context.Context, repoID string) ([]remoteFile,
 		}
 		out = append(out, f)
 	}
-	return out, nil
+	return out, isGated(data.Gated), nil
 }
 
 // ListFiles is the GGUF files in a repo with sizes, so the UI can warn
@@ -387,12 +435,12 @@ func folderFiles(all []remoteFile) []remoteFile {
 // Folder is a repository as a server engine would load it: what it needs of
 // it, what its config says the model is, and whether it is on disk.
 func (c *Catalog) Folder(ctx context.Context, repoID string) (api.CatalogFolder, error) {
-	all, err := c.remoteFiles(ctx, repoID)
+	all, gated, err := c.listing(ctx, repoID)
 	if err != nil {
 		return api.CatalogFolder{}, err
 	}
 	files := folderFiles(all)
-	out := api.CatalogFolder{RepoID: repoID, Files: []api.CatalogFolderFile{}}
+	out := api.CatalogFolder{RepoID: repoID, Files: []api.CatalogFolderFile{}, Gated: gated}
 	hasWeights := false
 	for _, f := range files {
 		out.Files = append(out.Files, api.CatalogFolderFile{Name: f.Name, SizeBytes: f.Size})
@@ -403,11 +451,19 @@ func (c *Catalog) Folder(ctx context.Context, repoID string) (api.CatalogFolder,
 	}
 	out.SizeGiB = gib(out.SizeBytes)
 	out.Loadable = hasWeights
-	if raw, err := c.fetchSmall(ctx, repoID, "config.json"); err == nil {
+	raw, err := c.fetchSmall(ctx, repoID, "config.json")
+	var needs *NeedsAccess
+	switch {
+	case err == nil:
 		cfg := hfmodel.Parse(raw)
 		out.Architecture, out.Precision, out.Quantized = cfg.Architecture, cfg.Precision, cfg.Quantized
 		out.Vision, out.MTP, out.ContextLength = cfg.Vision, cfg.MTP, cfg.ContextLength
-	} else {
+		out.KVBytesPerToken, out.Hybrid = cfg.KVBytesPerToken, cfg.Hybrid
+	case errors.As(err, &needs):
+		// The listing is public, the files are not: what it is stays unknown
+		// until the Hub lets the token in.
+		out.NeedsAccess = needs.Error()
+	default:
 		out.Loadable = false
 	}
 	// On disk when every file is where a download would have put it, at its
@@ -434,18 +490,205 @@ func (c *Catalog) Folder(ctx context.Context, repoID string) (api.CatalogFolder,
 	return out, nil
 }
 
-// fetchSmall reads a small file of a repository whole.
-func (c *Catalog) fetchSmall(ctx context.Context, repoID, name string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+// Variants is the same model in other precisions a server engine could
+// load: the repository it was quantised from, and every quantisation of that
+// one the Hub lists, most downloaded first. The precision and size are read
+// from the Hub's own tensor counts and tags, before anything is fetched; the
+// folder panel reads each one's config.json when it is picked.
+func (c *Catalog) Variants(ctx context.Context, repoID string, limit int) ([]api.CatalogVariant, error) {
+	self, err := c.hubModel(ctx, repoID)
+	if err != nil {
+		return nil, err
+	}
+	root := repoID
+	for _, t := range self.Tags {
+		if r, ok := strings.CutPrefix(t, "base_model:quantized:"); ok {
+			root = r
+		}
+	}
+	var candidates []hubModel
+	if root != repoID {
+		if base, err := c.hubModel(ctx, root); err == nil {
+			candidates = append(candidates, base)
+		}
+	}
+	q := url.Values{}
+	q.Add("filter", "base_model:quantized:"+root)
+	q.Add("filter", "safetensors")
+	q.Set("sort", "downloads")
+	q.Set("direction", "-1")
+	q.Set("limit", strconv.Itoa(limit*2))
+	for _, f := range []string{"tags", "safetensors", "downloads", "gated"} {
+		q.Add("expand[]", f)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/"+repoID+"/resolve/main/"+name, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/api/models?"+q.Encode(), nil)
+	c.authorize(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, c.refused(resp.StatusCode)
+	}
+	var listed []hubModel
+	if err := json.NewDecoder(resp.Body).Decode(&listed); err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, listed...)
+	out := []api.CatalogVariant{}
+	for _, m := range candidates {
+		tags := make([]any, len(m.Tags))
+		for i, t := range m.Tags {
+			tags[i] = t
+		}
+		if m.ID == repoID || notForServer(map[string]any{"id": m.ID, "tags": tags}) {
+			continue
+		}
+		precision, size := coarsePrecision(m.ID, m.Tags, m.Safetensors.Parameters)
+		out = append(out, api.CatalogVariant{RepoID: m.ID, Precision: precision, SizeGiB: gib(size),
+			Downloads: m.Downloads, Gated: isGated(m.Gated), Base: m.ID == root})
+		if len(out) == limit {
+			break
+		}
+	}
+	// The sizes the Hub's counts give are only a floor: a packed format is
+	// counted by the values it holds, and not the same way by every
+	// publisher. What a download would fetch is the size to show, read from
+	// each listing, a few at a time.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 6)
+	for i := range out {
+		wg.Add(1)
+		go func(v *api.CatalogVariant) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			files, err := c.remoteFiles(ctx, v.RepoID)
+			if err != nil {
+				return
+			}
+			var total int64
+			for _, f := range folderFiles(files) {
+				total += f.Size
+			}
+			if total > 0 {
+				v.SizeGiB = gib(total)
+			}
+		}(&out[i])
+	}
+	wg.Wait()
+	return out, nil
+}
+
+// hubModel is one model as the Hub's API lists it.
+type hubModel struct {
+	ID          string   `json:"id"`
+	Tags        []string `json:"tags"`
+	Downloads   int64    `json:"downloads"`
+	Gated       any      `json:"gated"`
+	Safetensors struct {
+		Parameters map[string]int64 `json:"parameters"`
+	} `json:"safetensors"`
+}
+
+func (c *Catalog) hubModel(ctx context.Context, repoID string) (hubModel, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	q := url.Values{}
+	for _, f := range []string{"tags", "safetensors", "downloads", "gated"} {
+		q.Add("expand[]", f)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/api/models/"+repoID+"?"+q.Encode(), nil)
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return hubModel{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return hubModel{}, c.refused(resp.StatusCode)
+	}
+	var m hubModel
+	err = json.NewDecoder(resp.Body).Decode(&m)
+	return m, err
+}
+
+// coarsePrecision names a repository's precision from its name, which is
+// usually the most exact thing about it, else its tags, else the Hub's count
+// of parameters by dtype. The size it gives is the part of that count whose
+// width is certain: packed integers are counted by the values they hold,
+// differently by different publishers, and left out.
+func coarsePrecision(id string, tags []string, params map[string]int64) (string, int64) {
+	width := map[string]int64{"BF16": 2, "F16": 2, "F32": 4, "F8_E4M3": 1, "F8_E5M2": 1}
+	var size int64
+	for dtype, n := range params {
+		size += n * width[dtype]
+	}
+	name := strings.ToLower(id[strings.LastIndex(id, "/")+1:])
+	has := map[string]bool{}
+	for _, t := range tags {
+		has[strings.ToLower(t)] = true
+	}
+	// bitsandbytes first: a "bnb-4bit" is not the int4 an engine's own
+	// quantisation writes, and loads (or not) on its own terms.
+	for _, rule := range []struct {
+		marks     []string
+		precision string
+	}{
+		{[]string{"bnb", "bitsandbytes"}, "bnb"},
+		{[]string{"nvfp4"}, "nvfp4"},
+		{[]string{"mxfp4"}, "mxfp4"},
+		{[]string{"awq"}, "awq"},
+		{[]string{"gptq"}, "gptq"},
+		{[]string{"fp8", "nvfp8"}, "fp8"},
+		{[]string{"w4a16", "int4", "4bit", "4-bit"}, "int4"},
+		{[]string{"w8a16", "w8a8", "int8", "8bit", "8-bit"}, "int8"},
+	} {
+		for _, mark := range rule.marks {
+			if strings.Contains(name, mark) {
+				return rule.precision, size
+			}
+		}
+	}
+	for _, rule := range []struct{ tag, precision string }{
+		{"bitsandbytes", "bnb"}, {"nvfp4", "nvfp4"}, {"mxfp4", "mxfp4"}, {"awq", "awq"}, {"gptq", "gptq"},
+		{"fp8", "fp8"}, {"int4", "int4"}, {"4-bit", "int4"}, {"int8", "int8"}, {"8-bit", "int8"},
+	} {
+		if has[rule.tag] {
+			return rule.precision, size
+		}
+	}
+	switch {
+	case params["F8_E4M3"]+params["F8_E5M2"] > 0:
+		return "fp8", size
+	case params["I32"]+params["U8"]+params["U32"] > 0:
+		return "int4", size
+	case params["BF16"] > 0:
+		return "bf16", size
+	case params["F16"] > 0:
+		return "fp16", size
+	case params["F32"] > 0:
+		return "fp32", size
+	}
+	return "", size
+}
+
+// fetchSmall reads a small file of a repository whole.
+func (c *Catalog) fetchSmall(ctx context.Context, repoID, name string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.Hub+"/"+repoID+"/resolve/main/"+name, nil)
+	c.authorize(req)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, c.refused(resp.StatusCode)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 }
@@ -613,9 +856,10 @@ func (c *Catalog) ActiveCount() int {
 
 // totalSize asks for one byte and reads the total out of Content-Range,
 // which also proves the server supports ranges at all.
-func totalSize(ctx context.Context, client *http.Client, url string) (int64, error) {
+func (c *Catalog) totalSize(ctx context.Context, client *http.Client, url string) (int64, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	req.Header.Set("Range", "bytes=0-0")
+	c.authorize(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
@@ -623,7 +867,7 @@ func totalSize(ctx context.Context, client *http.Client, url string) (int64, err
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode >= 400 {
-		return 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return 0, c.refused(resp.StatusCode)
 	}
 	if cr := resp.Header.Get("Content-Range"); strings.Contains(cr, "/") {
 		return strconv.ParseInt(cr[strings.LastIndex(cr, "/")+1:], 10, 64)
@@ -696,6 +940,7 @@ func (c *Catalog) fetchSegment(ctx context.Context, client *http.Client, url str
 	end--
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	c.authorize(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -811,7 +1056,7 @@ func (c *Catalog) fetchFile(ctx context.Context, client *http.Client, d *downloa
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	total, err := totalSize(ctx, client, url)
+	total, err := c.totalSize(ctx, client, url)
 	if err != nil {
 		return err
 	}

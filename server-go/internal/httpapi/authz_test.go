@@ -124,6 +124,10 @@ func TestAuthorization(t *testing.T) {
 		{"POST", "/api/comfyui/version/check"},
 		{"PUT", "/api/config"},
 		{"PUT", "/api/settings"},
+		// The Hugging Face token opens gated models on the owner's account.
+		{"GET", "/api/settings/huggingface"},
+		{"PUT", "/api/settings/huggingface"},
+		{"DELETE", "/api/settings/huggingface"},
 	} {
 		code, _ := call(asMember, c.method, c.path, map[string]any{})
 		expect("member "+c.method+" "+c.path, code, 403)

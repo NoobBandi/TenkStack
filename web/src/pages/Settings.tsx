@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Collapse, InputNumber, Popconfirm, Select, Space, Switch,
-  Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Collapse, Input, InputNumber, Popconfirm, Select, Space,
+  Switch, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   CheckOutlined, DeleteOutlined, EditOutlined, LoadingOutlined, PlusOutlined,
@@ -9,10 +9,11 @@ import {
 import LocationForm from '../components/LocationForm';
 import { bytes } from '../components/files/kit';
 import {
-  addModelLocation, fetchConfig, fetchMachine, fetchModelLocations, fetchSettings,
-  locationName, removeModelLocation, saveConfigRaw, saveSettings, setModelLocationDefaults,
-  updateModelLocation,
-  type MachinePath, type MachineUnit, type ModelFormat, type ModelLocations, type Setting,
+  addModelLocation, clearHuggingFace, fetchConfig, fetchHuggingFace, fetchMachine,
+  fetchModelLocations, fetchSettings, locationName, removeModelLocation, saveConfigRaw,
+  saveHuggingFace, saveSettings, setModelLocationDefaults, updateModelLocation,
+  type HuggingFaceToken, type MachinePath, type MachineUnit, type ModelFormat, type ModelLocations,
+  type Setting,
 } from '../api';
 import { useIsOwner } from '../identity';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -489,6 +490,100 @@ function Advanced() {
   );
 }
 
+/**
+ * The owner's Hugging Face token. The catalog sends it to reach gated models
+ * (Llama, Gemma, …) once the owner has accepted their terms on the Hub; it is
+ * checked with the Hub before it is kept, and never shown again -- only whose
+ * it is and its last four characters.
+ */
+function HuggingFaceCard() {
+  const { message } = AntApp.useApp();
+  const [state, setState] = useState<HuggingFaceToken | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    fetchHuggingFace().then(setState).catch(() => setState({ set: false, hint: '', user: '' }));
+  }, []);
+
+  const save = async () => {
+    if (!draft.trim()) return;
+    setSaving(true);
+    try {
+      const next = await saveHuggingFace(draft.trim());
+      setState(next);
+      setEditing(false);
+      setDraft('');
+      message.success(next.user ? `已儲存 ${next.user} 的 token` : '已儲存');
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const remove = async () => {
+    try {
+      setState(await clearHuggingFace());
+      message.success('已移除');
+    } catch (error) {
+      message.error((error as Error).message);
+    }
+  };
+
+  const form = (
+    <Space.Compact style={{ width: 360 }}>
+      <Input.Password
+        placeholder="hf_…"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onPressEnter={() => void save()}
+        autoComplete="off"
+      />
+      <Button type="primary" loading={saving} disabled={!draft.trim()} onClick={() => void save()}>
+        儲存
+      </Button>
+    </Space.Compact>
+  );
+
+  return (
+    <Section title="Hugging Face" note="下載需要授權的模型（Llama、Gemma 等）時用">
+      {state === null ? (
+        <Text type="secondary" style={{ fontSize: 12 }}>讀取中…</Text>
+      ) : state.set && !editing ? (
+        <Line
+          label="Access token"
+          note={<>屬於 <b>{state.user || '（讀不到帳號）'}</b>，{state.hint}。只存在這台機器上，不會再顯示出來。</>}
+          right={(
+            <Space>
+              <Button size="small" onClick={() => setEditing(true)}>更換</Button>
+              <Popconfirm title="移除 token？" description="需要授權的模型就下載不了了。"
+                          okText="移除" cancelText="取消" onConfirm={() => void remove()}>
+                <Button size="small" danger>移除</Button>
+              </Popconfirm>
+            </Space>
+          )}
+        />
+      ) : (
+        <Line
+          label="Access token"
+          note={(
+            <>
+              到 <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">huggingface.co/settings/tokens</a> 建立一個
+              權限是 Read 的 token 貼在這裡，儲存前會先向 Hugging Face 確認它有效。需要授權的模型，還要先到它的模型頁按同意使用條款。
+            </>
+          )}
+          right={(
+            <Space>
+              {form}
+              {editing && <Button onClick={() => { setEditing(false); setDraft(''); }}>取消</Button>}
+            </Space>
+          )}
+        />
+      )}
+    </Section>
+  );
+}
+
 export default function Settings() {
   const owner = useIsOwner();
   const [settings, setSettings] = useState<Setting[] | null>(null);
@@ -513,6 +608,7 @@ export default function Settings() {
   return (
     <Space direction="vertical" size={16} style={{ width: '100%', maxWidth: 1080 }}>
       <ModelLocationsCard />
+      <HuggingFaceCard />
       {SECTIONS.map((section) => (
         <Section key={section.title} title={section.title} note={section.note}>
           {settings === null && <Text type="secondary" style={{ fontSize: 12 }}>讀取中…</Text>}

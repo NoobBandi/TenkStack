@@ -236,3 +236,8 @@ body {
   .ws-label { animation: none; color: rgba(255, 255, 255, 0.75); background: none; }
   .ws-spin { animation: none; }
 }
+
+/* A row in the catalog's list of other precisions: it opens that one. */
+.catalog-variant:hover {
+  background: rgba(110, 168, 254, 0.08);
+}

@@ -33,6 +33,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/intel"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpu/nvidia"
 	"github.com/NoobBandi/TenkStack/server-go/internal/gpuhistory"
+	"github.com/NoobBandi/TenkStack/server-go/internal/hftoken"
 	"github.com/NoobBandi/TenkStack/server-go/internal/httpapi"
 	"github.com/NoobBandi/TenkStack/server-go/internal/journal"
 	"github.com/NoobBandi/TenkStack/server-go/internal/llamaswap"
@@ -123,6 +124,8 @@ func main() {
 	gateway := &channels.Channels{Dir: layout.CaddyDir, CaddyBin: layout.CaddyBin, APIPort: portTable.API,
 		ComfyBase: portTable.ComfyFirst, PublicBase: portTable.ComfyPublicFirst}
 
+	// The owner's Hugging Face token, for gated models; see the settings page.
+	hfToken := hftoken.New(filepath.Join(layout.StateDir, "huggingface-token"))
 	srv := &httpapi.Server{
 		Auth:         authn,
 		Users:        userStore,
@@ -150,10 +153,11 @@ func main() {
 		Blobs:   blobStore,
 		Vision:  vision,
 		Search:  search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
-		Catalog: catalog.New(models),
+		Catalog: catalogWithToken(catalog.New(models), hfToken),
 		Files: &files.Files{ComfyDir: layout.ComfyDir, StateDir: layout.StateDir, Home: home,
 			Roots: os.Getenv("CONSOLE_FILE_ROOTS"), ExtraDeny: os.Getenv("CONSOLE_FILE_DENY")},
-		Remote: gguf.NewRemote(),
+		Remote:  remoteWithToken(gguf.NewRemote(), hfToken),
+		HFToken: hfToken,
 		// TENKSTACK_REPO and TENKSTACK_RELEASE_API exist for a fork and for
 		// testing against a stand-in; an ordinary install sets neither.
 		Release: release.New(os.Getenv("TENKSTACK_REPO"), os.Getenv("TENKSTACK_RELEASE_API"), version,
@@ -274,4 +278,14 @@ func envOr(name, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func catalogWithToken(c *catalog.Catalog, t *hftoken.Store) *catalog.Catalog {
+	c.Token = t.Get
+	return c
+}
+
+func remoteWithToken(r *gguf.Remote, t *hftoken.Store) *gguf.Remote {
+	r.Token = t.Get
+	return r
 }

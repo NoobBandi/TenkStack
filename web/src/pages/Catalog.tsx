@@ -9,10 +9,11 @@ import {
 } from '@ant-design/icons';
 import { LINE, MONO } from '../theme';
 import {
-  cancelDownload, catalogFiles, catalogFolder, estimateFile, fetchDownloads, fetchGpuDevices,
+  cancelDownload, catalogFiles, catalogFolder, catalogVariants, estimateFile, fetchDownloads, fetchGpuDevices,
   fetchModelLocations, fetchProviders, locationName, searchCatalog, startDownload,
   startFolderDownload, subscribe, withinLocation,
-  type CatalogFile, type CatalogFolder, type CatalogFormat, type CatalogRepo, type DownloadStatus,
+  type CatalogFile, type CatalogFolder, type CatalogFormat, type CatalogRepo, type CatalogVariant,
+  type DownloadStatus,
   type FileEstimate, type GpuDevice, type ModelLocation, type ProviderCard, type Runtime,
 } from '../api';
 import CatalogFolderPanel, { type Plan } from '../components/CatalogFolder';
@@ -205,6 +206,7 @@ export default function Catalog() {
   const [engines, setEngines] = useState<ProviderCard[]>([]);
   const [gpus, setGpus] = useState<GpuDevice[]>([]);
   const [folder, setFolder] = useState<CatalogFolder | null>(null);
+  const [variants, setVariants] = useState<CatalogVariant[] | null>(null);
   useEffect(() => {
     fetchProviders().then((p) => { setRuntimes(p.runtimes); setEngines(p.providers); })
       .catch(() => undefined);
@@ -328,15 +330,23 @@ export default function Catalog() {
 
   const onPick = async (repoId: string) => {
     setSelected(repoId);
+    selectedRef.current = repoId;
     setEstimates({});
     setFilePage(1);
     setFilePageSize(10);
     setLoadingFiles(true);
     setFiles([]);
     setFolder(null);
+    setVariants(null);
     try {
-      if (format === 'safetensors') setFolder(await catalogFolder(repoId));
-      else setFiles(await catalogFiles(repoId));
+      if (format === 'safetensors') {
+        // The other precisions come from a second, slower query; the folder
+        // does not wait for them.
+        catalogVariants(repoId).then((v) => {
+          if (selectedRef.current === repoId) setVariants(v);
+        }).catch(() => { if (selectedRef.current === repoId) setVariants([]); });
+        setFolder(await catalogFolder(repoId));
+      } else setFiles(await catalogFiles(repoId));
     } catch (error) {
       message.error((error as Error).message);
     } finally {
@@ -574,6 +584,11 @@ export default function Catalog() {
                           ↓ {repo.downloads.toLocaleString()}
                         </Text>
                         <Text type="secondary" style={{ fontSize: 12 }}>♥ {repo.likes}</Text>
+                        {repo.gated && (
+                          <Tooltip title="要先在 Hugging Face 同意使用條款，並在設定填入 token 才能下載">
+                            <Tag color="gold" style={{ fontSize: 11 }}>需要授權</Tag>
+                          </Tooltip>
+                        )}
                         {repo.last_modified && (
                           <Text type="secondary" style={{ fontSize: 12, opacity: 0.7 }}>
                             ・ {since(repo.last_modified)}
@@ -657,6 +672,8 @@ export default function Catalog() {
                 download={downloads.find((d) => d.kind === 'folder' && d.repo_id === folder.repo_id)}
                 onDownload={onFolderDownload}
                 onCreate={onCreate}
+                variants={variants}
+                onPickVariant={(repo) => void onPick(repo)}
               />
             )}
           </div>

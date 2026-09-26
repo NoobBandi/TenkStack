@@ -756,6 +756,8 @@ export interface CatalogRepo {
   likes: number;
   last_modified: string;
   tags: string[];
+  /** The Hub opens its files only to a signed-in user who accepted its terms. */
+  gated?: boolean;
 }
 
 export interface CatalogFile {
@@ -903,6 +905,13 @@ export interface CatalogFolder {
   vision: boolean;
   mtp: boolean;
   context_length: number;
+  /** One token of context in a 16-bit attention cache; 0 when unknown. `hybrid`:
+   *  only some layers keep one, the rest are linear attention. */
+  kv_bytes_per_token: number;
+  hybrid: boolean;
+  /** Gated on the Hub; `needs_access` says what to do when it would not open. */
+  gated: boolean;
+  needs_access: string;
   /** All of it is in `location`; otherwise `location` is where a download
    *  would put it and `present_bytes` how much is already there. */
   on_disk: boolean;
@@ -910,6 +919,34 @@ export interface CatalogFolder {
   location: string;
   local_path: string;
 }
+
+/** The same model in another precision, read from the Hub before any
+ *  config: its tags and its count of parameters by dtype. */
+export interface CatalogVariant {
+  repo_id: string;
+  precision: string;
+  size_gib: number;
+  downloads: number;
+  gated: boolean;
+  /** The repository the others were quantised from. */
+  base: boolean;
+}
+
+export const catalogVariants = (repoId: string) =>
+  get<CatalogVariant[]>(`/catalog/variants?repo_id=${encodeURIComponent(repoId)}`);
+
+/** The owner's Hugging Face token as the settings page shows it; the token
+ *  itself never comes back. */
+export interface HuggingFaceToken {
+  set: boolean;
+  hint: string;
+  user: string;
+}
+
+export const fetchHuggingFace = () => get<HuggingFaceToken>('/settings/huggingface');
+export const saveHuggingFace = (token: string) =>
+  send<HuggingFaceToken>('/settings/huggingface', 'PUT', { token });
+export const clearHuggingFace = () => send<HuggingFaceToken>('/settings/huggingface', 'DELETE');
 
 export const catalogFolder = (repoId: string) =>
   get<CatalogFolder>(`/catalog/folder?repo_id=${encodeURIComponent(repoId)}`);

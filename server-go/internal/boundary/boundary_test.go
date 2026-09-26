@@ -27,6 +27,8 @@ var allowed = map[string][]string{
 	"locations": {},
 	// What a Hugging Face model's config.json says about it.
 	"hfmodel": {},
+	// The owner's Hugging Face access token.
+	"hftoken": {},
 	// Data about software rather than cards; a leaf like vendors, and it
 	// may name vendors because a build is per vendor.
 	"providers": {"api", "vendors"},
@@ -62,7 +64,7 @@ var allowed = map[string][]string{
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "locations", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant"},
+		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant"},
 	"boundary": {},
 }
 

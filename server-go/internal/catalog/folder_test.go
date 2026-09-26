@@ -31,6 +31,8 @@ type fakeHub struct {
 	files   map[string][]byte
 	lfs     map[string]bool
 	corrupt string
+	// gate: files are served only to this bearer token, as a gated repo's.
+	gate    string
 	mu      sync.Mutex
 	fetched map[string]int
 }
@@ -48,6 +50,10 @@ func (h *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			siblings = append(siblings, s)
 		}
 		json.NewEncoder(w).Encode(map[string]any{"siblings": siblings})
+		return
+	}
+	if h.gate != "" && r.Header.Get("Authorization") != "Bearer "+h.gate {
+		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 	name := strings.TrimPrefix(r.URL.Path, repo+"/resolve/main/")
@@ -84,7 +90,8 @@ func newHub() *fakeHub {
 	return &fakeHub{
 		files: map[string][]byte{
 			"config.json": []byte(`{"architectures":["Qwen3_5ForConditionalGeneration"],"vision_config":{"depth":27},
-				"text_config":{"dtype":"bfloat16","max_position_embeddings":262144,"num_hidden_layers":64,"mtp_num_hidden_layers":1}}`),
+				"text_config":{"dtype":"bfloat16","max_position_embeddings":262144,"num_hidden_layers":64,"mtp_num_hidden_layers":1,
+				"num_key_value_heads":4,"head_dim":256,"full_attention_interval":4}}`),
 			"tokenizer.json":                   []byte(`{"version":"1.0"}`),
 			"chat_template.jinja":              []byte("{{ messages }}"),
 			"model-00001-of-00002.safetensors": weights,
@@ -228,6 +235,67 @@ func TestNotForServer(t *testing.T) {
 		got := notForServer(map[string]any{"id": id, "tags": tags})
 		if want := id != "huihui-ai/Huihui-Qwen3.8-27B-abli"; got != want {
 			t.Errorf("%s: %v, want %v", id, got, want)
+		}
+	}
+}
+
+// A gated repository says what to do until a token that may open it is set,
+// and then loads like any other.
+func TestGatedFolder(t *testing.T) {
+	hub := newHub()
+	hub.gate = "hf_ok"
+	c, _ := newCatalog(t, hub)
+	token := ""
+	c.Token = func() string { return token }
+	ctx := context.Background()
+
+	f, err := c.Folder(ctx, "owner/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.NeedsAccess, "設定") || f.Precision != "" {
+		t.Errorf("without a token: %q, precision %q", f.NeedsAccess, f.Precision)
+	}
+	token = "hf_wrong"
+	if f, _ := c.Folder(ctx, "owner/model"); !strings.Contains(f.NeedsAccess, "還沒有權限") {
+		t.Errorf("with a token the repo refuses: %q", f.NeedsAccess)
+	}
+	token = "hf_ok"
+	if f, _ := c.Folder(ctx, "owner/model"); f.NeedsAccess != "" || f.Precision != "bf16" || f.KVBytesPerToken == 0 {
+		t.Errorf("with the token: %+v", f)
+	}
+	if _, err := c.StartFolder(ctx, "owner/model", ""); err != nil {
+		t.Fatal(err)
+	}
+	if state := waitFor(t, c); state != "done" {
+		t.Errorf("download with the token ended %s", state)
+	}
+}
+
+func TestCoarsePrecision(t *testing.T) {
+	for _, c := range []struct {
+		id     string
+		tags   []string
+		params map[string]int64
+		want   string
+		gib    float64
+	}{
+		// As the Hub lists them for Qwen3.8-27B, Llama 3.1 and quantisations.
+		{"huihui-ai/Huihui-Qwen3.8-27B-abliterated", nil, map[string]int64{"BF16": 27781427952}, "bf16", 51.75},
+		{"Qwen/Qwen3.8-27B-FP8", []string{"fp8"}, map[string]int64{"BF16": 3082220272, "F8_E4M3": 24699207680}, "fp8", 28.74},
+		// Packed values are left out of the size, which the listing gives.
+		{"sakamakismile/Huihui-Qwen3.8-27B-abliterated-NVFP4", []string{"nvfp4", "8-bit"}, map[string]int64{"BF16": 3006172400, "U8": 24350556160}, "nvfp4", 5.6},
+		// The name says NVFP4 though the tags only say 8-bit.
+		{"nvidia/Llama-3.1-8B-Instruct-NVFP4", []string{"8-bit"}, nil, "nvfp4", 0},
+		// bitsandbytes is its own thing, not the int4 an engine writes.
+		{"unsloth/Meta-Llama-3.1-8B-Instruct-bnb-4bit", []string{"4-bit", "bitsandbytes"}, nil, "bnb", 0},
+		{"RedHatAI/Meta-Llama-3.1-8B-Instruct-quantized.w4a16", nil, nil, "int4", 0},
+		{"someone/model", nil, map[string]int64{"BF16": 3082220272, "F8_E4M3": 24699207680}, "fp8", 28.74},
+		{"someone/model", nil, map[string]int64{"I32": 3000000000, "BF16": 1000000000}, "int4", 1.86},
+	} {
+		got, size := coarsePrecision(c.id, c.tags, c.params)
+		if got != c.want || gib(size) != c.gib {
+			t.Errorf("%s: %s %.2f GiB, want %s %.2f", c.id, got, gib(size), c.want, c.gib)
 		}
 	}
 }
