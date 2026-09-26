@@ -177,7 +177,7 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("sort", "downloads")
 	q.Set("direction", "-1")
-	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated", "pipeline_tag"} {
+	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated"} {
 		q.Add("expand[]", f)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -214,7 +214,7 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 			}
 		}
 		r := api.CatalogRepo{RepoID: m["id"], Downloads: m["downloads"], Likes: m["likes"], LastModified: m["lastModified"], Tags: tags,
-			Gated: isGated(m["gated"]), Format: format, Vision: seesImages(m)}
+			Gated: isGated(m["gated"]), Format: format}
 		if r.Downloads == nil {
 			r.Downloads = 0
 		}
@@ -224,23 +224,6 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 		out = append(out, r)
 	}
 	return out
-}
-
-// seesImages says whether a search result takes images, from the task the
-// Hub files it under and the tags publishers use for it.
-func seesImages(m map[string]any) bool {
-	switch p, _ := m["pipeline_tag"].(string); p {
-	case "image-text-to-text", "any-to-any", "image-to-text", "video-text-to-text", "visual-question-answering":
-		return true
-	}
-	list, _ := m["tags"].([]any)
-	for _, t := range list {
-		switch s, _ := t.(string); s {
-		case "image-text-to-text", "any-to-any", "multimodal", "vision":
-			return true
-		}
-	}
-	return false
 }
 
 // isGated reads the Hub's gated field: false, or "auto" / "manual".

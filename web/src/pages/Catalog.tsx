@@ -576,7 +576,9 @@ export default function Catalog() {
               them, so "第 41-50 筆" -- which is the answer to where you are --
               is only readable once you have already got to the bottom. The
               rows scroll inside their own box and it stays put beneath them. */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
+          {/* No side padding here: a row's highlight and its divider run to
+              the card's edges, and the row carries the inset itself. */}
+          <div style={{ flex: 1, overflowY: 'auto' }}>
           <List
             dataSource={listed.slice((page - 1) * pageSize, page * pageSize)}
             renderItem={(repo) => {
@@ -591,7 +593,7 @@ export default function Catalog() {
                     // saying is which one the file list below belongs to.
                     borderInlineStart: `2px solid ${picked ? '#6ea8fe' : 'transparent'}`,
                     background: picked ? 'rgba(110,168,254,0.06)' : undefined,
-                    paddingInline: 10,
+                    paddingInline: 22,
                   }}
                 >
                   <List.Item.Meta
@@ -617,10 +619,11 @@ export default function Catalog() {
                             ・ {since(repo.last_modified)}
                           </Text>
                         )}
-                        {/* Only what helps choose: the Hub's own tags -- papers,
-                            task names, licences, endpoint flags -- do not, and
-                            were most of what this row said. */}
-                        {repo.vision && <Tag color="purple" style={{ fontSize: 11 }}>看圖</Tag>}
+                        {/* Nothing else: the Hub's own tags -- papers, task
+                            names, licences, endpoint flags -- do not help
+                            choose, and what a model can do is on the right,
+                            read from its config rather than from how its
+                            publisher filed it. */}
                       </Space>
                     }
                   />
@@ -665,7 +668,7 @@ export default function Catalog() {
             <Text type="secondary" style={{ fontSize: 12 }}>下載到</Text>
             <Select
               size="small"
-              style={{ width: 180 }}
+              style={{ width: 'min(180px, 36vw)' }}
               value={target}
               onChange={setTarget}
               options={locations.map((l) => ({
@@ -759,7 +762,7 @@ export default function Catalog() {
                   ),
                 },
                 {
-                  title: '預估速度', width: 168,
+                  title: '預估速度', width: 168, responsive: ['xl'],
                   render: (_, row) => {
                     // A projector has no decode loop of its own; the number
                     // would be meaningless rather than merely uncertain.

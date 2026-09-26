@@ -11,8 +11,6 @@ type CatalogRepo struct {
 	// Format is how the catalog offers it: gguf, a choice of files, or
 	// safetensors, a folder.
 	Format string `json:"format"`
-	// Vision: it takes images, as far as the Hub's task and tags say.
-	Vision bool `json:"vision"`
 }
 
 // CatalogVariant is the same model in another precision.

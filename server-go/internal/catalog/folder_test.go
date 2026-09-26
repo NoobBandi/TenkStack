@@ -323,16 +323,3 @@ func TestSearchAll(t *testing.T) {
 		t.Errorf("got %v, want %s", line, want)
 	}
 }
-
-func TestSeesImages(t *testing.T) {
-	for m, want := range map[*map[string]any]bool{
-		{"pipeline_tag": "image-text-to-text"}:                                 true,
-		{"pipeline_tag": "any-to-any"}:                                         true,
-		{"pipeline_tag": "text-generation", "tags": []any{"vision"}}:           true,
-		{"pipeline_tag": "text-generation", "tags": []any{"arxiv:2505.09388"}}: false,
-	} {
-		if got := seesImages(*m); got != want {
-			t.Errorf("%v: %v, want %v", *m, got, want)
-		}
-	}
-}
