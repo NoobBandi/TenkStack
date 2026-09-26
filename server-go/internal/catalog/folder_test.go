@@ -299,3 +299,27 @@ func TestCoarsePrecision(t *testing.T) {
 		}
 	}
 }
+
+// Both formats at once come back as one list by downloads, each marked with
+// the format it was found under, and a GGUF repo never offered as a folder.
+func TestSearchAll(t *testing.T) {
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("filter") {
+		case "gguf":
+			w.Write([]byte(`[{"id":"a/model-GGUF","downloads":50,"tags":["gguf"]},{"id":"b/small-GGUF","downloads":5,"tags":["gguf"]}]`))
+		case "safetensors":
+			w.Write([]byte(`[{"id":"a/model","downloads":90,"tags":["safetensors"]},{"id":"c/other-GGUF","downloads":70,"tags":["gguf","safetensors"]}]`))
+		}
+	}))
+	defer hub.Close()
+	c := New(onePlace{locations.Location{Key: locations.Primary, Path: t.TempDir()}})
+	c.Hub = hub.URL
+	got := c.Search(context.Background(), "model", 10, "all")
+	var line []string
+	for _, r := range got {
+		line = append(line, fmt.Sprintf("%v:%s", r.RepoID, r.Format))
+	}
+	if want := "a/model:safetensors a/model-GGUF:gguf b/small-GGUF:gguf"; strings.Join(line, " ") != want {
+		t.Errorf("got %v, want %s", line, want)
+	}
+}

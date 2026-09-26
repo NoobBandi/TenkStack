@@ -8,6 +8,9 @@ type CatalogRepo struct {
 	Tags         []any `json:"tags"`
 	// Gated: the Hub opens its files only to an accepted, signed-in user.
 	Gated bool `json:"gated"`
+	// Format is how the catalog offers it: gguf, a choice of files, or
+	// safetensors, a folder.
+	Format string `json:"format"`
 }
 
 // CatalogVariant is the same model in another precision.

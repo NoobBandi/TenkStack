@@ -130,18 +130,48 @@ func relPath(repoID, filename string) string {
 	return filepath.Join(segments...)
 }
 
-// Formats are the file formats the catalog can search for.
-var Formats = []string{"gguf", "safetensors"}
+// Formats are the file formats the catalog can search for; "all" is both.
+var Formats = []string{"gguf", "safetensors", "all"}
 
-// Search lists repos of one format, sorted by downloads, a hundred at a
-// time since the page pages through them locally. A repository of GGUF
-// files also carries a few safetensors now and then; those are left out of
-// a safetensors search, which is for a model an engine loads as a folder.
+// Search lists repos of one format, or of both, sorted by downloads, a
+// hundred at a time since the page pages through them locally. Each carries
+// its format, which decides how the page shows it: a GGUF repository is a
+// choice of files, a safetensors one a folder. A repository of GGUF files
+// that also carries a few safetensors, or an MLX export, is not offered as
+// a folder.
 func (c *Catalog) Search(ctx context.Context, query string, limit int, format string) []api.CatalogRepo {
-	out := []api.CatalogRepo{}
-	if format != "safetensors" {
-		format = "gguf"
+	if format != "all" {
+		if format != "safetensors" {
+			format = "gguf"
+		}
+		return c.search(ctx, query, limit, format)
 	}
+	// Both at once, merged by downloads: a newcomer looking for a model
+	// need not know which format to ask for.
+	var gguf, st []api.CatalogRepo
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); gguf = c.search(ctx, query, limit, "gguf") }()
+	go func() { defer wg.Done(); st = c.search(ctx, query, limit, "safetensors") }()
+	wg.Wait()
+	seen := map[any]bool{}
+	out := []api.CatalogRepo{}
+	for _, r := range append(gguf, st...) {
+		if !seen[r.RepoID] {
+			seen[r.RepoID] = true
+			out = append(out, r)
+		}
+	}
+	downloads := func(r api.CatalogRepo) float64 { f, _ := r.Downloads.(float64); return f }
+	sort.SliceStable(out, func(i, j int) bool { return downloads(out[i]) > downloads(out[j]) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func (c *Catalog) search(ctx context.Context, query string, limit int, format string) []api.CatalogRepo {
+	out := []api.CatalogRepo{}
 	q := url.Values{}
 	q.Set("search", query)
 	q.Set("filter", format)
@@ -185,7 +215,7 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int, format st
 			}
 		}
 		r := api.CatalogRepo{RepoID: m["id"], Downloads: m["downloads"], Likes: m["likes"], LastModified: m["lastModified"], Tags: tags,
-			Gated: isGated(m["gated"])}
+			Gated: isGated(m["gated"]), Format: format}
 		if r.Downloads == nil {
 			r.Downloads = 0
 		}

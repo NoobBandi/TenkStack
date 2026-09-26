@@ -12,7 +12,8 @@ import {
   cancelDownload, catalogFiles, catalogFolder, catalogVariants, estimateFile, fetchDownloads, fetchGpuDevices,
   fetchModelLocations, fetchProviders, locationName, searchCatalog, startDownload,
   startFolderDownload, subscribe, withinLocation,
-  type CatalogFile, type CatalogFolder, type CatalogFormat, type CatalogRepo, type CatalogVariant,
+  type CatalogFile, type CatalogFolder, type CatalogFormat, type CatalogRepo, type CatalogSearch,
+  type CatalogVariant,
   type DownloadStatus,
   type FileEstimate, type GpuDevice, type ModelLocation, type ProviderCard, type Runtime,
 } from '../api';
@@ -198,10 +199,14 @@ export default function Catalog() {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  // Which kind of model is being looked for. GGUF is llama.cpp's and always
-  // offered; safetensors is offered when an engine in the registry runs it,
-  // installed or not, so a newcomer finds out what it would take.
-  const [format, setFormat] = useState<CatalogFormat>('gguf');
+  // What is being searched for: GGUF, llama.cpp's; safetensors, a server
+  // engine's, offered when an engine in the registry runs it, installed or not,
+  // so a newcomer finds out what it would take; or both, the default, for
+  // somebody who does not know yet which they want.
+  const [mode, setMode] = useState<CatalogSearch>('all');
+  // The format of the repository on the right, which decides how it is shown:
+  // a choice of files, or a folder. Found with it, not assumed from the mode.
+  const [pickedFormat, setPickedFormat] = useState<CatalogFormat | null>(null);
   const [runtimes, setRuntimes] = useState<Runtime[]>([]);
   const [engines, setEngines] = useState<ProviderCard[]>([]);
   const [gpus, setGpus] = useState<GpuDevice[]>([]);
@@ -216,6 +221,10 @@ export default function Catalog() {
   // runs the format. Its vendor decides which cards the estimate counts.
   const serverRuntime = runtimes.find((r) => r.formats.includes('safetensors'));
   const serverEngines = engines.filter((e) => e.formats.includes('safetensors'));
+  // With no engine that runs safetensors in the registry there is nothing to
+  // switch between.
+  const searchMode: CatalogSearch = serverEngines.length > 0 ? mode : 'gguf';
+  const format: CatalogFormat = pickedFormat ?? (searchMode === 'safetensors' ? 'safetensors' : 'gguf');
   // Cards for the GGUF size warning: the smallest one, and how many there are.
   const cardGiB = gpus.length
     ? Math.min(...gpus.map((g) => (g.live?.memory_total_mib ?? VRAM_GIB * 1024) / 1024))
@@ -300,10 +309,11 @@ export default function Catalog() {
     setDownloads(list);
   }), [message]);
 
-  const onSearch = useCallback(async (value: string, as?: CatalogFormat) => {
+  const onSearch = useCallback(async (value: string, as?: CatalogSearch) => {
     if (!value.trim()) return;
     setSearching(true);
     setSelected(null);
+    setPickedFormat(null);
     setFiles([]);
     setFolder(null);
     setEstimates({});
@@ -311,25 +321,30 @@ export default function Catalog() {
     setPageSize(10);
     setFilePageSize(10);
     try {
-      setRepos(await searchCatalog(value, as ?? format));
+      setRepos(await searchCatalog(value, as ?? searchMode));
     } catch (error) {
       message.error((error as Error).message);
     } finally {
       setSearching(false);
     }
-  }, [message, format]);
+  }, [message, searchMode]);
 
-  const onFormat = (next: CatalogFormat) => {
-    setFormat(next);
+  const onMode = (next: CatalogSearch) => {
+    setMode(next);
     setRepos([]);
     setSelected(null);
+    setPickedFormat(null);
     setFiles([]);
     setFolder(null);
     if (query.trim()) void onSearch(query, next);
   };
 
-  const onPick = async (repoId: string) => {
+  const onPick = async (repoId: string, as?: CatalogFormat) => {
+    const picked: CatalogFormat = as
+      ?? repos.find((r) => r.repo_id === repoId)?.format
+      ?? (searchMode === 'safetensors' ? 'safetensors' : 'gguf');
     setSelected(repoId);
+    setPickedFormat(picked);
     selectedRef.current = repoId;
     setEstimates({});
     setFilePage(1);
@@ -339,7 +354,7 @@ export default function Catalog() {
     setFolder(null);
     setVariants(null);
     try {
-      if (format === 'safetensors') {
+      if (picked === 'safetensors') {
         // The other precisions come from a second, slower query; the folder
         // does not wait for them.
         catalogVariants(repoId).then((v) => {
@@ -495,20 +510,23 @@ export default function Catalog() {
 
       <Card size="small">
         {serverEngines.length > 0 && (
-          <Segmented<CatalogFormat>
+          <Segmented<CatalogSearch>
             style={{ marginBottom: 10 }}
-            value={format}
-            onChange={onFormat}
+            value={searchMode}
+            onChange={onMode}
             options={[
               { value: 'gguf', label: 'GGUF · llama.cpp' },
-              { value: 'safetensors', label: `safetensors · ${serverEngines.map((e) => e.name).join(' / ')}` },
+              { value: 'safetensors', label: `Safetensors · ${serverEngines.map((e) => e.name).join(' / ')}` },
+              { value: 'all', label: '全部' },
             ]}
           />
         )}
         <Input.Search
-          placeholder={format === 'gguf'
+          placeholder={searchMode === 'gguf'
             ? '搜尋 Hugging Face 上的 GGUF 模型，例如 qwen3 coder'
-            : '搜尋 Hugging Face 上的 safetensors 模型，例如 Qwen3.8-27B'}
+            : searchMode === 'safetensors'
+              ? '搜尋 Hugging Face 上的 safetensors 模型，例如 Qwen3.8-27B'
+              : '搜尋 Hugging Face 上的模型，例如 Qwen3.8-27B'}
           enterButton="搜尋"
           size="large"
           loading={searching}
@@ -517,11 +535,13 @@ export default function Catalog() {
           onSearch={(value) => void onSearch(value)}
         />
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {format === 'gguf'
+          {searchMode === 'gguf'
             ? '一個 GGUF 檔就是一個模型，給 llama.cpp 用：從右邊挑一個量化版本下載。'
-            : '一個儲存庫就是一個模型，給伺服器引擎整個資料夾載入：權重、設定檔和 tokenizer 會一起下載。'}
+            : searchMode === 'safetensors'
+              ? '一個儲存庫就是一個模型，給伺服器引擎整個資料夾載入：權重、設定檔和 tokenizer 會一起下載。'
+              : '兩種格式一起列出，每筆標出是哪一種：GGUF 是挑一個檔案給 llama.cpp，safetensors 是整個資料夾給 vLLM 這類伺服器引擎。'}
         </Text>
-        {format === 'safetensors' && !serverRuntime && (
+        {searchMode !== 'gguf' && serverEngines.length > 0 && !serverRuntime && (
           <Alert
             style={{ marginTop: 10 }}
             type="info"
@@ -584,6 +604,11 @@ export default function Catalog() {
                           ↓ {repo.downloads.toLocaleString()}
                         </Text>
                         <Text type="secondary" style={{ fontSize: 12 }}>♥ {repo.likes}</Text>
+                        {searchMode === 'all' && repo.format && (
+                          <Tag color={repo.format === 'gguf' ? 'cyan' : 'geekblue'} style={{ fontSize: 11 }}>
+                            {repo.format === 'gguf' ? 'GGUF' : 'Safetensors'}
+                          </Tag>
+                        )}
                         {repo.gated && (
                           <Tooltip title="要先在 Hugging Face 同意使用條款，並在設定填入 token 才能下載">
                             <Tag color="gold" style={{ fontSize: 11 }}>需要授權</Tag>
@@ -597,7 +622,7 @@ export default function Catalog() {
                         {/* Tags that every GGUF repo carries say nothing about
                             this one. */}
                         {repo.tags
-                          .filter((t) => !['gguf', 'transformers', 'text-generation'].includes(t))
+                          .filter((t) => !['gguf', 'safetensors', 'transformers', 'text-generation'].includes(t))
                           .slice(0, 4)
                           .map((t) => (
                             <Tag key={t} style={{ fontSize: 11 }}>{t}</Tag>
@@ -673,7 +698,7 @@ export default function Catalog() {
                 onDownload={onFolderDownload}
                 onCreate={onCreate}
                 variants={variants}
-                onPickVariant={(repo) => void onPick(repo)}
+                onPickVariant={(repo) => void onPick(repo, 'safetensors')}
               />
             )}
           </div>

@@ -758,6 +758,8 @@ export interface CatalogRepo {
   tags: string[];
   /** The Hub opens its files only to a signed-in user who accepted its terms. */
   gated?: boolean;
+  /** How it is offered: a choice of GGUF files, or a folder of safetensors. */
+  format?: CatalogFormat;
 }
 
 export interface CatalogFile {
@@ -885,8 +887,10 @@ export const controlContainer = (name: string, verb: 'restart' | 'start' | 'stop
 /** What the catalog searches for: one GGUF file per model for llama.cpp, or a
  *  repository of safetensors a server engine loads as a folder. */
 export type CatalogFormat = 'gguf' | 'safetensors';
+/** What a search asks for: one format, or both at once. */
+export type CatalogSearch = CatalogFormat | 'all';
 
-export const searchCatalog = (q: string, format: CatalogFormat = 'gguf') =>
+export const searchCatalog = (q: string, format: CatalogSearch = 'gguf') =>
   get<CatalogRepo[]>(`/catalog/search?q=${encodeURIComponent(q)}&limit=20&format=${format}`);
 
 /** A repository as a server engine loads it: what it needs of it, and what
