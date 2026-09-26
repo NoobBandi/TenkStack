@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -116,6 +118,7 @@ builds: {intel: {image: x/a}}
 		"control, no name":   good + "sampling: {top_k: \"\"}\n",
 		"speculation no --":  good + "speculation: {flag: spec, refuses: [min_p]}\n",
 		"refuses nothing":    good + "speculation: {flag: --spec}\n",
+		"rule for no build":  good + "recommended: [{match: x, flags: [--x], vendors: [nvidia]}]\n",
 	}
 	for name, yaml := range cases {
 		files := fstest.MapFS{
@@ -165,5 +168,35 @@ func TestChatParams(t *testing.T) {
 	}
 	if got := vllm.Refused("${vllm-intel}\n--speculative-configx 1\n"); got != nil {
 		t.Errorf("a longer flag is not the speculation flag: %v", got)
+	}
+}
+
+// A flag that works around Intel's vLLM image is not offered on another
+// vendor's build; the model's own tool-call format is offered on all.
+func TestVLLMRecommendationsByVendor(t *testing.T) {
+	var intelOnly, everyone []string
+	for _, rec := range Get(VLLM).Recommended {
+		if !regexp.MustCompile(rec.Match).MatchString("Qwen3_5ForConditionalGeneration") {
+			continue
+		}
+		for _, f := range rec.Flags {
+			if len(rec.Vendors) == 1 && rec.Vendors[0] == "intel" {
+				intelOnly = append(intelOnly, f)
+			} else if len(rec.Vendors) == 0 {
+				everyone = append(everyone, f)
+			}
+		}
+	}
+	joined := strings.Join(intelOnly, " ")
+	if !strings.Contains(joined, "--compilation-config") || !strings.Contains(joined, "vllm::all_reduce") {
+		t.Errorf("the XPU graph flags are Intel's: %v", intelOnly)
+	}
+	if !slices.Contains(everyone, "--tool-call-parser qwen3_coder") {
+		t.Errorf("the tool-call parser is every vendor's: %v", everyone)
+	}
+	for _, f := range everyone {
+		if strings.Contains(f, "compilation-config") || strings.Contains(f, "enforce-eager") {
+			t.Errorf("%q is offered to every vendor", f)
+		}
 	}
 }

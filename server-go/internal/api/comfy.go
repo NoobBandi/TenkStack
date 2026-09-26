@@ -231,6 +231,8 @@ type Recommendation struct {
 	Match string   `json:"match"`
 	Flags []string `json:"flags"`
 	Note  string   `json:"note"`
+	// Vendors limits the rule to these vendors' builds; empty is all.
+	Vendors []string `json:"vendors"`
 }
 
 // Runtime is one launcher a model entry can be started through: a

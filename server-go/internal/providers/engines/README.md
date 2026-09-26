@@ -67,7 +67,15 @@ recommended:                # flags a model family needs, offered when its folde
   - match: ^Qwen3           # regular expression against config.json's architecture
     flags: [--reasoning-parser qwen3]
     note: 思考過程與工具呼叫分開回傳
+  - match: ^Qwen3_5
+    vendors: [intel]        # optional: only for these vendors' builds
+    flags: [--max-num-seqs 4]
 ```
+
+The first matching rule wins for each flag name. A rule that works around one
+vendor's image names that vendor under `vendors`, so the same engine on
+another vendor's card keeps its own defaults; a rule about the model itself
+(its tool-call format, its reasoning parser) names none.
 
 `fallback` (llama.cpp only so far) is a build that runs on any vendor's card,
 offered as a variant: `label`, `image`, `requires`, `flags`.

@@ -79,10 +79,15 @@ type Where = (key?: string, always?: boolean) => string;
  */
 const flagName = (flag: string) => flag.trim().split(/\s+/)[0];
 
-function recommendedFlags(rules: EngineRecommendation[] | undefined, architecture?: string): string[] {
+function recommendedFlags(
+  rules: EngineRecommendation[] | undefined, architecture?: string, vendor?: string,
+): string[] {
   if (!architecture || !rules) return [];
   const flags: string[] = [];
   for (const rule of rules) {
+    // A rule for one vendor's build works around that image; another
+    // vendor's build of the same engine is left with its own defaults.
+    if (rule.vendors?.length && !(vendor && rule.vendors.includes(vendor))) continue;
     let hit = false;
     try { hit = new RegExp(rule.match, 'i').test(architecture); } catch { hit = false; }
     // The first matching rule wins for each flag: a family's own
@@ -374,9 +379,9 @@ export default function Models() {
   const onFolder = (name: string) => {
     if (!serverForm) return;
     const picked = files.find((f) => f.filename === name);
-    const current: string = form.getFieldValue('extra') ?? '';
-    if (picked && !current.trim()) {
-      form.setFieldValue('extra', recommendedFlags(formEngine?.recommended, picked.architecture).join('\n'));
+    const typed: string = form.getFieldValue('extra') ?? '';
+    if (picked && !typed.trim()) {
+      form.setFieldValue('extra', recommendedFlags(formEngine?.recommended, picked.architecture, current?.vendor).join('\n'));
     }
   };
 

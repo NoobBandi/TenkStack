@@ -31,7 +31,7 @@ func (s *Server) readProviders(w http.ResponseWriter, r *http.Request) {
 			Recommended: []api.Recommendation{}, Launchers: []string{}, InUse: []string{},
 		}
 		for _, rec := range p.Recommended {
-			card.Recommended = append(card.Recommended, api.Recommendation{Match: rec.Match, Flags: rec.Flags, Note: rec.Note})
+			card.Recommended = append(card.Recommended, api.Recommendation{Match: rec.Match, Flags: rec.Flags, Note: rec.Note, Vendors: rec.Vendors})
 		}
 		inUse := map[string]bool{}
 		for _, l := range launchers {

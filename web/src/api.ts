@@ -536,6 +536,8 @@ export interface EngineRecommendation {
   match: string;
   flags: string[];
   note: string;
+  /** The vendors' builds the rule is for; empty or absent is all. */
+  vendors?: string[] | null;
 }
 
 /** One inference engine the store offers, from the registry under

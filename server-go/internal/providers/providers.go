@@ -69,6 +69,9 @@ type Recommendation struct {
 	Match string   `yaml:"match"`
 	Flags []string `yaml:"flags"`
 	Note  string   `yaml:"note"`
+	// Vendors limits the rule to these vendors' builds: a flag that works
+	// around one vendor's image is not offered on another's. Empty is all.
+	Vendors []string `yaml:"vendors"`
 }
 
 // SamplingControls are the chat panel's sampling controls, by the names
@@ -352,6 +355,11 @@ func loadOne(files fs.FS, dir string) (Provider, error) {
 		}
 		if len(rec.Flags) == 0 {
 			return p, fmt.Errorf("recommended match %q has no flags", rec.Match)
+		}
+		for _, v := range rec.Vendors {
+			if _, ok := p.Builds[v]; !ok {
+				return p, fmt.Errorf("recommended match %q names vendor %q, which has no build", rec.Match, v)
+			}
 		}
 	}
 	switch p.Form {
