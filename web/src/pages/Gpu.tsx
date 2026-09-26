@@ -12,34 +12,40 @@ import VendorMark from '../components/VendorMark';
 const { Text } = Typography;
 
 /**
- * The cards in this machine, one row each.
+ * The cards in this machine, one tile each, as many to a row as fit.
  *
- * A row rather than a section, because the two things this page is asked --
- * what is each card doing, and what is each card -- are asked at very different
- * rates. The first is asked every time the page opens and about every card at
- * once; the second is asked occasionally and about one card. So the live
- * reading is the row and the specification is what the row opens to reveal.
- *
- * Rows also compare better than the cards side by side that were here before.
- * The readings sit at the same offsets on every row, so two figures line up
- * vertically and can be read against each other without moving your eye across
- * a gap between two boxes.
+ * They were full-width rows, so that two cards' readings lined up for
+ * comparison -- but a row has four numbers and a name, and on a wide screen
+ * that left most of it empty. A tile holds what a row did and what it opened
+ * to: what the card is doing, what is on it, how it is connected. The long
+ * list the vendor tool reports stays folded under 完整規格.
  */
 
 const VENDOR_COLOUR: Record<string, string> = {
   intel: 'blue', nvidia: 'green', amd: 'red',
 };
 
-/** One live figure in a row header. Fixed width so the columns line up between
- *  rows -- which is the whole reason these are rows. */
-function Reading({ label, value, unit, title, width = 78 }: {
-  label: string; value: string; unit?: string; title?: string; width?: number;
+const OCCUPANT_STATE: Record<string, string> = {
+  ready: '已載入', starting: '載入中', stopping: '卸載中',
+  running: '執行中', exited: '已停止', created: '已建立', paused: '已暫停', restarting: '重啟中',
+};
+
+/** A small heading inside a tile. */
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 10, letterSpacing: 1, opacity: 0.4, marginBottom: 6 }}>{children}</div>
+  );
+}
+
+/** One live figure. */
+function Reading({ label, value, unit, title }: {
+  label: string; value: string; unit?: string; title?: string;
 }) {
   const body = (
-    <div style={{ width, flex: 'none' }}>
+    <div style={{ minWidth: 0 }}>
       <div style={{ fontSize: 9, letterSpacing: 1, opacity: 0.35 }}>{label}</div>
       <div style={{
-        fontFamily: MONO, fontSize: 14, lineHeight: 1.3,
+        fontFamily: MONO, fontSize: 16, lineHeight: 1.3,
         // Tabular figures: these update every two seconds, and proportional
         // digits would shift the unit beside them on every sample.
         fontVariantNumeric: 'tabular-nums',
@@ -52,76 +58,68 @@ function Reading({ label, value, unit, title, width = 78 }: {
   return title ? <Tooltip title={title}>{body}</Tooltip> : body;
 }
 
-/** The row itself: what the card is, and what it is doing, on one line. */
-function Header({ device, live }: { device: GpuDevice; live: GpuSample | null }) {
+/** The tile's title: the status dot, the vendor, the name. */
+function Title({ device, live }: { device: GpuDevice; live: GpuSample | null }) {
+  return (
+    // A flex row rather than a Space: Space's items do not shrink, so a long
+    // name ran under what sat beside it instead of ending in an ellipsis.
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+      <Tooltip title={live?.busy ? '運算中' : '閒置'}>
+        <span style={{
+          width: 7, height: 7, borderRadius: '50%', flex: 'none',
+          background: live?.busy ? ACCENT.ok : LINE.strong,
+          boxShadow: live?.busy ? `0 0 8px ${ACCENT.ok}b3` : 'none',
+          display: 'inline-block', transition: 'background 300ms, box-shadow 300ms',
+        }} />
+      </Tooltip>
+      <VendorMark vendor={device.vendor} size={18} style={{ opacity: 0.85, flex: 'none' }} />
+      <Text style={{ fontSize: 13, fontWeight: 400, minWidth: 0 }} ellipsis>{device.name}</Text>
+    </div>
+  );
+}
+
+/** Memory as a bar, since it decides whether the next model fits, and the
+ *  rest as numbers. */
+function Live({ live }: { live: GpuSample | null }) {
   const usedGiB = (live?.memory_used_mib ?? 0) / 1024;
   const totalGiB = (live?.memory_total_mib ?? 0) / 1024;
   const percent = totalGiB ? (usedGiB / totalGiB) * 100 : 0;
-
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', minWidth: 0,
-    }}>
-      {/* A flex row rather than a Space: Space's items do not shrink, so on a
-          phone the name ran under the memory bar beside it instead of
-          ending in an ellipsis. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flex: '1 1 220px', minWidth: 0 }}>
-        <Tooltip title={live?.busy ? '運算中' : '閒置'}>
-          <span style={{
-            width: 7, height: 7, borderRadius: '50%', flex: 'none',
-            background: live?.busy ? ACCENT.ok : LINE.strong,
-            boxShadow: live?.busy ? `0 0 8px ${ACCENT.ok}b3` : 'none',
-            display: 'inline-block', transition: 'background 300ms, box-shadow 300ms',
-          }} />
-        </Tooltip>
-        {/* 18 against the 12px name beside it. The mark is the fastest thing
-            to recognise in the row, so it leads rather than matches. */}
-        <VendorMark vendor={device.vendor} size={18} style={{ opacity: 0.85 }} />
-        <Text style={{ fontSize: 12, minWidth: 0 }} ellipsis>{device.name}</Text>
-        <Tag color={VENDOR_COLOUR[device.vendor]}
-             style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0, flex: 'none' }}>
-          {deviceTag(device.vendor, device.index)}
-        </Tag>
+    <div>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4,
+      }}>
+        <span style={{ fontSize: 9, letterSpacing: 1, opacity: 0.35 }}>VRAM</span>
+        <span style={{ fontFamily: MONO, fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
+          {usedGiB.toFixed(1)}
+          <span style={{ opacity: 0.45, fontSize: 11 }}> / {totalGiB.toFixed(0)} GiB</span>
+        </span>
       </div>
-
-      {/* Memory gets the bar because it is the one that decides something:
-          whether the next model fits. The rest are numbers. */}
-      <div style={{ width: 150, flex: 'none' }}>
+      <div style={{ height: 4, background: LINE.faint, borderRadius: 2 }}>
         <div style={{
-          display: 'flex', justifyContent: 'space-between', fontSize: 9,
-          letterSpacing: 1, opacity: 0.35, marginBottom: 1,
-        }}>
-          <span>VRAM</span>
-          <span style={{ fontFamily: MONO, letterSpacing: 0, opacity: 0.9 }}>
-            {usedGiB.toFixed(1)} / {totalGiB.toFixed(0)} GiB
-          </span>
-        </div>
-        <div style={{ height: 3, background: LINE.faint, borderRadius: 2 }}>
-          <div style={{
-            height: '100%', width: `${Math.min(100, percent)}%`, borderRadius: 2,
-            background: percent > 92 ? ACCENT.warn : 'rgba(255,255,255,0.8)',
-            transition: 'width 400ms ease',
-          }} />
-        </div>
+          height: '100%', width: `${Math.min(100, percent)}%`, borderRadius: 2,
+          background: percent > 92 ? ACCENT.warn : 'rgba(255,255,255,0.8)',
+          transition: 'width 400ms ease',
+        }} />
       </div>
-
-      <Reading
-        label="POWER" value={(live?.power_w ?? 0).toFixed(0)} unit="W"
-        title={live?.power_cap_w ? `上限 ${live.power_cap_w.toFixed(0)} W` : undefined}
-      />
-      <Reading
-        label="CLOCK" value={(live?.frequency_mhz ?? 0).toFixed(0)} unit="MHz" width={88}
-        title={live?.frequency_max_mhz ? `上限 ${live.frequency_max_mhz.toFixed(0)} MHz` : undefined}
-      />
-      <Reading
-        label="TEMP"
-        value={live?.temperature_c != null ? live.temperature_c.toFixed(0) : '—'}
-        unit={live?.temperature_c != null ? '°C' : undefined}
-        width={64}
-        title={live?.temperature_c == null
-          ? '這張卡的驅動沒有提供溫度感測器'
-          : live.temperature_crit_c ? `臨界 ${live.temperature_crit_c.toFixed(0)} °C` : undefined}
-      />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 14 }}>
+        <Reading
+          label="POWER" value={(live?.power_w ?? 0).toFixed(0)} unit="W"
+          title={live?.power_cap_w ? `上限 ${live.power_cap_w.toFixed(0)} W` : undefined}
+        />
+        <Reading
+          label="CLOCK" value={(live?.frequency_mhz ?? 0).toFixed(0)} unit="MHz"
+          title={live?.frequency_max_mhz ? `上限 ${live.frequency_max_mhz.toFixed(0)} MHz` : undefined}
+        />
+        <Reading
+          label="TEMP"
+          value={live?.temperature_c != null ? live.temperature_c.toFixed(0) : '—'}
+          unit={live?.temperature_c != null ? '°C' : undefined}
+          title={live?.temperature_c == null
+            ? '這張卡的驅動沒有提供溫度感測器'
+            : live.temperature_crit_c ? `臨界 ${live.temperature_crit_c.toFixed(0)} °C` : undefined}
+        />
+      </div>
     </div>
   );
 }
@@ -130,43 +128,37 @@ function Header({ device, live }: { device: GpuDevice; live: GpuSample | null })
 function Occupants({ list }: { list: GpuOccupant[] | undefined }) {
   if (!list) return null;
   return (
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 14px',
-      // Under the name, past the status dot and the vendor mark.
-      paddingInlineStart: 34, marginTop: 6, fontSize: 12,
-    }}>
+    <div>
+      <Label>正在使用</Label>
       {list.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>沒有模型或容器在用這張卡</Text>}
-      {list.map((o) => (
-        <div key={`${o.kind}-${o.name}`} style={{
-          display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minWidth: 0,
-        }}>
-          <Tag color={o.kind === 'model' ? 'geekblue' : 'default'}
-               style={{ fontSize: 11, marginInlineEnd: 0 }}>
-            {o.kind === 'model' ? (o.engine ?? '模型') : '容器'}
-          </Tag>
-          <Text style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{o.name}</Text>
-          <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
-            {[
-              o.cards > 1 && `跨 ${o.cards} 張卡`,
-              OCCUPANT_STATE[o.state] ?? o.state,
-            ].filter(Boolean).join(' ・ ')}
-          </Text>
-        </div>
-      ))}
+      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+        {list.map((o) => (
+          <div key={`${o.kind}-${o.name}`} style={{
+            display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, minWidth: 0,
+          }}>
+            <Tag color={o.kind === 'model' ? 'geekblue' : 'default'}
+                 style={{ fontSize: 11, marginInlineEnd: 0 }}>
+              {o.kind === 'model' ? (o.engine ?? '模型') : '容器'}
+            </Tag>
+            <Text style={{ fontSize: 12, overflowWrap: 'anywhere' }}>{o.name}</Text>
+            <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+              {[
+                o.cards > 1 && `跨 ${o.cards} 張卡`,
+                OCCUPANT_STATE[o.state] ?? o.state,
+              ].filter(Boolean).join(' ・ ')}
+            </Text>
+          </div>
+        ))}
+      </Space>
     </div>
   );
 }
-
-const OCCUPANT_STATE: Record<string, string> = {
-  ready: '已載入', starting: '載入中', stopping: '卸載中',
-  running: '執行中', exited: '已停止', created: '已建立', paused: '已暫停', restarting: '重啟中',
-};
 
 /** One label and value, as the specification lists draw them. */
 function SpecRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{
-      display: 'flex', justifyContent: 'space-between', gap: 12,
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
       padding: '4px 0', borderBottom: `1px solid ${LINE.faint}`,
     }}>
       <Text style={{ fontSize: 11, opacity: 0.5, whiteSpace: 'nowrap' }}>{label}</Text>
@@ -178,11 +170,10 @@ function SpecRow({ label, children }: { label: string; children: React.ReactNode
 }
 
 /**
- * One card's specifications: the few that decide something first, the rest
- * folded. The vendor tool reports twenty-odd fields -- slices, SIMD width,
- * firmware names -- and a page that opens on all of them buries the four a
- * person running models needs: how much memory, how it is connected, which
- * driver.
+ * The few specifications that decide something -- how much memory, how it
+ * is connected, which driver -- then the rest folded. The vendor tool reports
+ * twenty-odd fields, slices and SIMD widths and firmware names, and a tile
+ * that opens on all of them buries these.
  */
 function Specs({ device }: { device: GpuDevice }) {
   const field = (key: string) =>
@@ -190,7 +181,6 @@ function Specs({ device }: { device: GpuDevice }) {
   const totalMiB = device.live?.memory_total_mib;
   const pcie = device.pcie;
   const rows: [string, React.ReactNode][] = [
-    ['型號', device.name],
     ['顯存', totalMiB ? `${(totalMiB / 1024).toFixed(1)} GiB` : undefined],
     ['PCIe', pcie && (
       <Space size={6} wrap style={{ justifyContent: 'flex-end' }}>
@@ -218,48 +208,61 @@ function Specs({ device }: { device: GpuDevice }) {
   const summary = rows.filter(([, value]) => !!value);
 
   return (
-    <Space direction="vertical" size={10} style={{ width: '100%' }}>
-      <div style={{ maxWidth: 560 }}>
-        {summary.map(([label, value]) => <SpecRow key={label} label={label}>{value}</SpecRow>)}
-      </div>
+    <div>
+      <Label>規格</Label>
+      {summary.map(([label, value]) => <SpecRow key={label} label={label}>{value}</SpecRow>)}
       {device.groups.length > 0 && (
         <Collapse
           ghost
           size="small"
+          style={{ marginTop: 4, marginInline: -8 }}
           items={[{
             key: 'all',
             label: <Text type="secondary" style={{ fontSize: 12 }}>完整規格</Text>,
             children: (
-              // A column flow, not a row of columns: groups of unequal height
-              // across columns leave a ragged hole wherever the tallest one
-              // lands; `columns` packs them by height instead.
-              <div style={{ columns: '250px', columnGap: 14 }}>
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 {device.groups.map((group) => (
-                  <Card
-                    key={group.title}
-                    size="small"
-                    title={<span style={{ fontSize: 11, opacity: 0.6 }}>{group.title}</span>}
-                    styles={{ body: { padding: '4px 12px 8px' } }}
-                    style={{ breakInside: 'avoid', marginBottom: 14 }}
-                  >
+                  <div key={group.title}>
+                    <Text style={{ fontSize: 11, opacity: 0.6 }}>{group.title}</Text>
                     {group.rows.map((row) => (
                       <SpecRow key={row.key} label={row.label}>{row.value}</SpecRow>
                     ))}
-                  </Card>
+                  </div>
                 ))}
-              </div>
+              </Space>
             ),
           }]}
         />
       )}
-    </Space>
+    </div>
+  );
+}
+
+function Tile({ device, live, occupants }: {
+  device: GpuDevice; live: GpuSample | null; occupants: GpuOccupant[] | undefined;
+}) {
+  return (
+    <Card
+      size="small"
+      title={<Title device={device} live={live} />}
+      extra={(
+        <Tag color={VENDOR_COLOUR[device.vendor]}
+             style={{ fontFamily: MONO, fontSize: 10, marginInlineEnd: 0 }}>
+          {deviceTag(device.vendor, device.index)}
+        </Tag>
+      )}
+      styles={{ body: { display: 'flex', flexDirection: 'column', gap: 18, padding: 16 } }}
+    >
+      <Live live={live} />
+      <Occupants list={occupants} />
+      <Specs device={device} />
+    </Card>
   );
 }
 
 export default function Gpu() {
   const { gpus } = useStream();
   const [devices, setDevices] = useState<GpuDevice[] | null>(null);
-  const [open, setOpen] = useState<string[]>([]);
   const [orphaned, setOrphaned] = useState<RuntimeContainer[]>([]);
   const [occupants, setOccupants] = useState<Record<string, GpuOccupant[]> | null>(null);
 
@@ -277,15 +280,7 @@ export default function Gpu() {
   }, []);
 
   useEffect(() => {
-    fetchGpuDevices()
-      .then((found) => {
-        setDevices(found);
-        // Open, once, when the listing first arrives. Set here rather than as
-        // an initial state because the devices are not known at mount, and set
-        // only from this one fetch so that collapsing a row stays collapsed.
-        setOpen(found.map((d) => String(d.index)));
-      })
-      .catch(() => setDevices([]));
+    fetchGpuDevices().then(setDevices).catch(() => setDevices([]));
   }, []);
 
   if (devices === null) return <Card size="small" loading />;
@@ -323,30 +318,18 @@ export default function Gpu() {
           </>}
         />
       )}
-      {/* Open to begin with, and remembered once closed. A row's header holds
-          the readings and its body the specifications, and with two cards the
-          two bodies are not a wall -- hiding them by default would mean two
-          clicks before the page has said anything it could not fit in a
-          header. */}
-      <Collapse
-        activeKey={open}
-        onChange={(keys) => setOpen(keys as string[])}
-        items={devices.map((device) => ({
-          key: String(device.index),
-          label: (
-            <div>
-              <Header device={device} live={liveFor(device)} />
-              <Occupants list={occupants?.[device.pci_bdf_address]} />
-            </div>
-          ),
-          children: <Specs device={device} />,
-          // The header is a row of live figures, and clicking anywhere on it to
-          // expand is what makes it a row rather than a card with a control in
-          // the corner.
-          styles: { header: { alignItems: 'center' } },
-        }))}
-      />
-
+      {/* auto-fill with a floor: as many tiles to a row as fit, each at
+          least 360px, one column on a phone. Aligned to the top so opening
+          one tile's full specification does not stretch its neighbour. */}
+      <div style={{
+        display: 'grid', gap: 16, alignItems: 'start',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
+      }}>
+        {devices.map((device) => (
+          <Tile key={device.index} device={device} live={liveFor(device)}
+                occupants={occupants?.[device.pci_bdf_address]} />
+        ))}
+      </div>
     </Space>
   );
 }
