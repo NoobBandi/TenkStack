@@ -199,21 +199,21 @@ export default function Catalog() {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  // A search finds both formats; these narrow what it found, the way the
+  // A search finds both formats; this narrows what it found, the way the
   // model page's engine filter does, without asking the Hub again.
   const [formatFilter, setFormatFilter] = useState<'all' | CatalogFormat>('all');
-  const [kindFilter, setKindFilter] = useState<'all' | 'dense' | 'moe'>('all');
   // The format of the repository on the right, which decides how it is shown:
   // a choice of files, or a folder. Found with it, not assumed from the mode.
   const [pickedFormat, setPickedFormat] = useState<CatalogFormat | null>(null);
   const [runtimes, setRuntimes] = useState<Runtime[]>([]);
   const [engines, setEngines] = useState<ProviderCard[]>([]);
+  const [enginesLoaded, setEnginesLoaded] = useState(false);
   const [gpus, setGpus] = useState<GpuDevice[]>([]);
   const [folder, setFolder] = useState<CatalogFolder | null>(null);
   const [variants, setVariants] = useState<CatalogVariant[] | null>(null);
   useEffect(() => {
     fetchProviders().then((p) => { setRuntimes(p.runtimes); setEngines(p.providers); })
-      .catch(() => undefined);
+      .catch(() => undefined).finally(() => setEnginesLoaded(true));
     fetchGpuDevices().then(setGpus).catch(() => undefined);
   }, []);
   // The installed launcher a safetensors download is for: the first one that
@@ -221,8 +221,10 @@ export default function Catalog() {
   const serverRuntime = runtimes.find((r) => r.formats.includes('safetensors'));
   const serverEngines = engines.filter((e) => e.formats.includes('safetensors'));
   // Safetensors are searched for when an engine in the registry runs them,
-  // installed or not, so a newcomer finds out what it would take.
-  const searchMode: CatalogSearch = serverEngines.length > 0 ? 'all' : 'gguf';
+  // installed or not, so a newcomer finds out what it would take. Both until
+  // the registry has said otherwise: assuming GGUF while it loaded made the
+  // line under the search box change as the page opened.
+  const searchMode: CatalogSearch = !enginesLoaded || serverEngines.length > 0 ? 'all' : 'gguf';
   const format: CatalogFormat = pickedFormat ?? 'gguf';
   // Cards for the GGUF size warning: the smallest one, and how many there are.
   const cardGiB = gpus.length
@@ -328,14 +330,10 @@ export default function Catalog() {
     }
   }, [message, searchMode]);
 
-  // What the filters leave, and how many each choice would leave.
-  const byFormat = (r: CatalogRepo) => formatFilter === 'all' || r.format === formatFilter;
-  const byKind = (r: CatalogRepo) => kindFilter === 'all' || r.kind === kindFilter;
-  const listed = repos.filter((r) => byFormat(r) && byKind(r));
+  // What the filter leaves, and how many each choice would leave.
+  const listed = repos.filter((r) => formatFilter === 'all' || r.format === formatFilter);
   const countFormat = (f: 'all' | CatalogFormat) =>
-    repos.filter((r) => (f === 'all' || r.format === f) && byKind(r)).length;
-  const countKind = (k: 'all' | 'dense' | 'moe') =>
-    repos.filter((r) => byFormat(r) && (k === 'all' || r.kind === k)).length;
+    repos.filter((r) => f === 'all' || r.format === f).length;
 
   const onPick = async (repoId: string, as?: CatalogFormat) => {
     const picked: CatalogFormat = as
@@ -549,8 +547,8 @@ export default function Catalog() {
           title={
             <Space size={8}>
               <span style={{ fontSize: 13 }}>搜尋結果</span>
-              {/* Dropdowns, like the model page's engine filter: they narrow
-                  what the search found, and say how many each would leave. */}
+              {/* A dropdown, like the model page's engine filter: it narrows
+                  what the search found, and says how many each would leave. */}
               {searchMode === 'all' && (
                 <Select
                   size="small"
@@ -564,17 +562,6 @@ export default function Catalog() {
                   ]}
                 />
               )}
-              <Select
-                size="small"
-                value={kindFilter}
-                onChange={(v) => { setKindFilter(v); setPage(1); }}
-                style={{ minWidth: 140, fontWeight: 400 }}
-                options={[
-                  { value: 'all', label: `全部架構（${countKind('all')}）` },
-                  { value: 'dense', label: `Dense（${countKind('dense')}）` },
-                  { value: 'moe', label: `MoE（${countKind('moe')}）` },
-                ]}
-              />
             </Space>
           }
           size="small"
@@ -619,15 +606,6 @@ export default function Catalog() {
                           <Tag color={repo.format === 'gguf' ? 'cyan' : 'geekblue'} style={{ fontSize: 11 }}>
                             {repo.format === 'gguf' ? 'GGUF' : 'Safetensors'}
                           </Tag>
-                        )}
-                        {repo.kind && (
-                          <Tooltip title={repo.kind === 'moe'
-                            ? '混合專家（MoE）：每個 token 只用到一部分參數，生成比同大小的 Dense 快，但顯存仍要放下全部權重'
-                            : 'Dense：每個 token 都用到全部參數'}>
-                            <Tag color={repo.kind === 'moe' ? 'orange' : undefined} style={{ fontSize: 11 }}>
-                              {repo.kind === 'moe' ? 'MoE' : 'Dense'}
-                            </Tag>
-                          </Tooltip>
                         )}
                         {repo.gated && (
                           <Tooltip title="要先在 Hugging Face 同意使用條款，並在設定填入 token 才能下載">

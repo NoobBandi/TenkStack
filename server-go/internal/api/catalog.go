@@ -11,9 +11,6 @@ type CatalogRepo struct {
 	// Format is how the catalog offers it: gguf, a choice of files, or
 	// safetensors, a folder.
 	Format string `json:"format"`
-	// Kind is dense or moe (a mixture of experts), "" when the Hub's
-	// metadata does not say.
-	Kind string `json:"kind"`
 }
 
 // CatalogVariant is the same model in another precision.

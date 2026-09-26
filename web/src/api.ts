@@ -760,8 +760,6 @@ export interface CatalogRepo {
   gated?: boolean;
   /** How it is offered: a choice of GGUF files, or a folder of safetensors. */
   format?: CatalogFormat;
-  /** A dense model or a mixture of experts; '' when the Hub does not say. */
-  kind?: 'dense' | 'moe' | '';
 }
 
 export interface CatalogFile {

@@ -58,12 +58,6 @@ type Catalog struct {
 	Token func() string
 	http  *http.Client
 
-	// kinds is what a config.json said about each architecture: moe or
-	// dense. Search results name their architecture but not their experts,
-	// and an architecture keeps its answer, so each is asked about once.
-	kindsMu sync.Mutex
-	kinds   map[string]string
-
 	mu        sync.Mutex
 	downloads map[string]*download
 	order     []string
@@ -183,7 +177,7 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("sort", "downloads")
 	q.Set("direction", "-1")
-	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated", "config", "gguf"} {
+	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated"} {
 		q.Add("expand[]", f)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -221,7 +215,6 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 		}
 		r := api.CatalogRepo{RepoID: m["id"], Downloads: m["downloads"], Likes: m["likes"], LastModified: m["lastModified"], Tags: tags,
 			Gated: isGated(m["gated"]), Format: format}
-		r.Kind, _, _ = kindOf(m)
 		if r.Downloads == nil {
 			r.Downloads = 0
 		}
@@ -230,177 +223,7 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 		}
 		out = append(out, r)
 	}
-	c.confirmKinds(ctx, repos, out, format)
 	return out
-}
-
-// activeParams is the "30B-A3B" way of naming a mixture of experts: its
-// total, and the parameters active for each token.
-var activeParams = regexp.MustCompile(`(?i)\d+(\.\d+)?b-a\d+(\.\d+)?b`)
-
-// moeArchitectures are GGUF and config architectures that are a mixture of
-// experts without saying moe in their name.
-var moeArchitectures = map[string]bool{
-	"deepseek2": true, "deepseek_v2": true, "deepseek_v3": true, "deepseek3": true, "mixtral": true,
-	"gptoss": true, "gpt_oss": true, "gpt-oss": true, "llama4": true, "dbrx": true, "jamba": true,
-	"grok": true, "arctic": true, "kimi_k2": true,
-}
-
-// kindOf says whether a search result is a dense model or a mixture of
-// experts, from what the Hub knows without a download: the architecture in
-// its GGUF header or config.json (qwen3moe, qwen3_5_moe, deepseek_v3, …),
-// then its name. Only moe is ever certain here; "dense" means nothing said
-// otherwise, which an architecture named without the word -- Flash-Next's
-// qwen4exp -- gets wrong, so the caller asks that architecture's config.
-// arch is the name to ask about. "" when nothing is known: Mixtral's GGUF,
-// for one, calls itself llama.
-func kindOf(m map[string]any) (kind, arch string, sure bool) {
-	var archs []string
-	if g, _ := m["gguf"].(map[string]any); g != nil {
-		if a, _ := g["architecture"].(string); a != "" && a != "clip" {
-			archs = append(archs, a)
-		}
-	}
-	if c, _ := m["config"].(map[string]any); c != nil {
-		if t, _ := c["model_type"].(string); t != "" {
-			archs = append(archs, t)
-		}
-		if list, _ := c["architectures"].([]any); len(list) > 0 {
-			if a, _ := list[0].(string); a != "" {
-				archs = append(archs, a)
-			}
-		}
-	}
-	id, _ := m["id"].(string)
-	name := strings.ToLower(id)
-	for _, a := range archs {
-		lower := strings.ToLower(a)
-		if strings.Contains(lower, "moe") || moeArchitectures[lower] {
-			return "moe", lower, true
-		}
-	}
-	if activeParams.MatchString(name) || strings.Contains(name, "moe") || strings.Contains(name, "mixtral") {
-		return "moe", "", true
-	}
-	if list, _ := m["tags"].([]any); list != nil {
-		for _, t := range list {
-			if s, _ := t.(string); s == "moe" || s == "mixture-of-experts" {
-				return "moe", "", true
-			}
-		}
-	}
-	if len(archs) > 0 {
-		return "dense", strings.ToLower(archs[0]), false
-	}
-	return "", "", false
-}
-
-// configSource is the repository whose config.json says what a search
-// result's model is: its own, for safetensors; the model a GGUF was made
-// from, which the Hub records as a base_model tag.
-func configSource(m map[string]any, format string) string {
-	id, _ := m["id"].(string)
-	if format == "safetensors" {
-		return id
-	}
-	list, _ := m["tags"].([]any)
-	plain := ""
-	for _, t := range list {
-		s, _ := t.(string)
-		if r, ok := strings.CutPrefix(s, "base_model:quantized:"); ok {
-			return r
-		}
-		if r, ok := strings.CutPrefix(s, "base_model:"); ok && !strings.Contains(r, ":") && plain == "" {
-			plain = r
-		}
-	}
-	return plain
-}
-
-// confirmKinds settles the results that only looked dense by asking one
-// config.json per architecture not asked about before, a few at a time.
-// One that cannot be read -- a gated base model, say -- keeps its guess.
-func (c *Catalog) confirmKinds(ctx context.Context, raw []map[string]any, out []api.CatalogRepo, format string) {
-	type pending struct {
-		arch, source string
-	}
-	var ask []pending
-	c.kindsMu.Lock()
-	if c.kinds == nil {
-		c.kinds = map[string]string{}
-	}
-	asked := map[string]bool{}
-	for _, m := range raw {
-		key, source := c.kindKey(m, format)
-		if key == "" || asked[key] {
-			continue
-		}
-		if _, known := c.kinds[key]; known {
-			continue
-		}
-		if source != "" {
-			asked[key] = true
-			ask = append(ask, pending{key, source})
-		}
-	}
-	c.kindsMu.Unlock()
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
-	for _, p := range ask {
-		wg.Add(1)
-		go func(p pending) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
-			defer cancel()
-			raw, err := c.fetchSmall(ctx, p.source, "config.json")
-			if err != nil {
-				return
-			}
-			kind := "dense"
-			if hfmodel.Parse(raw).Experts > 0 {
-				kind = "moe"
-			}
-			c.kindsMu.Lock()
-			c.kinds[p.arch] = kind
-			c.kindsMu.Unlock()
-		}(p)
-	}
-	wg.Wait()
-	c.kindsMu.Lock()
-	defer c.kindsMu.Unlock()
-	byID := map[any]int{}
-	for i, r := range out {
-		byID[r.RepoID] = i
-	}
-	for _, m := range raw {
-		key, _ := c.kindKey(m, format)
-		if i, ok := byID[m["id"]]; ok && key != "" {
-			if kind, known := c.kinds[key]; known {
-				out[i].Kind = kind
-			}
-		}
-	}
-}
-
-// kindKey is what a result's kind is remembered under, and the repository
-// whose config.json settles it: its architecture, or -- when the Hub read
-// only a vision projector's header and knows none -- the base model itself.
-// "" for a result already certain, or with nothing to ask.
-func (c *Catalog) kindKey(m map[string]any, format string) (key, source string) {
-	_, arch, sure := kindOf(m)
-	if sure {
-		return "", ""
-	}
-	source = configSource(m, format)
-	if arch != "" {
-		return arch, source
-	}
-	if source != "" {
-		return "base:" + source, source
-	}
-	return "", ""
 }
 
 // isGated reads the Hub's gated field: false, or "auto" / "manual".
