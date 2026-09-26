@@ -515,8 +515,8 @@ export default function Catalog() {
             value={searchMode}
             onChange={onMode}
             options={[
-              { value: 'gguf', label: 'GGUF · llama.cpp' },
-              { value: 'safetensors', label: `Safetensors · ${serverEngines.map((e) => e.name).join(' / ')}` },
+              { value: 'gguf', label: 'GGUF' },
+              { value: 'safetensors', label: 'Safetensors' },
               { value: 'all', label: '全部' },
             ]}
           />
