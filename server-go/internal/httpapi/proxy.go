@@ -143,6 +143,7 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body = s.fitForProvider(path, body)
+	body, asked := s.askUsagePerChunk(path, body)
 
 	target := s.LlamaSwap.Base + "/v1/" + path
 	if r.URL.RawQuery != "" {
@@ -186,9 +187,15 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 			if p := providers.Get(key); p != nil {
 				name = p.Name
 			}
-			m = newMeter(&s.meters, name)
+			m = newMeter(&s.meters, s.measured(), s.Config.CanonicalModel(model), name)
 			defer m.finish()
 		}
+	}
+	// The usage the proxy asked for is read here and taken out again before
+	// the client sees the stream.
+	var filter *usageFilter
+	if asked != nil && strings.Contains(contentType, "event-stream") {
+		filter = &usageFilter{asked: *asked}
 	}
 	buf := make([]byte, 32*1024)
 	for {
@@ -197,7 +204,11 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 			if m != nil {
 				m.feedBytes(buf[:n])
 			}
-			if _, werr := w.Write(buf[:n]); werr != nil {
+			out := buf[:n]
+			if filter != nil {
+				out = filter.feed(out)
+			}
+			if _, werr := w.Write(out); werr != nil {
 				return
 			}
 			if flusher != nil {
@@ -205,9 +216,19 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if err != nil {
+			if filter != nil {
+				w.Write(filter.flush())
+			}
 			return
 		}
 	}
+}
+
+// measured is the book of what the proxy measured, kept where the server
+// was told to keep it.
+func (s *Server) measured() *meterBook {
+	s.bookOnce.Do(func() { s.book.Path = s.MeterHistory })
+	return &s.book
 }
 
 // fitForProvider bends a request to what the model's runtime accepts.

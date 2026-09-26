@@ -27,6 +27,11 @@ drop_max_tokens: true
 # flags below do for the families that have one.
 tools: true
 
+# Running token counts on every streamed chunk, for the overview: with MTP a
+# chunk carries two to five tokens, so counting chunks read a third of the
+# real rate.
+usage_per_chunk: true
+
 # The chat panel's sampling controls, as vLLM names them. The reasoning
 # budget is left out: vLLM takes one only from a server started with
 # --reasoning-config, and refuses the request otherwise.

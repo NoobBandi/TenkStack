@@ -83,14 +83,21 @@ function TraceList({ traces, current, onPick }: {
       )}
       {traces.map((t) => {
         const points = t.points;
-        const seconds = points.length
-          ? (points[points.length - 1].at - points[0].at) / 1000
-          : 0;
-        const tokens = points.length ? points[points.length - 1].tokens : 0;
+        const lastPoint = points[points.length - 1];
+        // How long the request has run. A trace the console measured says so
+        // itself; one read from llama-server's log is timed from its first
+        // tick here, which is the whole of it unless the page opened late.
+        const seconds = !lastPoint ? 0
+          : t.engine && lastPoint.elapsed != null ? lastPoint.elapsed
+          : (lastPoint.at - points[0].at) / 1000;
+        const tokens = lastPoint ? lastPoint.tokens : 0;
         // Its own average, not the last instantaneous reading: this row is a
         // summary and the sampled rate at the end of a request says nothing
-        // about the whole of it.
-        const rate = seconds > 0 ? tokens / seconds : 0;
+        // about the whole of it. The decode average when a tick carried one;
+        // dividing the curve's tokens by the time would count the prompt as
+        // generated, and a page opened late would divide by what it saw.
+        const average = [...points].reverse().find((p) => p.average != null)?.average;
+        const rate = average ?? (seconds > 0 ? tokens / seconds : 0);
         const active = t.key === current;
         // `done` only arrives if the release line was seen. A request already
         // running when the console connected reports one tick and then nothing
@@ -194,7 +201,10 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
   const ttft = lastPrefill && firstDecode ? firstDecode.at : undefined;
 
   const last = data[data.length - 1];
-  const elapsed = last.at;
+  // Measured by the console: its own clock, which started with the request
+  // rather than with this page.
+  const measuredElapsed = trace.engine ? trace.points[trace.points.length - 1].elapsed : undefined;
+  const elapsed = measuredElapsed ?? last.at;
 
   return (
     <div>

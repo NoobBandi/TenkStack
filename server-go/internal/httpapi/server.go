@@ -77,9 +77,13 @@ type Server struct {
 	// decide to clear the card and both wait for it.
 	vramMu sync.Mutex
 	// meters carries progress measured in the proxy for engines whose own
-	// logs say nothing per request.
-	meters  feed
-	Version string
+	// logs say nothing per request; book keeps what it measured.
+	meters   feed
+	book     meterBook
+	bookOnce sync.Once
+	// MeterHistory is the file the measured request history is kept in.
+	MeterHistory string
+	Version      string
 	// WebDist overrides the embedded frontend; Embedded is nil when the
 	// binary was built without one.
 	WebDist  string

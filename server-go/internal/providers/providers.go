@@ -168,6 +168,12 @@ type Provider struct {
 	// Tools: entries declare tool calling, which a FormServer engine cannot
 	// be asked about the way llama-server's /props can.
 	Tools bool `yaml:"tools"`
+	// UsagePerChunk: asked for stream_options.continuous_usage_stats, the
+	// engine puts the running token counts on every streamed chunk. The
+	// proxy asks for them to measure a reply -- a chunk can carry several
+	// tokens when the engine speculates -- and takes them out again before
+	// the client sees the stream.
+	UsagePerChunk bool `yaml:"usage_per_chunk"`
 	// Sampling is how the engine names each of SamplingControls. A control
 	// left out does not exist there: the chat panel hides it and does not
 	// send it. Empty means every control under its own name.

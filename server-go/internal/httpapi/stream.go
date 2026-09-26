@@ -5,6 +5,7 @@ import (
 	gocontext "context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -209,7 +210,39 @@ func (s *Server) readActivity(w http.ResponseWriter, r *http.Request) {
 	if limit > 2000 {
 		limit = 2000
 	}
-	writeJSON(w, http.StatusOK, s.Activity.Recent(limit, r.URL.Query().Get("model")))
+	model := r.URL.Query().Get("model")
+	writeJSON(w, http.StatusOK, mergeActivity(s.Activity.Recent(limit, model), s.measured(), limit, model))
+}
+
+// mergeActivity puts the proxy's measurements in place of llama-swap's rows
+// for the same models: for an engine that reports no timings those rows
+// divide the reply by the whole request, prefill and even the model's load
+// included, and plotted near zero.
+func mergeActivity(rows []api.ActivityRow, book *meterBook, limit int, model string) []api.ActivityRow {
+	measured := book.Measured()
+	out := book.Recent(limit, model)
+	for _, r := range rows {
+		if r.Model == nil || !measured[*r.Model] {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return unixOf(out[i].Ts) > unixOf(out[j].Ts) })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func unixOf(ts any) int64 {
+	switch v := ts.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	}
+	return 0
 }
 
 func (s *Server) readLastUsed(w http.ResponseWriter, _ *http.Request) {

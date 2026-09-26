@@ -59,6 +59,14 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	contexts := s.Models.ContextSizes()
+	// A server engine has no /slots; what the proxy measured stands in.
+	for id := range byID {
+		if formOf(providerOf[id]) != providers.FormLlama {
+			if sl := s.measured().Slots(id, contexts[id]); len(sl) > 0 {
+				slots[id] = sl
+			}
+		}
+	}
 	declared := s.Models.DeclaredVision()
 	chatParams := s.Models.ChatParams()
 	sampling := s.Models.SamplingDefaults()

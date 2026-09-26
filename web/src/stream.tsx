@@ -33,7 +33,13 @@ export interface RequestTrace {
   startedAt: number;
   updatedAt: number;
   promptTokens: number;
-  points: { at: number; tokens: number; rate: number; phase: 'prefill' | 'decode' }[];
+  points: {
+    at: number; tokens: number; rate: number; phase: 'prefill' | 'decode';
+    /** The decode average so far, when the tick carried one. */
+    average?: number;
+    /** Seconds since the request began, from whoever measured it. */
+    elapsed?: number;
+  }[];
   done: boolean;
   truncated: boolean;
   /** Whole window the request ended up occupying, prompt included. */
@@ -133,6 +139,7 @@ export function StreamProvider({ children }: { children: React.ReactNode }) {
               ...base, updatedAt: at, promptTokens,
               points: [...base.points, {
                 at, tokens: cumulative, rate: tick.rate ?? 0, phase: tick.phase,
+                average: tick.average, elapsed: tick.elapsed,
               }].slice(-400),
             }].slice(-TRACE_LIMIT);
           });
