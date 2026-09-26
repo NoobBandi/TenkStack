@@ -154,6 +154,8 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int, format st
 	go func() { defer wg.Done(); gguf = c.search(ctx, query, limit, "gguf") }()
 	go func() { defer wg.Done(); st = c.search(ctx, query, limit, "safetensors") }()
 	wg.Wait()
+	// Up to limit of each: the page filters by format, and each format's
+	// list should be as long as a search of that format alone.
 	seen := map[any]bool{}
 	out := []api.CatalogRepo{}
 	for _, r := range append(gguf, st...) {
@@ -164,9 +166,6 @@ func (c *Catalog) Search(ctx context.Context, query string, limit int, format st
 	}
 	downloads := func(r api.CatalogRepo) float64 { f, _ := r.Downloads.(float64); return f }
 	sort.SliceStable(out, func(i, j int) bool { return downloads(out[i]) > downloads(out[j]) })
-	if len(out) > limit {
-		out = out[:limit]
-	}
 	return out
 }
 
@@ -178,7 +177,7 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("sort", "downloads")
 	q.Set("direction", "-1")
-	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated"} {
+	for _, f := range []string{"downloads", "likes", "tags", "lastModified", "gated", "config", "gguf"} {
 		q.Add("expand[]", f)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -215,7 +214,7 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 			}
 		}
 		r := api.CatalogRepo{RepoID: m["id"], Downloads: m["downloads"], Likes: m["likes"], LastModified: m["lastModified"], Tags: tags,
-			Gated: isGated(m["gated"]), Format: format}
+			Gated: isGated(m["gated"]), Format: format, Kind: kindOf(m)}
 		if r.Downloads == nil {
 			r.Downloads = 0
 		}
@@ -225,6 +224,63 @@ func (c *Catalog) search(ctx context.Context, query string, limit int, format st
 		out = append(out, r)
 	}
 	return out
+}
+
+// activeParams is the "30B-A3B" way of naming a mixture of experts: its
+// total, and the parameters active for each token.
+var activeParams = regexp.MustCompile(`(?i)\d+(\.\d+)?b-a\d+(\.\d+)?b`)
+
+// moeArchitectures are GGUF and config architectures that are a mixture of
+// experts without saying moe in their name.
+var moeArchitectures = map[string]bool{
+	"deepseek2": true, "deepseek_v2": true, "deepseek_v3": true, "deepseek3": true, "mixtral": true,
+	"gptoss": true, "gpt_oss": true, "gpt-oss": true, "llama4": true, "dbrx": true, "jamba": true,
+	"grok": true, "arctic": true, "kimi_k2": true,
+}
+
+// kindOf says whether a search result is a dense model or a mixture of
+// experts, from what the Hub knows without a download: the architecture in
+// its GGUF header or config.json, then its name. "" when neither says --
+// Mixtral's GGUF, for one, calls itself llama.
+func kindOf(m map[string]any) string {
+	var arch []string
+	if g, _ := m["gguf"].(map[string]any); g != nil {
+		if a, _ := g["architecture"].(string); a != "" && a != "clip" {
+			arch = append(arch, a)
+		}
+	}
+	if c, _ := m["config"].(map[string]any); c != nil {
+		if t, _ := c["model_type"].(string); t != "" {
+			arch = append(arch, t)
+		}
+		if list, _ := c["architectures"].([]any); len(list) > 0 {
+			if a, _ := list[0].(string); a != "" {
+				arch = append(arch, a)
+			}
+		}
+	}
+	id, _ := m["id"].(string)
+	name := strings.ToLower(id)
+	for _, a := range arch {
+		lower := strings.ToLower(a)
+		if strings.Contains(lower, "moe") || moeArchitectures[lower] {
+			return "moe"
+		}
+	}
+	if activeParams.MatchString(name) || strings.Contains(name, "moe") || strings.Contains(name, "mixtral") {
+		return "moe"
+	}
+	if list, _ := m["tags"].([]any); list != nil {
+		for _, t := range list {
+			if s, _ := t.(string); s == "moe" || s == "mixture-of-experts" {
+				return "moe"
+			}
+		}
+	}
+	if len(arch) > 0 {
+		return "dense"
+	}
+	return ""
 }
 
 // isGated reads the Hub's gated field: false, or "auto" / "manual".
@@ -489,6 +545,7 @@ func (c *Catalog) Folder(ctx context.Context, repoID string) (api.CatalogFolder,
 		out.Architecture, out.Precision, out.Quantized = cfg.Architecture, cfg.Precision, cfg.Quantized
 		out.Vision, out.MTP, out.ContextLength = cfg.Vision, cfg.MTP, cfg.ContextLength
 		out.KVBytesPerToken, out.Hybrid = cfg.KVBytesPerToken, cfg.Hybrid
+		out.Experts, out.ExpertsActive = cfg.Experts, cfg.ExpertsActive
 	case errors.As(err, &needs):
 		// The listing is public, the files are not: what it is stays unknown
 		// until the Hub lets the token in.

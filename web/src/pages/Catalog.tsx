@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Segmented, Select,
+  Alert, App as AntApp, Button, Card, Empty, Input, List, Pagination, Progress, Select,
   Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
@@ -199,11 +199,10 @@ export default function Catalog() {
   const { message } = AntApp.useApp();
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
-  // What is being searched for: GGUF, llama.cpp's; safetensors, a server
-  // engine's, offered when an engine in the registry runs it, installed or not,
-  // so a newcomer finds out what it would take; or both, the default, for
-  // somebody who does not know yet which they want.
-  const [mode, setMode] = useState<CatalogSearch>('all');
+  // A search finds both formats; these narrow what it found, the way the
+  // model page's engine filter does, without asking the Hub again.
+  const [formatFilter, setFormatFilter] = useState<'all' | CatalogFormat>('all');
+  const [kindFilter, setKindFilter] = useState<'all' | 'dense' | 'moe'>('all');
   // The format of the repository on the right, which decides how it is shown:
   // a choice of files, or a folder. Found with it, not assumed from the mode.
   const [pickedFormat, setPickedFormat] = useState<CatalogFormat | null>(null);
@@ -221,10 +220,10 @@ export default function Catalog() {
   // runs the format. Its vendor decides which cards the estimate counts.
   const serverRuntime = runtimes.find((r) => r.formats.includes('safetensors'));
   const serverEngines = engines.filter((e) => e.formats.includes('safetensors'));
-  // With no engine that runs safetensors in the registry there is nothing to
-  // switch between.
-  const searchMode: CatalogSearch = serverEngines.length > 0 ? mode : 'gguf';
-  const format: CatalogFormat = pickedFormat ?? (searchMode === 'safetensors' ? 'safetensors' : 'gguf');
+  // Safetensors are searched for when an engine in the registry runs them,
+  // installed or not, so a newcomer finds out what it would take.
+  const searchMode: CatalogSearch = serverEngines.length > 0 ? 'all' : 'gguf';
+  const format: CatalogFormat = pickedFormat ?? 'gguf';
   // Cards for the GGUF size warning: the smallest one, and how many there are.
   const cardGiB = gpus.length
     ? Math.min(...gpus.map((g) => (g.live?.memory_total_mib ?? VRAM_GIB * 1024) / 1024))
@@ -329,20 +328,19 @@ export default function Catalog() {
     }
   }, [message, searchMode]);
 
-  const onMode = (next: CatalogSearch) => {
-    setMode(next);
-    setRepos([]);
-    setSelected(null);
-    setPickedFormat(null);
-    setFiles([]);
-    setFolder(null);
-    if (query.trim()) void onSearch(query, next);
-  };
+  // What the filters leave, and how many each choice would leave.
+  const byFormat = (r: CatalogRepo) => formatFilter === 'all' || r.format === formatFilter;
+  const byKind = (r: CatalogRepo) => kindFilter === 'all' || r.kind === kindFilter;
+  const listed = repos.filter((r) => byFormat(r) && byKind(r));
+  const countFormat = (f: 'all' | CatalogFormat) =>
+    repos.filter((r) => (f === 'all' || r.format === f) && byKind(r)).length;
+  const countKind = (k: 'all' | 'dense' | 'moe') =>
+    repos.filter((r) => byFormat(r) && (k === 'all' || r.kind === k)).length;
 
   const onPick = async (repoId: string, as?: CatalogFormat) => {
     const picked: CatalogFormat = as
       ?? repos.find((r) => r.repo_id === repoId)?.format
-      ?? (searchMode === 'safetensors' ? 'safetensors' : 'gguf');
+      ?? 'gguf';
     setSelected(repoId);
     setPickedFormat(picked);
     selectedRef.current = repoId;
@@ -509,24 +507,9 @@ export default function Catalog() {
       )}
 
       <Card size="small">
-        {serverEngines.length > 0 && (
-          <Segmented<CatalogSearch>
-            style={{ marginBottom: 10 }}
-            value={searchMode}
-            onChange={onMode}
-            options={[
-              { value: 'gguf', label: 'GGUF' },
-              { value: 'safetensors', label: 'Safetensors' },
-              { value: 'all', label: '全部' },
-            ]}
-          />
-        )}
         <Input.Search
-          placeholder={searchMode === 'gguf'
-            ? '搜尋 Hugging Face 上的 GGUF 模型，例如 qwen3 coder'
-            : searchMode === 'safetensors'
-              ? '搜尋 Hugging Face 上的 safetensors 模型，例如 Qwen3.8-27B'
-              : '搜尋 Hugging Face 上的模型，例如 Qwen3.8-27B'}
+          placeholder="搜尋 Hugging Face 上的模型，例如 Qwen3.8-27B"
+
           enterButton="搜尋"
           size="large"
           loading={searching}
@@ -537,11 +520,9 @@ export default function Catalog() {
         <Text type="secondary" style={{ fontSize: 12 }}>
           {searchMode === 'gguf'
             ? '一個 GGUF 檔就是一個模型，給 llama.cpp 用：從右邊挑一個量化版本下載。'
-            : searchMode === 'safetensors'
-              ? '一個儲存庫就是一個模型，給伺服器引擎整個資料夾載入：權重、設定檔和 tokenizer 會一起下載。'
-              : '兩種格式一起列出，每筆標出是哪一種：GGUF 是挑一個檔案給 llama.cpp，safetensors 是整個資料夾給 vLLM 這類伺服器引擎。'}
+            : '兩種格式一起列出，每筆標出是哪一種：GGUF 是挑一個檔案給 llama.cpp，safetensors 是整個資料夾給 vLLM 這類伺服器引擎。'}
         </Text>
-        {searchMode !== 'gguf' && serverEngines.length > 0 && !serverRuntime && (
+        {formatFilter === 'safetensors' && serverEngines.length > 0 && !serverRuntime && (
           <Alert
             style={{ marginTop: 10 }}
             type="info"
@@ -565,11 +546,41 @@ export default function Catalog() {
             height: columnHeight - CARD_HEAD, padding: 0,
             display: 'flex', flexDirection: 'column',
           } }}
-          title={<span style={{ fontSize: 13 }}>搜尋結果</span>}
+          title={
+            <Space size={8}>
+              <span style={{ fontSize: 13 }}>搜尋結果</span>
+              {/* Dropdowns, like the model page's engine filter: they narrow
+                  what the search found, and say how many each would leave. */}
+              {searchMode === 'all' && (
+                <Select
+                  size="small"
+                  value={formatFilter}
+                  onChange={(v) => { setFormatFilter(v); setPage(1); }}
+                  style={{ minWidth: 150, fontWeight: 400 }}
+                  options={[
+                    { value: 'all', label: `全部格式（${countFormat('all')}）` },
+                    { value: 'gguf', label: `GGUF（${countFormat('gguf')}）` },
+                    { value: 'safetensors', label: `Safetensors（${countFormat('safetensors')}）` },
+                  ]}
+                />
+              )}
+              <Select
+                size="small"
+                value={kindFilter}
+                onChange={(v) => { setKindFilter(v); setPage(1); }}
+                style={{ minWidth: 140, fontWeight: 400 }}
+                options={[
+                  { value: 'all', label: `全部架構（${countKind('all')}）` },
+                  { value: 'dense', label: `Dense（${countKind('dense')}）` },
+                  { value: 'moe', label: `MoE（${countKind('moe')}）` },
+                ]}
+              />
+            </Space>
+          }
           size="small"
           extra={
             <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-              {repos.length} 個儲存庫
+              {listed.length} 個儲存庫
             </Text>
           }
         >
@@ -580,7 +591,7 @@ export default function Catalog() {
               rows scroll inside their own box and it stays put beneath them. */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
           <List
-            dataSource={repos.slice((page - 1) * pageSize, page * pageSize)}
+            dataSource={listed.slice((page - 1) * pageSize, page * pageSize)}
             renderItem={(repo) => {
               const picked = selected === repo.repo_id;
               return (
@@ -608,6 +619,15 @@ export default function Catalog() {
                           <Tag color={repo.format === 'gguf' ? 'cyan' : 'geekblue'} style={{ fontSize: 11 }}>
                             {repo.format === 'gguf' ? 'GGUF' : 'Safetensors'}
                           </Tag>
+                        )}
+                        {repo.kind && (
+                          <Tooltip title={repo.kind === 'moe'
+                            ? '混合專家（MoE）：每個 token 只用到一部分參數，生成比同大小的 Dense 快，但顯存仍要放下全部權重'
+                            : 'Dense：每個 token 都用到全部參數'}>
+                            <Tag color={repo.kind === 'moe' ? 'orange' : undefined} style={{ fontSize: 11 }}>
+                              {repo.kind === 'moe' ? 'MoE' : 'Dense'}
+                            </Tag>
+                          </Tooltip>
                         )}
                         {repo.gated && (
                           <Tooltip title="要先在 Hugging Face 同意使用條款，並在設定填入 token 才能下載">
@@ -643,9 +663,9 @@ export default function Catalog() {
             <Pagination
               current={page}
               pageSize={pageSize}
-              total={repos.length}
+              total={listed.length}
               onChange={(p, size) => { setPage(p); setPageSize(size); }}
-              showSizeChanger={sizeChanger(repos.length)}
+              showSizeChanger={sizeChanger(listed.length)}
               showTotal={pageTotal}
               size="small"
             />

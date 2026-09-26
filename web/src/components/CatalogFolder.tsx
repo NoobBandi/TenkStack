@@ -226,6 +226,11 @@ export default function CatalogFolderPanel({
           <Space size={4}>
             <Tag>文字</Tag>
             {folder.vision && <Tag color="purple">看圖</Tag>}
+            {folder.experts > 0 ? (
+              <Tooltip title="混合專家：每個 token 只經過其中幾個專家，生成比同大小的 Dense 快，但顯存仍要放下全部權重">
+                <Tag color="orange">MoE・{folder.experts} 專家{folder.experts_active ? `取 ${folder.experts_active}` : ''}</Tag>
+              </Tooltip>
+            ) : folder.architecture && <Tag>Dense</Tag>}
             {folder.mtp && <Tooltip title="權重帶有 MTP 預測頭，可以開推測解碼加速生成"><Tag color="blue">MTP</Tag></Tooltip>}
           </Space>
         </Descriptions.Item>

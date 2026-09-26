@@ -760,6 +760,8 @@ export interface CatalogRepo {
   gated?: boolean;
   /** How it is offered: a choice of GGUF files, or a folder of safetensors. */
   format?: CatalogFormat;
+  /** A dense model or a mixture of experts; '' when the Hub does not say. */
+  kind?: 'dense' | 'moe' | '';
 }
 
 export interface CatalogFile {
@@ -913,6 +915,9 @@ export interface CatalogFolder {
    *  only some layers keep one, the rest are linear attention. */
   kv_bytes_per_token: number;
   hybrid: boolean;
+  /** A mixture of experts' routed experts and how many a token uses; 0 dense. */
+  experts: number;
+  experts_active: number;
   /** Gated on the Hub; `needs_access` says what to do when it would not open. */
   gated: boolean;
   needs_access: string;

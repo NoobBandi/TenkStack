@@ -323,3 +323,25 @@ func TestSearchAll(t *testing.T) {
 		t.Errorf("got %v, want %s", line, want)
 	}
 }
+
+func TestKindOf(t *testing.T) {
+	for _, c := range []struct {
+		m    map[string]any
+		want string
+	}{
+		// As the Hub's search returns them, with config and gguf expanded.
+		{map[string]any{"id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", "gguf": map[string]any{"architecture": "qwen3moe"}}, "moe"},
+		{map[string]any{"id": "unsloth/Qwen3.8-27B-GGUF", "gguf": map[string]any{"architecture": "qwen35"}}, "dense"},
+		{map[string]any{"id": "Qwen/Qwen3.6-35B-A3B-FP8", "config": map[string]any{"model_type": "qwen3_5_moe"}}, "moe"},
+		{map[string]any{"id": "Qwen/Qwen3.5-9B", "config": map[string]any{"model_type": "qwen3_5", "architectures": []any{"Qwen3_5ForConditionalGeneration"}}}, "dense"},
+		{map[string]any{"id": "deepseek-ai/DeepSeek-V3", "config": map[string]any{"model_type": "deepseek_v3"}}, "moe"},
+		// Mixtral's GGUF says llama; its name says the rest.
+		{map[string]any{"id": "TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF", "gguf": map[string]any{"architecture": "llama"}}, "moe"},
+		// Only a vision projector's header: nothing to go on.
+		{map[string]any{"id": "someone/model-GGUF", "gguf": map[string]any{"architecture": "clip"}}, ""},
+	} {
+		if got := kindOf(c.m); got != c.want {
+			t.Errorf("%v: %q, want %q", c.m["id"], got, c.want)
+		}
+	}
+}

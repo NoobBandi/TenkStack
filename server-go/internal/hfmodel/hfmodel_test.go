@@ -57,3 +57,16 @@ func TestParsePrecisions(t *testing.T) {
 		t.Errorf("not a config: %+v", c)
 	}
 }
+
+func TestExperts(t *testing.T) {
+	moe := Parse([]byte(`{"text_config":{"num_hidden_layers":40,"num_experts":256,"num_experts_per_tok":8}}`))
+	if moe.Experts != 256 || moe.ExpertsActive != 8 {
+		t.Errorf("Qwen MoE: %+v", moe)
+	}
+	if ds := Parse([]byte(`{"num_hidden_layers":61,"n_routed_experts":256,"num_experts_per_tok":8}`)); ds.Experts != 256 {
+		t.Errorf("DeepSeek: %+v", ds)
+	}
+	if dense := Parse([]byte(`{"num_hidden_layers":64,"num_experts":0}`)); dense.Experts != 0 {
+		t.Errorf("dense: %+v", dense)
+	}
+}

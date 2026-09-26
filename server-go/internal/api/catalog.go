@@ -11,6 +11,9 @@ type CatalogRepo struct {
 	// Format is how the catalog offers it: gguf, a choice of files, or
 	// safetensors, a folder.
 	Format string `json:"format"`
+	// Kind is dense or moe (a mixture of experts), "" when the Hub's
+	// metadata does not say.
+	Kind string `json:"kind"`
 }
 
 // CatalogVariant is the same model in another precision.
@@ -81,6 +84,10 @@ type CatalogFolder struct {
 	// 0 when the config does not say; Hybrid: only some layers keep one.
 	KVBytesPerToken int64 `json:"kv_bytes_per_token"`
 	Hybrid          bool  `json:"hybrid"`
+	// Experts is a mixture of experts' count and how many each token uses;
+	// 0 for a dense model.
+	Experts       int `json:"experts"`
+	ExpertsActive int `json:"experts_active"`
 	// Gated, and NeedsAccess when the Hub would not open it: what to do.
 	Gated       bool   `json:"gated"`
 	NeedsAccess string `json:"needs_access"`

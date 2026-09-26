@@ -35,6 +35,10 @@ type Config struct {
 	// Hybrid: only some layers attend over the whole context (the rest are
 	// linear attention or state space), so only those hold a per-token cache.
 	Hybrid bool
+	// Experts is a mixture of experts' routed expert count, and
+	// ExpertsActive how many each token goes through; 0 for a dense model.
+	Experts       int
+	ExpertsActive int
 }
 
 type textConfig struct {
@@ -54,6 +58,12 @@ type textConfig struct {
 	// Multi-head latent attention caches one compressed vector a layer.
 	KVLoraRank    int `json:"kv_lora_rank"`
 	QKRopeHeadDim int `json:"qk_rope_head_dim"`
+	// A mixture of experts, under the names different families give it.
+	NumExperts      int `json:"num_experts"`
+	NumLocalExperts int `json:"num_local_experts"`
+	RoutedExperts   int `json:"n_routed_experts"`
+	ExpertsPerToken int `json:"num_experts_per_tok"`
+	MoETopK         int `json:"moe_topk"`
 }
 
 // kvBytes works out a token's attention cache from a language model config.
@@ -130,6 +140,11 @@ func Parse(raw []byte) Config {
 		text = cfg.Text
 	}
 	out.KVBytesPerToken, out.Hybrid = text.kvBytes()
+	out.Experts = max(text.NumExperts, text.NumLocalExperts, text.RoutedExperts)
+	out.ExpertsActive = max(text.ExpertsPerToken, text.MoETopK)
+	if out.Experts <= 1 {
+		out.Experts, out.ExpertsActive = 0, 0
+	}
 	out.Layers = cfg.HiddenLayers
 	if out.Layers == 0 {
 		out.Layers = cfg.Text.HiddenLayers
