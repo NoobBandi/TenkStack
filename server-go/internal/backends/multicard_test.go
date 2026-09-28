@@ -59,7 +59,7 @@ func TestMultiCardLauncher(t *testing.T) {
 	joined = strings.Join(two, " ")
 	for _, want := range []string{"--ipc host", "--cap-add SYS_PTRACE", "TENKSTACK_MULTI_CARD=1",
 		"CCL_SYCL_ALLREDUCE_SIMPLE_THRESHOLD=4294967296", "/cache/vllm-intel-multi:/root/.cache/vllm",
-		"--entrypoint bash intel/llm-scaler-vllm"} {
+		"--entrypoint bash " + providers.Get(providers.VLLM).Builds["intel"].Image} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("two cards lack %q: %v", want, two)
 		}

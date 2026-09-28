@@ -24,9 +24,12 @@ The launcher also sets oneCCL's simple-algorithm thresholds so no collective
 opens the other card's memory (https://github.com/intel/llm-scaler/issues/594).
 
 Two workers only: that is what was measured. With more, the patch changes
-nothing and says so. Written against intel/llm-scaler-vllm:0.26.0-b2; if an
-anchor is missing the script exits non-zero and the container stops, since a
-half-applied patch hangs at start instead of failing.
+nothing and says so. Written against intel/llm-scaler-vllm:0.26.0-b2 and
+applies unchanged to vllm/vllm-openai-xpu:v0.30.0 (host RAM 11.8 GB for the
+same FP8 27B); if an anchor is missing the script exits non-zero and the
+container stops, since a half-applied patch hangs at start instead of
+failing. Run as a script, so it patches the installed vLLM even from the
+v0.30.0 image's workdir, /workspace/vllm, which holds a source tree.
 
 After the approach in github.com/SergiioB/intel-arc-pro-b70-inference-cookbook
 (MIT).

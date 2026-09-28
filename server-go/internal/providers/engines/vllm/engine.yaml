@@ -55,40 +55,49 @@ env_prefix: VLLM
 
 builds:
   intel:
-    image: intel/llm-scaler-vllm:0.26.0-b2
+    # Upstream vLLM's own XPU image rather than Intel's llm-scaler-vllm
+    # (0.26.0-b2): that one bundles vllm-xpu-kernels 0.1.11.2.dev0, before the
+    # GDN fixes of 0.1.14 (mixed speculative and plain decode; Qwen3.5/3.6
+    # 27B accuracy), and long Qwen3.8 coding sessions on it turned into "!!!!"
+    # (NaN logits; intel/llm-scaler#596 is the same on B60/B70). The newer
+    # kernels need oneAPI 2026 and a newer torch, so they cannot be dropped
+    # into b2. This one has torch 2.13, kernels 0.1.14.1, oneAPI 2026 from pip,
+    # and no /opt/intel/oneapi. Measured against b2 on two B70: Qwen3.8-27B
+    # FP8 TP=2 MTP3 44/57/80 tok/s zh/en/code (b2 46/62/86), host RAM 11.8 GB
+    # (16), prefix caching on by default (off in b2).
+    image: vllm/vllm-openai-xpu:v0.30.0
     verified: true
     # OneCCL opens every render node by path, so by-path goes in read-only.
     # XPU graph replays a whole decode step instead of launching each kernel
-    # from Python: 14.6 -> 34.8 tok/s for a 27B on two B70s. It is off in the
-    # image by default and has no effect with --enforce-eager. The Triton and
-    # Inductor caches default to /tmp, which dies with the container; kept in
+    # from Python: 14.6 -> 34.8 tok/s for a 27B on two B70s. It is off by
+    # default and has no effect with --enforce-eager. The Triton and Inductor
+    # caches default to /tmp, which dies with the container; kept in
     # cache_dir they save ~70 s of every start.
     flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --shm-size, 16g, -e, HF_HUB_OFFLINE=1,
             -e, VLLM_XPU_ENABLE_XPU_GRAPH=1, -e, TRITON_CACHE_DIR=/root/.cache/vllm/triton,
             -e, TORCHINDUCTOR_CACHE_DIR=/root/.cache/vllm/inductor]
     cache_dir: /root/.cache/vllm
-    # Stored precisions a model has loaded in here: bf16 (Qwen3-8B, Qwen3.8-27B),
-    # fp8 (unsloth/Qwen3.8-27B-FP8, Qwen's own block layout), int4 (auto-round
-    # W4A16 in GPTQ packing). A compressed-tensors FP8_BLOCK export did not
-    # load ("only support per-channel and per-tensor"), so fp8 from
-    # llm-compressor is worth checking before a long download.
-    precisions: [bf16, fp8, int4]
+    # Stored precisions a model has loaded in on this image: bf16 (Qwen3.8-27B,
+    # Qwen3.5-9B, both also with online fp8). Stored fp8 and int4 loaded on
+    # the b2 image before it but were not tried here.
+    precisions: [bf16]
     # Verified on two Arc Pro B70 on a desktop board (no direct link between
-    # the cards): FP8 27B, same tok/s, host RAM 73 -> 16 GB. Tied to this
-    # image: its compute-runtime is where the mirroring comes from, so a tag
-    # with a fixed runtime can drop it. A board where the cards do reach each
-    # other directly was not tested.
+    # the cards). Written for b2, whose compute-runtime (26.14) was measured
+    # mirroring memory; applies unchanged to this image, where the FP8 27B
+    # runs in 11.8 GB of host RAM with it. Without it on this image was not
+    # measured. A board where the cards do reach each other directly was not
+    # tested.
     multi_card:
       note: >-
         Several cards: each tensor-parallel worker sees only its own card. With
-        both cards in every worker, this image's compute-runtime (26.14) pins a
-        host-memory mirror of each worker's device memory for the other card
+        both cards in every worker, Intel's compute-runtime pins a host-memory
+        mirror of each worker's device memory for the other card
         (intel/compute-runtime#953), about 64 GB for a 27B at FP8. oneCCL then
         stays on algorithms that never open the other card's memory
         (intel/llm-scaler#594), which exchange handles between the worker
         processes: that needs --ipc host and SYS_PTRACE.
       setup: intel-worker-affinity.py
-      entrypoint: source /opt/intel/oneapi/setvars.sh --force >/dev/null && source /opt/intel/oneapi/ccl/2021.15/env/vars.sh --force && exec vllm serve "$@"
+      entrypoint: exec vllm serve "$@"
       flags: [--ipc, host, --cap-add, SYS_PTRACE,
               -e, CCL_SYCL_ALLREDUCE_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_REDUCE_SCATTER_SIMPLE_THRESHOLD=4294967296,
               -e, CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_ALLTOALL_TMP_BUF=1]
@@ -125,11 +134,15 @@ online_quantization:
 # matching rule wins for each flag; `match` is a regular expression against
 # the architecture in config.json.
 recommended:
-  # Intel's image only. Compiled with its default split points, two cards
+  # Intel's build only. Compiled with the default split points, two cards
   # emit garbage (the all-reduce lands inside a captured graph); splitting at
-  # all_reduce too is the image's default list plus that one op. Harmless on
-  # one card. Graphs are recorded for up to four requests at once. Other
+  # all_reduce too is the default list plus that one op. Harmless on one card
+  # (Qwen3.5-9B). Graphs are recorded for up to four requests at once. Other
   # vendors' builds keep vLLM's own defaults, which this was not tested on.
+  #
+  # On this image a start that reuses the compile cache profiles ~1.4 GiB
+  # more per card than the first start that compiled: Qwen3.8-27B on two B70
+  # at 262144 needed --gpu-memory-utilization 0.92 to start the second time.
   - match: ^Qwen3_5
     vendors: [intel]
     flags:
