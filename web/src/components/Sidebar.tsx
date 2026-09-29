@@ -23,6 +23,14 @@ export const SIDEBAR_COLLAPSED = 64;
  *  of page, and every page scrolled sideways. */
 export const NARROW_BELOW = 768;
 
+/** The logo at 36 px high: 1060x277 scales to 138 wide, and its T mark ends
+ *  at column 202 with the wordmark starting at 239, so a 28 px frame shows the
+ *  T alone -- about 26 px of it, which 17 px of padding centres in the folded
+ *  sidebar's 63. */
+const LOGO_WIDTH = 138;
+const LOGO_MARK = 28;
+const LOGO_LEFT = 17;
+
 /** How the sidebar folds, which the page beside it follows step for step:
  *  antd's Sider animates its width over this, so the content's margin does
  *  the same, or the two drift apart mid-fold. */
@@ -195,7 +203,6 @@ export default function Sidebar({
 
   const location = useLocation();
   const loaded = models.filter((m) => m.running);
-  const busy = gpus.some((g) => g.busy);
 
   return (
     <Sider
@@ -221,42 +228,39 @@ export default function Sidebar({
       // above a void the height of the unused space.
       styles={{ body: { height: '100%', display: 'flex', flexDirection: 'column' } }}
     >
+      {/* The logo alone. It had a GPU light beside it, grey whenever nothing
+          was computing -- which is most of the time -- and the overview and
+          the GPU page already say whether a card is busy. Folding narrows the
+          logo's frame to the T mark, which the 17 px padding centres in the
+          folded sidebar. */}
       <Link
         to="/"
+        aria-label="TenkStack"
         style={{
-          display: 'flex', alignItems: 'center', gap: 10, height: 56,
-          // One padding in both states, so the status dot stays put while the
-          // logo beside it fades. 28 px centres the 7 px dot in the folded
-          // sidebar: 64 wide, less its 1 px border, is 63, and (63 - 7) / 2 = 28.
-          padding: `0 0 0 ${(SIDEBAR_COLLAPSED - 1 - 7) / 2}px`, color: 'inherit', overflow: 'hidden',
+          display: 'flex', alignItems: 'center', height: 56,
+          padding: `0 0 0 ${LOGO_LEFT}px`, color: 'inherit', overflow: 'hidden',
           borderBottom: `1px solid ${LINE.faint}`, flexShrink: 0,
         }}
       >
-        <Tooltip title={busy ? 'GPU 運算中' : 'GPU 閒置'} placement="right">
-          <span style={{
-            width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-            background: busy ? '#5ccf8f' : LINE.strong,
-            boxShadow: busy ? '0 0 8px rgba(92,207,143,0.8)' : 'none',
-            transition: 'background 300ms, box-shadow 300ms',
-          }} />
-        </Tooltip>
-        {/* Served from the console rather than linked to the CDN it came from:
-           this is the frame's own chrome, and a header that breaks when the
-           machine is off the internet -- which is a normal state for a box
-           whose whole point is running locally -- is worse than 40 KB.
-           The alt text is the fallback, so a missing file leaves a name
-           rather than a gap. */}
-        <img
-          src="/logo.webp"
-          alt="TenkStack"
-          /* The file carries transparent padding, so only 83% of this height
-             is ink -- 36 here reads as about 30. Width follows at 3.83:1,
-             which is 138 of the 159px the header has once the status dot and
-             its gap are taken out, and leaves 10px above and below inside a
-             56px header. 40 is the hard ceiling, coming within 6px of the
-             padding, which stops reading as a margin. */
-          style={{ height: 36, width: 'auto', display: 'block', flexShrink: 0, ...fade(collapsed) }}
-        />
+        <span style={{
+          display: 'block', overflow: 'hidden', flexShrink: 0,
+          width: collapsed ? LOGO_MARK : LOGO_WIDTH, transition: `width ${SIDER_MOTION}`,
+        }}>
+          {/* Served from the console rather than linked to the CDN it came from:
+              this is the frame's own chrome, and a header that breaks when the
+              machine is off the internet -- which is a normal state for a box
+              whose whole point is running locally -- is worse than 40 KB.
+              The alt text is the fallback, so a missing file leaves a name
+              rather than a gap. */}
+          <img
+            src="/logo.webp"
+            alt="TenkStack"
+            /* The file carries transparent padding, so only 83% of this height
+               is ink -- 36 here reads as about 30, and leaves 10px above and
+               below inside a 56px header. */
+            style={{ height: 36, width: LOGO_WIDTH, maxWidth: 'none', display: 'block' }}
+          />
+        </span>
       </Link>
 
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', paddingTop: 8 }}>
@@ -323,9 +327,8 @@ export default function Sidebar({
           card, which was the least informative form of a figure that did not
           belong here anyway: a card sitting at its cap is working normally,
           not filling up, and 200W against a 400W total could be one card at
-          full tilt or two at half. Whether anything is busy is already
-          answered by the dot at the top of this panel, and the exact wattage
-          by the dashboard and its chart.
+          full tilt or two at half. Whether anything is busy, and the exact
+          wattage, are the overview's and the GPU page's to say.
 
           Memory earns its place because it is the one that decides something:
           whether the next model fits, and whether ComfyUI is still holding
