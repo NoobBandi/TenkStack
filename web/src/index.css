@@ -239,3 +239,16 @@ body {
   height: 40px;
   padding-inline: 16px;
 }
+
+/* Connections: the list of tools on the left; the chosen one is drawn inline. */
+.tool-row {
+  background: transparent;
+  transition: background 0.15s;
+}
+.tool-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+.tool-row:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.45);
+  outline-offset: -1px;
+}

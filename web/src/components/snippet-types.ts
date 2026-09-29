@@ -30,6 +30,8 @@ export interface Step {
 export interface Snippet {
   key: string;
   label: string;
+  /** What the tool is, in a few words, for its card. */
+  blurb: string;
   group: 'agent' | 'raw';
   caption: string;
   steps: Step[];
@@ -62,14 +64,17 @@ export const KEY_FILE_ABS = {
   mac: '/Users/<你的帳號>/.tenks-key',
 };
 
+/** Stands for the reader's key until one is made on the page. */
+export const KEY_PLACEHOLDER = 'sk-console-...';
+
 /** Writing that file, with the permissions it should have. */
-export function writeKeyCommand(os: Os): string {
+export function writeKeyCommand(os: Os, key = KEY_PLACEHOLDER): string {
   if (os === 'windows') {
-    return `Set-Content -NoNewline "${KEY_FILE.win}" 'sk-console-...'`;
+    return `Set-Content -NoNewline "${KEY_FILE.win}" '${key}'`;
   }
   // printf rather than echo: echo adds a newline, and a newline inside a bearer
   // token is a 401 nobody can see.
-  return `printf '%s' 'sk-console-...' > ${KEY_FILE.unix}\nchmod 600 ${KEY_FILE.unix}`;
+  return `printf '%s' '${key}' > ${KEY_FILE.unix}\nchmod 600 ${KEY_FILE.unix}`;
 }
 
 export const shellLang = (os: Os) => (os === 'windows' ? 'powershell' : 'bash');
