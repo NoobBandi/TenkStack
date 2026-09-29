@@ -108,13 +108,12 @@ CONSOLE_TLS_PORT="${CONSOLE_TLS_PORT:-8443}"
 API_PORT="${CONSOLE_API_PORT:-8000}"
 
 # Findings, filled in by the survey.
-OS_ID=""; OS_VER=""; OS_PRETTY=""
+OS_ID=""; OS_PRETTY=""
 VENDORS=()
 NEEDS_REBOOT=false
 REBOOT_WHY=""
 MISSING_PKGS=()
 MISSING_GROUPS=()
-SUDO_NEEDED=false
 
 # --------------------------------------------------------------------------
 # Language
@@ -206,7 +205,7 @@ ask() {
     skip "$prompt$default$(L "（未互動）" " (not interactive)")"
     return
   fi
-  read -r -p "  $prompt[$default] " answer || true
+  read -r -p "  ${prompt}[$default] " answer || true
   printf -v "$__var" '%s' "${answer:-$default}"
 }
 
@@ -325,7 +324,7 @@ survey_os() {
   [[ -r /etc/os-release ]] || die "$(L "讀不到 /etc/os-release。" "Cannot read /etc/os-release.")" "$(L "這個腳本只支援 systemd 的 Linux 發行版。" "This script supports systemd Linux distributions only.")"
   # shellcheck disable=SC1091
   . /etc/os-release
-  OS_ID="${ID:-unknown}"; OS_VER="${VERSION_ID:-}"; OS_PRETTY="${PRETTY_NAME:-$OS_ID}"
+  OS_ID="${ID:-unknown}"; OS_PRETTY="${PRETTY_NAME:-$OS_ID}"
   ok "$OS_PRETTY$(L "，核心 " ", kernel ")$(uname -r)"
 
   case "$OS_ID" in
@@ -510,7 +509,6 @@ show_plan() {
   esac
   if [[ ${#MISSING_PKGS[@]}   -gt 0 ]]; then say "  $(L "會安裝        " "Installs      ")${MISSING_PKGS[*]}"; fi
   if [[ ${#MISSING_GROUPS[@]} -gt 0 ]]; then say "  $(L "會加入群組    " "Joins groups  ")${MISSING_GROUPS[*]}"; fi
-  if [[ $TLS_MODE == internal || $TLS_MODE == domain ]]; then SUDO_NEEDED=true; fi
   if $NEEDS_REBOOT; then
     say ""
     warn "$(L "這次安裝結束後需要重新開機一次：$REBOOT_WHY" "One reboot is needed when this finishes: $REBOOT_WHY")"
@@ -521,7 +519,6 @@ show_plan() {
   fi
 
   if [[ ${#MISSING_PKGS[@]} -gt 0 || ${#MISSING_GROUPS[@]} -gt 0 ]]; then
-    SUDO_NEEDED=true
     say "  ${C_DIM}$(L "上面的安裝與群組變更會用到 sudo，其他步驟都以 $USER 身分執行。" "The installs and group changes above use sudo; everything else runs as $USER.")${C_OFF}"
   fi
 

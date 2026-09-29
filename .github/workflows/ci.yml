@@ -1,0 +1,69 @@
+# Every push to main and every pull request: the backend's checks, the
+# frontend's build and lint, the installer's, and a binary built and started
+# the way a release is. release.yml runs the same before it publishes.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache-dependency-path: server-go/go.sum
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l .)
+          if [[ -n $unformatted ]]; then echo "not gofmt'ed:"; echo "$unformatted"; exit 1; fi
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+
+  binary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The frontend's build stamp is `git describe`.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache-dependency-path: server-go/go.sum
+      # build runs check-frames and tsc -b before vite.
+      - name: Frontend
+        run: cd web && npm ci && npm run build
+      - name: Lint
+        run: cd web && npx oxlint
+      - name: Build
+        run: server-go/build.sh
+      - name: Smoke
+        run: server-go/smoke.sh server-go/tenkstack "$(tr -d '[:space:]' < VERSION)"
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax
+        run: for f in install.sh server-go/build.sh server-go/smoke.sh; do bash -n "$f"; done
+      - name: ShellCheck
+        run: shellcheck -S warning install.sh server-go/build.sh server-go/smoke.sh

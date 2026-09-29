@@ -110,7 +110,16 @@ go vet ./... && go test ./...
 cd ../web
 npm run build      # check-frames, then tsc -b, then vite build
 npm run lint       # oxlint
+
+cd ..
+shellcheck -S warning install.sh server-go/build.sh server-go/smoke.sh
+server-go/build.sh && server-go/smoke.sh server-go/tenkstack "$(cat VERSION)"
 ```
+
+CI (`.github/workflows/ci.yml`) runs all of these, plus `gofmt`, on every
+push to `main` and every pull request. `smoke.sh` starts the built binary in
+an empty home and checks that it reports its version, serves the embedded
+frontend and carries the setup protocol `install.sh` looks for.
 
 `check-frames` is not optional and is not a linter: the documents injected
 into sandboxed frames are template literals, and an escape written the
@@ -126,9 +135,19 @@ say what you ran in the pull request.
 ## Releases
 
 `VERSION` at the root is the version. A tag `v<version>` makes the release
-workflow build `tenkstack-linux-amd64` and `-arm64` with the frontend inside
-and attach them to the GitHub release, which is where `install.sh` downloads
-from. Bump `VERSION`, commit, tag, push the tag.
+workflow run CI, build `tenkstack-linux-amd64` and `-arm64` with the frontend
+inside, smoke-test the amd64 one and attach them to the GitHub release, which
+is where `install.sh` downloads from. Bump `VERSION`, commit, then push an
+annotated tag: its message is the release notes, shown on the about page.
+The workflow refuses a tag that does not match `VERSION` — a binary that
+reports an older version than its tag would offer itself as an update
+forever.
+
+A tag with a suffix (`v0.7.0-rc1`) is published as a pre-release. GitHub's
+*latest* skips it, so no install and no update check sees it; try it with
+`TENKSTACK_RELEASE=https://github.com/NoobBandi/TenkStack/releases/download/v0.7.0-rc1`
+before `install.sh`, or by downloading the binary. The final tag then goes
+out as usual.
 
 ## Adding a GPU vendor or a runtime
 
