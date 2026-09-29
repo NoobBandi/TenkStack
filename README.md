@@ -69,6 +69,17 @@ ComfyUI needs `xpu-smi` present for the console to see the cards.
 Other flags: `--lang en|zh-TW`, `--dir PATH` (default `~/tenkstack`),
 `--no-tui`, `--yes`, `--dry-run`, `--help`.
 
+### Uninstall
+
+Run the same command. When an install is found, the first screen after the
+language asks whether to install (or update) or to uninstall; the plain
+equivalent is `--uninstall`. It stops and removes TenkStack's services, the
+containers with a mount under the install directory, their images (unless
+`--keep-images`), the xpu-smi journal filter and the trust in Caddy's own CA,
+and deletes the programs. The install directory — models, ComfyUI files,
+settings, chat history — stays, and installing again picks it up; `--purge`
+deletes it too, after you type its path. Packages, groups and linger stay.
+
 Tested on Ubuntu 24.04. NVIDIA drivers are installed when missing; Intel and
 AMD cards need the vendor's compute stack already present.
 

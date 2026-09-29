@@ -100,3 +100,27 @@ func Detect(ctx context.Context) Machine {
 	m.XPUSMI = err == nil
 	return m
 }
+
+// FindInstall is the install directory of an existing TenkStack, read the
+// way install.sh reads it: from the console unit's ExecStart.
+func FindInstall() (string, bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	raw, err := os.ReadFile(home + "/.config/systemd/user/tenkstack-console.service")
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		cmd, ok := strings.CutPrefix(line, "ExecStart=")
+		if !ok {
+			continue
+		}
+		bin := strings.Fields(cmd)
+		if len(bin) > 0 && strings.HasSuffix(bin[0], "/console/tenkstack") {
+			return strings.TrimSuffix(bin[0], "/console/tenkstack"), true
+		}
+	}
+	return "", false
+}

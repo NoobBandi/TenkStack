@@ -41,6 +41,40 @@ func cancelled(err error) error {
 	return err
 }
 
+// AskAction offers install or uninstall when an install is already here.
+func AskAction(l Lang, root string) (string, error) {
+	action := "install"
+	err := huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().Title(T(l, "action.title")).Description(Tf(l, "action.found", root)).
+			Options(huh.NewOption(T(l, "action.install"), "install"), huh.NewOption(T(l, "action.uninstall"), "uninstall")).
+			Value(&action),
+	)).WithTheme(huh.ThemeCharm()).WithKeyMap(keyMap(l)).Run()
+	if err != nil {
+		return "", cancelled(err)
+	}
+	return action, nil
+}
+
+// AskUninstall asks what an uninstall keeps.
+func AskUninstall(l Lang, root string) (Answers, error) {
+	a := Answers{Lang: l, Action: "uninstall", Root: root}
+	keep := "keep"
+	removeImages := true
+	err := huh.NewForm(huh.NewGroup(
+		huh.NewSelect[string]().Title(T(l, "un.keep.title")+": "+root).Description(T(l, "un.keep.desc")).
+			Options(huh.NewOption(T(l, "un.keep.keep"), "keep"), huh.NewOption(T(l, "un.keep.purge"), "purge")).
+			Value(&keep),
+		huh.NewConfirm().Title(T(l, "un.images.title")).Description(T(l, "un.images.desc")+"\n\n"+T(l, "un.next")).
+			Affirmative(T(l, "yes")).Negative(T(l, "no")).Value(&removeImages),
+	)).WithTheme(huh.ThemeCharm()).WithKeyMap(keyMap(l)).Run()
+	if err != nil {
+		return Answers{}, cancelled(err)
+	}
+	a.Purge = keep == "purge"
+	a.KeepImages = !removeImages
+	return a, nil
+}
+
 // help labels in Chinese, by huh's English ones.
 var helpZh = map[string]string{
 	"next": "下一步", "back": "上一步", "toggle": "勾選", "select all": "全選", "select none": "全不選",

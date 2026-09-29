@@ -75,8 +75,22 @@ func MainSetup(args []string) int {
 			return exitFor(err, DefaultLang())
 		}
 	}
+	// An install already here: ask whether this run installs or removes it.
+	if root, found := FindInstall(); found {
+		action, err := AskAction(l, root)
+		if err != nil {
+			return exitFor(err, l)
+		}
+		if action == "uninstall" {
+			a, err := AskUninstall(l, root)
+			if err != nil {
+				return exitFor(err, l)
+			}
+			return writeAnswers(*out, a)
+		}
+	}
 	m := Detect(context.Background())
-	preset := Answers{Lang: l, Root: *dir, Engines: splitList(*engines), Comfy: splitList(*comfy),
+	preset := Answers{Lang: l, Action: "install", Root: *dir, Engines: splitList(*engines), Comfy: splitList(*comfy),
 		SearXNG: *searxng == "y", TLS: *tls, Domain: *domain}
 	if *engines == "" {
 		for _, e := range EnginesFor(m.Vendors()) {
@@ -89,7 +103,11 @@ func MainSetup(args []string) int {
 	if err != nil {
 		return exitFor(err, l)
 	}
-	if err := os.WriteFile(*out, []byte(a.Shell()), 0o600); err != nil {
+	return writeAnswers(*out, a)
+}
+
+func writeAnswers(path string, a Answers) int {
+	if err := os.WriteFile(path, []byte(a.Shell()), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ExitFailed
 	}

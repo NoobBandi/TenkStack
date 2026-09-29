@@ -77,6 +77,14 @@ NO_TUI=false
 # addresses. Empty unless chosen on the setup screen or given as flags.
 ENGINES=""
 COMFY_CARDS=""
+# --uninstall takes the install apart again; --purge also deletes the
+# install directory with the models in it, --keep-images leaves the
+# container images.
+UNINSTALL=false
+# "install" or "uninstall", when the setup screens were asked.
+ACTION=""
+PURGE=false
+KEEP_IMAGES=false
 
 # How the console is reached from outside the machine. Caddy is the only
 # thing that listens beyond loopback, and this decides what it does with TLS:
@@ -240,6 +248,10 @@ TenkStack installer
   --engines LIST      inference engines to install once the console is up: llamacpp,vllm,sglang
   --comfyui LIST      PCI addresses of the cards to run ComfyUI on, e.g. 0000:0c:00.0
   --no-tui            ask plain questions instead of the setup screens
+  --uninstall         remove the services, containers, images and system changes; keep the
+                      install directory (models, settings, chats), so a reinstall picks it up
+  --purge             with --uninstall: delete the install directory too, models included
+  --keep-images       with --uninstall: leave the container images
   --yes               take every default, ask nothing
   --dry-run           print what would be done, do none of it
   --help
@@ -264,6 +276,10 @@ TenkStack 安裝程式
   --engines LIST      主控台啟動後要裝的推論引擎：llamacpp,vllm,sglang
   --comfyui LIST      要跑 ComfyUI 的顯示卡 PCI 位址，例如 0000:0c:00.0
   --no-tui            用一般問答，不用安裝畫面
+  --uninstall         移除服務、容器、映像與系統設定；保留安裝目錄（模型、設定、對話），
+                      之後重裝會沿用
+  --purge             搭配 --uninstall：連安裝目錄一起刪掉，包含模型
+  --keep-images       搭配 --uninstall：保留容器映像
   --yes               全部用預設值，完全不問
   --dry-run           印出會做什麼，不執行任何動作
   --help
@@ -283,6 +299,9 @@ while [[ $# -gt 0 ]]; do
     --engines)     ENGINES=${2?$(L "--engines 需要引擎清單" "--engines needs a list of engines")}; shift 2 ;;
     --comfyui)     COMFY_CARDS=${2?$(L "--comfyui 需要顯示卡位址" "--comfyui needs card addresses")}; shift 2 ;;
     --no-tui)      NO_TUI=true; shift ;;
+    --uninstall)   UNINSTALL=true; shift ;;
+    --purge)       PURGE=true; shift ;;
+    --keep-images) KEEP_IMAGES=true; shift ;;
     --tls)
       case "${2:?$(L "--tls 需要 internal 或 CERT,KEY" "--tls needs internal or CERT,KEY")}" in
         internal) TLS_MODE=internal ;;
@@ -1149,6 +1168,8 @@ provision() {
 main() {
   local screens=false
   if run_setup_ui; then screens=true; else ask_language; fi
+  # The screens offer to remove an install they found.
+  if [[ $ACTION == uninstall ]]; then uninstall_main; return; fi
 
   step "$(L "① 盤點" "① Survey")"
   survey_os
@@ -1212,4 +1233,155 @@ main() {
   finish
 }
 
-main "$@"
+# --------------------------------------------------------------------------
+# Uninstall
+#
+# Undoes what the install did, found on the machine rather than assumed: the
+# install directory is read from the console's unit, containers are the ones
+# with a mount under it, and a unit is only touched when it names it -- so a
+# machine that also runs a Caddy or a ComfyUI of its own keeps them. The
+# install directory itself is data (models, ComfyUI files, settings, chat
+# history) and stays unless --purge; packages, groups and linger stay too,
+# since other things may use them.
+# --------------------------------------------------------------------------
+
+installed_root() {
+  local unit="$HOME/.config/systemd/user/tenkstack-console.service" line
+  if [[ -n $ROOT ]]; then echo "$ROOT"; return; fi
+  if [[ -r $unit ]]; then
+    line=$(grep -m1 '^ExecStart=' "$unit" || true)
+    line=${line#ExecStart=}; line=${line%% *}
+    if [[ $line == */console/tenkstack ]]; then echo "${line%/console/tenkstack}"; return; fi
+  fi
+  echo "$ROOT_DEFAULT"
+}
+
+# Units of this install: those whose file names its directory.
+own_units() {
+  local dir="$HOME/.config/systemd/user" u
+  for u in tenkstack-console tenkstack-llama-swap tenkstack-searxng caddy; do
+    if [[ -f $dir/$u.service ]] && grep -qF "$ROOT/" "$dir/$u.service"; then echo "$u.service"; fi
+  done
+  return 0
+}
+
+# Containers with a bind mount under the install directory: the engines,
+# ComfyUI and SearXNG this install started, and nothing that only shares a name.
+own_containers() {
+  command -v docker >/dev/null || return 0
+  local id
+  for id in $(docker ps -aq 2>/dev/null || true); do
+    docker inspect -f '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' "$id" 2>/dev/null || true
+  done | awk -v root="$ROOT/" '{ for (i = 2; i <= NF; i++) if (index($i, root) == 1) { sub(/^\//, "", $1); print $1; break } }'
+}
+
+# Images those containers run, and the ones the launchers and the SearXNG unit
+# name, which may have no container at the moment.
+own_images() {
+  local c
+  {
+    for c in "$@"; do docker inspect -f '{{.Config.Image}}' "$c" 2>/dev/null || true; done
+    grep -ohE 'IMAGE="\$\{[A-Z_]+_IMAGE:-[^}"]+\}"' "$ROOT"/llama-swap/*.sh 2>/dev/null | sed -E 's/.*:-([^}]+)\}"/\1/' || true
+    if [[ -f $HOME/.config/systemd/user/tenkstack-searxng.service ]] && grep -qF "$ROOT/" "$HOME/.config/systemd/user/tenkstack-searxng.service"; then
+      echo docker.io/searxng/searxng:latest
+    fi
+  } | sort -u
+  return 0
+}
+
+uninstall_main() {
+  ROOT=$(installed_root)
+  ROOT=${ROOT%/}
+  local units containers images dropin=/etc/systemd/system/user@.service.d/tenkstack-xpu-smi-log.conf
+  mapfile -t units < <(own_units)
+  mapfile -t containers < <(own_containers)
+  images=()
+  if ! $KEEP_IMAGES && command -v docker >/dev/null; then mapfile -t images < <(own_images "${containers[@]}"); fi
+  # The xpu-smi filter is a system file every full install writes along with
+  # the console's unit; without that unit it is not this install's to remove.
+  if [[ " ${units[*]} " != *" tenkstack-console.service "* ]]; then dropin=""; fi
+  local trusted=false
+  if [[ " ${units[*]} " == *" caddy.service "* ]] && grep -qs 'tls internal' "$ROOT/caddy/Caddyfile"; then trusted=true; fi
+
+  if [[ ${#units[@]} -eq 0 && ${#containers[@]} -eq 0 && ! -d $ROOT ]]; then
+    say "  $(L "這台機器上找不到 TenkStack（$ROOT）。沒有東西要移除。" "No TenkStack found on this machine ($ROOT). Nothing to remove.")"
+    exit 0
+  fi
+
+  step "$(L "移除計畫" "Uninstall plan")"
+  say "  $(L "安裝目錄      " "Directory     ")$ROOT"
+  say "  $(L "服務          " "Services      ")${units[*]:-$(L "（無）" "(none)")}"
+  say "  $(L "容器          " "Containers    ")${containers[*]:-$(L "（無）" "(none)")}"
+  if $KEEP_IMAGES; then
+    say "  $(L "映像          " "Images        ")$(L "保留（--keep-images）" "kept (--keep-images)")"
+  else
+    say "  $(L "映像          " "Images        ")${images[*]:-$(L "（無）" "(none)")}"
+  fi
+  if [[ -n $dropin && -f $dropin ]]; then say "  $(L "系統設定      " "System        ")$dropin$(L "（sudo）" " (sudo)")"; fi
+  if $trusted; then say "  $(L "憑證信任      " "Trust         ")$(L "移除 Caddy 自簽 CA 的系統信任（sudo）" "untrust Caddy's own CA (sudo)")"; fi
+  if $PURGE; then
+    warn "$(L "--purge：整個 $ROOT 會被刪除，包含模型、ComfyUI 的檔案、設定與對話紀錄。" "--purge: all of $ROOT is deleted, models, ComfyUI files, settings and chats included.")"
+  else
+    say "  $(L "保留          " "Kept          ")$ROOT$(L "（模型、ComfyUI 檔案、設定、對話紀錄；只刪程式檔）" " (models, ComfyUI files, settings, chats; only the programs go)")"
+  fi
+  say "  ${C_DIM}$(L "系統套件、群組、linger 與 ~/.local/bin/caddy 都保留，其他程式可能也在用。" "Packages, groups, linger and ~/.local/bin/caddy stay; other things may use them.")${C_OFF}"
+  if $DRY_RUN; then say ""; skip "$(L "--dry-run：以下只會印出，不會執行" "--dry-run: what follows is printed, not done")"; fi
+
+  if ! $ASSUME_YES && [[ -t 0 ]]; then
+    local go=""
+    read -r -p "  $(L "移除？[y/N] " "Remove? [y/N] ")" go || true
+    if [[ ! ${go:-n} =~ ^[Yy] ]]; then say "  $(L "取消了，什麼都沒有動。" "Cancelled. Nothing was changed.")"; exit 0; fi
+    if $PURGE; then
+      local typed=""
+      read -r -p "  $(L "確定要刪掉模型？輸入安裝目錄的完整路徑：" "Delete the models too? Type the install directory's full path: ")" typed || true
+      if [[ $typed != "$ROOT" ]]; then say "  $(L "路徑不符，取消了，什麼都沒有動。" "That is not the path. Cancelled; nothing was changed.")"; exit 0; fi
+    fi
+  fi
+
+  step "$(L "移除" "Removing")"
+  if [[ ${#units[@]} -gt 0 ]]; then
+    run systemctl --user disable --now "${units[@]}" || true
+    local u
+    for u in "${units[@]}"; do run rm -f "$HOME/.config/systemd/user/$u"; done
+    run systemctl --user daemon-reload
+    ok "$(L "停止並移除服務" "stopped and removed the services")"
+  fi
+  if [[ ${#containers[@]} -gt 0 ]]; then
+    if $DRY_RUN; then run docker rm -f "${containers[@]}"; else docker rm -f "${containers[@]}" >/dev/null; fi
+    ok "$(L "移除容器" "removed the containers")"
+  fi
+  local img others
+  for img in "${images[@]}"; do
+    others=$(docker ps -aq --filter "ancestor=$img" 2>/dev/null || true)
+    if [[ -n $others ]] && ! $DRY_RUN; then
+      skip "$(L "$img 還有別的容器在用，保留" "$img is still used by another container; kept")"
+      continue
+    fi
+    if $DRY_RUN; then run docker rmi "$img"; continue; fi
+    if docker rmi "$img" >/dev/null 2>&1; then ok "$(L "移除映像" "removed image") $img"
+    else skip "$(L "$img 移除不了，保留" "$img could not be removed; kept")"; fi
+  done
+  if $trusted && [[ -x $HOME/.local/bin/caddy ]]; then
+    as_root "$HOME/.local/bin/caddy" untrust || warn "$(L "caddy untrust 失敗；可以之後自己跑一次" "caddy untrust failed; it can be run by hand later")"
+    ok "caddy untrust"
+  fi
+  if [[ -n $dropin && -f $dropin ]]; then
+    as_root rm -f "$dropin"
+    as_root systemctl daemon-reload
+    ok "$(L "移除 xpu-smi 的 journal 過濾" "removed the xpu-smi journal filter")"
+  fi
+  if $PURGE; then
+    run rm -rf "$ROOT"
+    ok "$(L "刪除 $ROOT" "deleted $ROOT")"
+  elif [[ -d $ROOT ]]; then
+    run rm -rf "$ROOT/console" "$ROOT/llama-swap/llama-swap" "$ROOT/go"
+    ok "$(L "刪除程式檔；其餘保留在 $ROOT" "deleted the programs; the rest stays in $ROOT")"
+  fi
+
+  step "$(L "完成" "Done")"
+  if ! $PURGE && [[ -d $ROOT ]]; then
+    say "  $(L "$ROOT 還在。重跑安裝會沿用裡面的模型與設定；不要了就刪掉它，或加 --purge 重跑。" "$ROOT is still there. Installing again picks up its models and settings; delete it, or run again with --purge, if they are not wanted.")"
+  fi
+}
+
+if $UNINSTALL; then ask_language; uninstall_main; else main "$@"; fi

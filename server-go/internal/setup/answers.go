@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -11,7 +12,9 @@ import (
 // for its flags: whatever the screen asks, a flag can say too.
 type Answers struct {
 	Lang Lang
-	Root string
+	// Action is "install" or "uninstall".
+	Action string
+	Root   string
 	// Engines are registry keys: llamacpp, vllm.
 	Engines []string
 	// Comfy are PCI addresses of the cards to run ComfyUI on.
@@ -20,6 +23,10 @@ type Answers struct {
 	// TLS is "" (plain HTTP), "internal" or "domain".
 	TLS    string
 	Domain string
+	// Uninstall only: delete the install directory too (models included),
+	// and leave the container images.
+	Purge      bool
+	KeepImages bool
 }
 
 // quote makes a value safe inside a shell assignment.
@@ -33,14 +40,22 @@ func (a Answers) Shell() string {
 	if a.SearXNG {
 		yn = "y"
 	}
+	action := a.Action
+	if action == "" {
+		action = "install"
+	}
 	lines := []string{
 		"UI_LANG=" + quote(string(a.Lang)),
+		"ACTION=" + quote(action),
 		"ROOT=" + quote(a.Root),
 		"ENGINES=" + quote(strings.Join(a.Engines, ",")),
 		"COMFY_CARDS=" + quote(strings.Join(a.Comfy, ",")),
 		"WANT_SEARXNG=" + quote(yn),
 		"TLS_MODE=" + quote(a.TLS),
 		"DOMAIN=" + quote(a.Domain),
+		// install.sh runs these as commands, so they are true or false.
+		"PURGE=" + quote(fmt.Sprint(a.Purge)),
+		"KEEP_IMAGES=" + quote(fmt.Sprint(a.KeepImages)),
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

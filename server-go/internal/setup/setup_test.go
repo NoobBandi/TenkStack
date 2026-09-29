@@ -88,11 +88,11 @@ func TestShellRoundTrip(t *testing.T) {
 		Comfy: []string{"0000:0c:00.0"}, SearXNG: true, TLS: "domain", Domain: "ai.example.com"}
 	f := t.TempDir() + "/answers"
 	os.WriteFile(f, []byte(a.Shell()), 0o600)
-	out, err := exec.Command("bash", "-c", `set -u; . "$1"; printf '%s|%s|%s|%s|%s|%s|%s' "$UI_LANG" "$ROOT" "$ENGINES" "$COMFY_CARDS" "$WANT_SEARXNG" "$TLS_MODE" "$DOMAIN"`, "_", f).Output()
+	out, err := exec.Command("bash", "-c", `set -u; . "$1"; printf '%s|%s|%s|%s|%s|%s|%s|%s|' "$UI_LANG" "$ACTION" "$ROOT" "$ENGINES" "$COMFY_CARDS" "$WANT_SEARXNG" "$TLS_MODE" "$DOMAIN"; if $PURGE; then echo purge; else echo keep; fi`, "_", f).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "zh-TW|/home/o'brien/tenk stack|llamacpp,vllm|0000:0c:00.0|y|domain|ai.example.com"
+	want := "zh-TW|install|/home/o'brien/tenk stack|llamacpp,vllm|0000:0c:00.0|y|domain|ai.example.com|keep\n"
 	if string(out) != want {
 		t.Errorf("got  %s\nwant %s", out, want)
 	}
@@ -242,5 +242,16 @@ func TestProvisionLocked(t *testing.T) {
 	code, stop := p.stop(err)
 	if !stop || code != ExitOK || !strings.Contains(out.String(), "Sign in") {
 		t.Errorf("a console with accounts is reported, not failed: %d %v\n%s", code, stop, out)
+	}
+}
+
+// PURGE and KEEP_IMAGES are run as commands by install.sh.
+func TestShellUninstallFlags(t *testing.T) {
+	a := Answers{Lang: English, Action: "uninstall", Root: "/srv/tenk", Purge: true, KeepImages: false}
+	f := t.TempDir() + "/answers"
+	os.WriteFile(f, []byte(a.Shell()), 0o600)
+	out, err := exec.Command("bash", "-c", `set -eu; . "$1"; r="$ACTION"; if $PURGE; then r="$r purge"; fi; if $KEEP_IMAGES; then r="$r keep-images"; fi; echo "$r"`, "_", f).Output()
+	if err != nil || strings.TrimSpace(string(out)) != "uninstall purge" {
+		t.Fatalf("%q %v", out, err)
 	}
 }
