@@ -279,7 +279,7 @@ They are template literals, so an escape written the ordinary way arrives
 changed: `\b` became a backspace inside a regex, and a joined `\n` became a real
 newline that left an unterminated string. Neither is visible in the source,
 because the source is valid JavaScript either way — the mistake exists only in
-the string the browser is handed, which is where `npm run check:frames` looks.
+the string the browser is handed, which is where `pnpm check:frames` looks.
 
 **Numbers come from the source that owns them.** Throughput is llama-server's
 own `timings`, not tokens divided by browser wall-clock, which would include

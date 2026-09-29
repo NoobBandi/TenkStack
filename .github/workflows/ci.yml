@@ -37,20 +37,25 @@ jobs:
         with:
           # The frontend's build stamp is `git describe`.
           fetch-depth: 0
+      # pnpm first, so setup-node can cache its store. The version is the
+      # one web/package.json pins.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       # build runs check-frames and tsc -b before vite.
       - name: Frontend
-        run: cd web && npm ci && npm run build
+        run: cd web && pnpm install --frozen-lockfile && pnpm build
       - name: Lint
-        run: cd web && npx oxlint
+        run: cd web && pnpm lint
       - name: Build
         run: scripts/build.sh
       - name: Smoke

@@ -644,9 +644,7 @@ fetch_console() {
   fetch_code
   local go=go
   command -v go >/dev/null || go="$ROOT/go/bin/go"
-  run bash -c "cd '$CODE/web' && npm ci --silent && npm run build --silent"
-  ok "$(L "前端 build" "built the frontend")"
-  run bash -c "cd '$CODE' && PATH='$(dirname "$go"):$PATH' scripts/build.sh"
+  run bash -c "cd '$CODE' && PATH='$(dirname "$go"):$PATH' scripts/build.sh --web"
   run cp "$CODE/tenkstack" "$bin"
   ok "$(L "主控台 build 完成" "built the console")"
 }

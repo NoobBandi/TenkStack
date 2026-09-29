@@ -10,10 +10,11 @@ and the few conventions the code actually follows.
 The installer is for users. A checkout runs without it:
 
 ```bash
-# Frontend — Node 24+
+# Frontend — Node 24+ and pnpm (the version web/package.json pins;
+# `npx pnpm@<version>` works where pnpm is not installed)
 cd web
-npm install
-npm run build      # or npm run dev for a dev server on :5173, proxying /api to :8070
+pnpm install
+pnpm build         # or pnpm dev for a dev server on :5173, proxying /api to :8070
 
 # Backend — Go 1.27+, from the repository root
 cd ..
@@ -107,8 +108,8 @@ measurement. Do not add comments that restate the line below them.
 go vet ./... && go test ./...
 
 cd web
-npm run build      # check-frames, then tsc -b, then vite build
-npm run lint       # oxlint
+pnpm build         # check-frames, then tsc -b, then vite build
+pnpm lint          # oxlint
 
 cd ..
 shellcheck -S warning install.sh scripts/*.sh
@@ -124,7 +125,7 @@ frontend and carries the setup protocol `install.sh` looks for.
 into sandboxed frames are template literals, and an escape written the
 ordinary way (`\b`, a joined `\n`) arrives in the browser changed. The source
 is valid JavaScript either way, so only the assembled string can be checked,
-and `npm run build` refuses to proceed until it passes.
+and `pnpm build` refuses to proceed until it passes.
 
 The Go tests cover the pure parts: the config round-trip, log classification,
 the launcher script goldens, the search ranking. Anything that talks to a

@@ -2,7 +2,8 @@
 # Build the console as one static binary with the frontend inside it.
 #
 #   scripts/build.sh              embed the web/dist that is there, build
-#   scripts/build.sh --web        build the frontend first (needs node)
+#   scripts/build.sh --web        build the frontend first (needs node; pnpm
+#                                 is fetched through npx when not installed)
 #   GOARCH=arm64 scripts/build.sh cross-compile
 #
 # The result is ./tenkstack at the repository root. The version comes from
@@ -12,7 +13,13 @@ REPO=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 cd "$REPO"
 
 if [[ ${1:-} == --web ]]; then
-  (cd "$REPO/web" && npm ci --silent && npm run build --silent)
+  # The pnpm package.json pins, through npx when pnpm is not installed:
+  # npm comes with every Node, pnpm does not.
+  pnpm=(pnpm)
+  if ! command -v pnpm >/dev/null; then
+    pnpm=(npx --yes "$(node -p 'require(process.argv[1]).packageManager' "$REPO/web/package.json")")
+  fi
+  (cd "$REPO/web" && "${pnpm[@]}" install --frozen-lockfile --silent && "${pnpm[@]}" --silent build)
 fi
 if [[ ! -f $REPO/web/dist/index.html ]]; then
   echo "web/dist is not built; run with --web or build the frontend first" >&2

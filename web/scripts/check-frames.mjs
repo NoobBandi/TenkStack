@@ -14,7 +14,7 @@
  * this evaluates each document the way the browser receives it and checks
  * that, which is the only place the question can be answered.
  *
- * Run by `npm run check:frames`, and by `npm run build` ahead of the build.
+ * Run by `pnpm check:frames`, and by `pnpm build` ahead of the build.
  */
 
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';

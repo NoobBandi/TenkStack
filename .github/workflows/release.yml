@@ -36,17 +36,22 @@ jobs:
           if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
             echo "VERSION says $version but the tag is $GITHUB_REF_NAME"; exit 1
           fi
+      # pnpm first, so setup-node can cache its store. The version is the
+      # one web/package.json pins.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Frontend
-        run: cd web && npm ci && npm run build
+        run: cd web && pnpm install --frozen-lockfile && pnpm build
       - name: Binaries
         run: |
           for arch in amd64 arm64; do
