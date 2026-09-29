@@ -29,6 +29,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # setup-go downloads and unpacks Go in two seconds, then spends about
+      # fourteen copying it into the runner's tool cache, in every job.
+      # Restoring that copy is quicker, and setup-go then finds Go in place.
+      # The month in the key lets a new patch release in.
+      - name: Go toolchain key
+        run: |
+          echo "GO_LINE=$(awk '/^go /{print $2; exit}' go.mod)" >> "$GITHUB_ENV"
+          echo "MONTH=$(date -u +%Y-%m)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: /opt/hostedtoolcache/go/${{ env.GO_LINE }}*
+          key: go-toolchain-${{ runner.os }}-${{ env.GO_LINE }}-${{ env.MONTH }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -73,6 +85,18 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
+      # setup-go downloads and unpacks Go in two seconds, then spends about
+      # fourteen copying it into the runner's tool cache, in every job.
+      # Restoring that copy is quicker, and setup-go then finds Go in place.
+      # The month in the key lets a new patch release in.
+      - name: Go toolchain key
+        run: |
+          echo "GO_LINE=$(awk '/^go /{print $2; exit}' go.mod)" >> "$GITHUB_ENV"
+          echo "MONTH=$(date -u +%Y-%m)" >> "$GITHUB_ENV"
+      - uses: actions/cache@v6
+        with:
+          path: /opt/hostedtoolcache/go/${{ env.GO_LINE }}*
+          key: go-toolchain-${{ runner.os }}-${{ env.GO_LINE }}-${{ env.MONTH }}
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
