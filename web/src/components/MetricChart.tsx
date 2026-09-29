@@ -73,7 +73,8 @@ export default function MetricChart({
           <Text type="secondary" style={{ fontSize: 11 }}>尚無資料</Text>
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={height}>
+        // Redrawn once a resize settles: folding the sidebar resizes the page every frame.
+        <ResponsiveContainer width="100%" height={height} debounce={250}>
           <AreaChart data={points} margin={{ top: PLOT_TOP, right: 4, left: 0, bottom: 0 }}>
             <defs>
               <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">

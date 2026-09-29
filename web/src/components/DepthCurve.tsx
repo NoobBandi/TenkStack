@@ -149,7 +149,8 @@ export default function DepthCurve({
         <div style={{ marginInlineStart: 'auto' }}>{picker}</div>
       </div>
 
-      <ResponsiveContainer width="100%" height={CHART_H}>
+      {/* Redrawn once a resize settles: folding the sidebar resizes the page every frame. */}
+      <ResponsiveContainer width="100%" height={CHART_H} debounce={250}>
         <ComposedChart margin={{ top: 4, right: 10, bottom: 0, left: -8 }}>
           <CartesianGrid stroke={LINE.faint} vertical={false} />
           <XAxis

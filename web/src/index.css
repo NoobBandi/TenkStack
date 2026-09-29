@@ -252,3 +252,15 @@ body {
   outline: 1px solid rgba(255, 255, 255, 0.45);
   outline-offset: -1px;
 }
+
+/* The account at the sidebar's foot: a row that shows it can be pressed. */
+.sider-account {
+  background: transparent;
+  transition: background 0.15s;
+}
+.sider-account:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.sider-account:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.45);
+}

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  App as AntApp, Button, ConfigProvider, Drawer, Dropdown, Layout, Space, Spin, Typography,
+  App as AntApp, Button, ConfigProvider, Drawer, Layout, Space, Spin, Tooltip, Typography,
 } from 'antd';
-import { LogoutOutlined, MenuOutlined, UserOutlined } from '@ant-design/icons';
+import { MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
 import zhTW from 'antd/locale/zh_TW';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import Sidebar, { NAV_GROUPS, SIDEBAR_COLLAPSED, SIDEBAR_WIDTH, useNarrow } from './components/Sidebar';
+import Sidebar, {
+  NAV_GROUPS, SIDEBAR_COLLAPSED, SIDEBAR_WIDTH, SIDER_MOTION, useNarrow,
+} from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
 import Models from './pages/Models';
@@ -29,7 +31,7 @@ import { setMaxSteps } from './sandboxTool';
 import { darkTheme, LINE, MONO } from './theme';
 
 const { Header, Content } = Layout;
-const { Title, Text } = Typography;
+const { Title } = Typography;
 
 const ROUTES = [
   { path: '/', element: <Dashboard /> },
@@ -87,28 +89,40 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
             >
               <Sidebar collapsed={false} onCollapse={setCollapsed} drawer
                        onNavigate={() => setDrawerOpen(false)}
-                       gpus={gpus} models={models} system={system} />
+                       gpus={gpus} models={models} system={system}
+                       auth={auth} onSignOut={onSignOut} />
             </Drawer>
           ) : (
             <Sidebar collapsed={collapsed} onCollapse={setCollapsed}
-                     gpus={gpus} models={models} system={system} />
+                     gpus={gpus} models={models} system={system}
+                     auth={auth} onSignOut={onSignOut} />
           )}
 
           {/* The sider is fixed, so the content needs the space reserved. */}
           <Layout style={{
             marginInlineStart: narrow ? 0 : collapsed ? SIDEBAR_COLLAPSED : SIDEBAR_WIDTH,
-            transition: 'margin-inline-start 200ms',
+            transition: `margin-inline-start ${SIDER_MOTION}`,
             minWidth: 0,
           }}>
             <Header style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-              paddingInline: narrow ? 12 : 24, position: 'sticky', top: 0, zIndex: 10,
+              // Tighter on the left, so the fold button sits by the sidebar's edge.
+              paddingInline: narrow ? 12 : '12px 24px', position: 'sticky', top: 0, zIndex: 10,
               borderBottom: `1px solid ${LINE.faint}`,
             }}>
               <Space size={8} style={{ minWidth: 0 }}>
-                {narrow && (
+                {/* On a narrow screen the sidebar is a drawer this opens; on a
+                    wide one, this folds it to icons and back. */}
+                {narrow ? (
                   <Button type="text" icon={<MenuOutlined />} aria-label="選單"
                           onClick={() => setDrawerOpen(true)} />
+                ) : (
+                  <Tooltip title={collapsed ? '展開側邊欄' : '收起側邊欄'}>
+                    <Button type="text" aria-label={collapsed ? '展開側邊欄' : '收起側邊欄'}
+                            icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                            onClick={() => setCollapsed(!collapsed)}
+                            style={{ color: 'rgba(255,255,255,0.55)' }} />
+                  </Tooltip>
                 )}
                 <Title level={5} style={{
                   margin: 0, fontFamily: MONO, letterSpacing: 1, fontWeight: 400,
@@ -116,20 +130,6 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
                 }}>
                   {TITLES[location.pathname] ?? 'TenkStack'}
                 </Title>
-              </Space>
-              <Space size={16}>
-                {auth.identity ? (
-                  <Dropdown
-                    menu={{
-                      items: [{ key: 'logout', icon: <LogoutOutlined />, label: '登出' }],
-                      onClick: onSignOut,
-                    }}
-                  >
-                    <Button type="text" icon={<UserOutlined />}>{auth.identity.username}</Button>
-                  </Dropdown>
-                ) : (
-                  <Text type="warning">未啟用驗證</Text>
-                )}
               </Space>
             </Header>
 

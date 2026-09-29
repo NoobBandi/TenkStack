@@ -244,7 +244,8 @@ export default function RequestCurve({ traces }: { traces: RequestTrace[] }) {
         </Text>
       </div>
 
-      <ResponsiveContainer width="100%" height={CHART_H}>
+      {/* Redrawn once a resize settles: folding the sidebar resizes the page every frame. */}
+      <ResponsiveContainer width="100%" height={CHART_H} debounce={250}>
         <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -8 }}>
           <CartesianGrid stroke={LINE.faint} vertical={false} />
           <XAxis

@@ -334,7 +334,8 @@ export default function GpuChart({ latest }: Props) {
         </div>
       ) : (
         <div ref={plotRef}>
-          <ResponsiveContainer width="100%" height={CHART_H}>
+          {/* Redrawn once a resize settles: folding the sidebar resizes the page every frame. */}
+          <ResponsiveContainer width="100%" height={CHART_H} debounce={250}>
             <AreaChart
               data={rows}
               margin={{ top: PLOT_TOP, right: 4, left: 0, bottom: 0 }}
