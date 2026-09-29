@@ -43,20 +43,20 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: actions/setup-go@v5
         with:
-          go-version-file: server-go/go.mod
-          cache-dependency-path: server-go/go.sum
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Frontend
         run: cd web && npm ci && npm run build
       - name: Binaries
         run: |
           for arch in amd64 arm64; do
-            GOARCH=$arch server-go/build.sh
-            mv server-go/tenkstack "tenkstack-linux-$arch"
+            GOARCH=$arch scripts/build.sh
+            mv tenkstack "tenkstack-linux-$arch"
           done
           sha256sum tenkstack-linux-* > SHA256SUMS
       # The runner is amd64; the arm64 build comes from the same source.
       - name: Smoke
-        run: server-go/smoke.sh tenkstack-linux-amd64 "${GITHUB_REF_NAME#v}"
+        run: scripts/smoke.sh tenkstack-linux-amd64 "${GITHUB_REF_NAME#v}"
       # The release text is the tag's own message, which the about page
       # shows under 說明. checkout can leave the tag lightweight, so it is
       # fetched again as the annotated object before it is read.

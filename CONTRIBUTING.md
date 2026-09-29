@@ -15,12 +15,12 @@ cd web
 npm install
 npm run build      # or npm run dev for a dev server on :5173, proxying /api to :8070
 
-# Backend — Go 1.25+
-cd ../server-go
-./build.sh                       # embeds web/dist, writes server-go/tenkstack
+# Backend — Go 1.27+, from the repository root
+cd ..
+scripts/build.sh                 # embeds web/dist, writes ./tenkstack
 ./tenkstack -listen 127.0.0.1:8070
 # or, without embedding, straight from the tree:
-CONSOLE_WEB_DIST=../web/dist go run ./cmd/tenkstack
+CONSOLE_WEB_DIST=web/dist go run ./cmd/tenkstack
 ```
 
 `--help` lists the flags. Every path the backend reads is an environment
@@ -37,21 +37,21 @@ them and reports what it cannot find.
 ## Layout
 
 ```
-server-go/
-  cmd/tenkstack/       wiring only: open the store, build the services, mount
-  internal/api/        every JSON body the frontend reads, and nothing else
-  internal/httpapi/    handlers: decode, call a domain package, encode;
+cmd/tenkstack/         wiring only: open the store, build the services, mount
+internal/api/          every JSON body the frontend reads, and nothing else
+internal/httpapi/      handlers: decode, call a domain package, encode;
                        comfy.go also holds the VRAM arbitration (makeRoom)
-  internal/auth users settings chats blobs   the console's own state
-  internal/gpu/        the Provider interface, one subpackage per vendor
-  internal/gpuhistory containerhistory journal   the pollers behind /api/stream
-  internal/llamaswap/  config.yaml round-trip, model entries, the client
-  internal/backends vendors containers comfy channels   the runtime layer -- see AGENTS.md
-  internal/catalog gguf files search visioncache images  the rest
-  internal/store paths ports   the leaves everything may import
-  internal/webdist/    the built frontend, embedded by build.sh
-  internal/boundary/   the import-direction test
-  build.sh             one static binary, version from VERSION at the root
+internal/auth users settings chats blobs   the console's own state
+internal/gpu/          the Provider interface, one subpackage per vendor
+internal/gpuhistory containerhistory journal   the pollers behind /api/stream
+internal/llamaswap/    config.yaml round-trip, model entries, the client
+internal/backends vendors containers comfy channels   the runtime layer -- see AGENTS.md
+internal/catalog gguf files search visioncache images  the rest
+internal/store paths ports   the leaves everything may import
+internal/webdist/      the built frontend, embedded by scripts/build.sh
+internal/boundary/     the import-direction test
+scripts/build.sh       one static binary, version from VERSION
+scripts/smoke.sh       starts a built binary and checks it, as CI does
 web/src/
   pages/           one file per page in the sidebar
   components/      shared pieces; ClientSnippets.tsx writes the client configs
@@ -104,16 +104,15 @@ measurement. Do not add comments that restate the line below them.
 ## Checks
 
 ```bash
-cd server-go
 go vet ./... && go test ./...
 
-cd ../web
+cd web
 npm run build      # check-frames, then tsc -b, then vite build
 npm run lint       # oxlint
 
 cd ..
-shellcheck -S warning install.sh server-go/build.sh server-go/smoke.sh
-server-go/build.sh && server-go/smoke.sh server-go/tenkstack "$(cat VERSION)"
+shellcheck -S warning install.sh scripts/*.sh
+scripts/build.sh && scripts/smoke.sh ./tenkstack "$(cat VERSION)"
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these, plus `gofmt`, on every
@@ -151,8 +150,8 @@ out as usual.
 
 ## Adding a GPU vendor or a runtime
 
-**A vendor is one record** in `server-go/internal/vendors/vendors.go` plus a
-telemetry provider under `server-go/internal/gpu/`, and nothing else learns
+**A vendor is one record** in `internal/vendors/vendors.go` plus a
+telemetry provider under `internal/gpu/`, and nothing else learns
 its name. [AGENTS.md](AGENTS.md) is the complete guide: what to find out at a
 shell first, the two records to implement, how to prove it works, and what a
 pull request for one must report — tokens/sec on a named model at a stated

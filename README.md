@@ -17,7 +17,7 @@ and anything else can point at.
 
 Each card is told what it is for — models, images, both, or nothing — and every
 surface reports per card rather than per machine. Intel, NVIDIA and AMD are
-three records in `server-go/internal/vendors/`; a machine with one vendor or three needs
+three records in `internal/vendors/`; a machine with one vendor or three needs
 nothing edited.
 
 It began on an **Intel Arc Pro B70** (Battlemage, 32 GB, the `xe` driver), where
@@ -311,12 +311,12 @@ that is the thing the user actually waits for.
   offered to the model only when the instance answers, so an absent one removes
   the capability rather than breaking the chat.
 - Nothing else: the console is one static binary with the frontend inside it.
-  Go 1.25+ and Node 24+ only to build it yourself.
+  Go 1.27+ and Node 24+ only to build it yourself.
 
 ## Where things live
 
 Every path the backend touches is an environment variable with a default, all
-gathered in `server-go/internal/paths/paths.go`. The defaults describe one arrangement —
+gathered in `internal/paths/paths.go`. The defaults describe one arrangement —
 llama-swap, the models, llama.cpp, ComfyUI and Caddy side by side under one
 root — and expand against whoever is running, so an unmodified checkout works
 for any user with that layout.

@@ -2,8 +2,8 @@
 
 This console runs on whatever GPUs are in the machine, and "whatever" is meant
 literally: Intel, NVIDIA and AMD are three records in
-`server-go/internal/vendors/vendors.go` with a telemetry provider each under
-`server-go/internal/gpu/`, and a fourth card is a fourth record plus a fourth
+`internal/vendors/vendors.go` with a telemetry provider each under
+`internal/gpu/`, and a fourth card is a fourth record plus a fourth
 provider package. Nothing else in the codebase learns its name.
 
 This document is how to write those — what to find out first, what to
@@ -95,7 +95,7 @@ alphabetical, because the order decides the console's global device numbering
 — and check it answers:
 
 ```bash
-cd server-go && go run ./cmd/tenkstack -listen 127.0.0.1:8071 &
+go run ./cmd/tenkstack -listen 127.0.0.1:8071 &
 curl -s http://127.0.0.1:8071/api/gpu/devices | jq
 ```
 
@@ -117,11 +117,11 @@ var musa = Vendor{
 
 The llama.cpp image that drives the card is not on this record. It is a
 build under `builds:` in
-`server-go/internal/providers/engines/llamacpp/engine.yaml`, keyed by the
+`internal/providers/engines/llamacpp/engine.yaml`, keyed by the
 vendor's `Key`, and any other inference engine that supports the card is a
 build in its own `engine.yaml` there. The vendor says how a card is reached;
 an engine says what runs on it. Adding a new engine rather than a card is
-`server-go/internal/providers/engines/README.md`.
+`internal/providers/engines/README.md`.
 
 Notes on the parts that are easy to get subtly wrong:
 
@@ -223,10 +223,10 @@ first, because everything else follows from it.
 
 | Question | File |
 |---|---|
-| What a provider must answer | `server-go/internal/gpu/gpu.go` |
-| A vendor with unusual mechanisms | `nvidia` in `server-go/internal/vendors/vendors.go`, `server-go/internal/gpu/nvidia/` |
-| A vendor with shared mechanisms | `intel` and `ClaimsByRender` in the same file, `server-go/internal/gpu/intel/` |
+| What a provider must answer | `internal/gpu/gpu.go` |
+| A vendor with unusual mechanisms | `nvidia` in `internal/vendors/vendors.go`, `internal/gpu/nvidia/` |
+| A vendor with shared mechanisms | `intel` and `ClaimsByRender` in the same file, `internal/gpu/intel/` |
 | How vendors are found | `vendors.All()`; providers are listed in `cmd/tenkstack/main.go` |
 | Who consumes the record | `internal/backends`, `internal/comfy`, `internal/containers` |
-| Which engines run on a card | `server-go/internal/providers/engines/*/engine.yaml` |
+| Which engines run on a card | `internal/providers/engines/*/engine.yaml` |
 | Which card a model runs on | `targetCard` and `makeRoom` in `internal/httpapi/comfy.go` |

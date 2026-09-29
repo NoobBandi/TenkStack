@@ -18,7 +18,7 @@ const { Text, Paragraph } = Typography;
  * installing or removing them.
  *
  * Engines are records in the registry under
- * server-go/internal/providers/engines, one directory each, so an engine
+ * internal/providers/engines, one directory each, so an engine
  * somebody adds there appears here with nothing else to change. A card
  * shows what a newcomer needs to choose -- what it is good at, which model
  * files it runs, whether it runs on this machine's cards -- and the drawer

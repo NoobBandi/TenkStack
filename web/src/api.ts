@@ -559,7 +559,7 @@ export interface EngineRecommendation {
 }
 
 /** One inference engine the store offers, from the registry under
- *  server-go/internal/providers/engines. Builds are listed only for the
+ *  internal/providers/engines. Builds are listed only for the
  *  vendors with a card in this machine. */
 export interface ProviderCard {
   key: string;
