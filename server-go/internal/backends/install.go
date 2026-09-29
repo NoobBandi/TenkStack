@@ -515,6 +515,13 @@ func (in *Installer) State(ctx context.Context, key, vendor string) api.RuntimeS
 	managed := err == nil
 	st := api.RuntimeState{Managed: managed, UsedBy: in.Config.ModelsUsing("${" + macro + "}"), Install: in.install(p, vendor)}
 	st.Enabled = in.Config.LauncherMacros()[macro] == script
+	if managed {
+		recipe, _, recommended := in.Recipe(p, vendor)
+		st.Recipe = recipe
+		if recommended != "" {
+			st.Recommended = &recommended
+		}
+	}
 	// From the script when there is one: it records which variant was chosen.
 	if spec := specFor(p, vendor, "vendor"); spec != nil {
 		img := spec.Image
@@ -566,8 +573,19 @@ func (in *Installer) Install(ctx context.Context, key, vendor, variant string) (
 		in.Probe.mu.Lock()
 		rec.State = "writing"
 		in.Probe.mu.Unlock()
-		err := os.WriteFile(path, []byte(WrapperText(p, vendor, in.ModelsDir, variant)), 0o755)
-		if err == nil && variant == "" {
+		// "vendor" names the vendor's own build, which the wrapper knows as
+		// "": passing it through left the multi-card block out, and the
+		// launcher got it only at the console's next start.
+		text := variant
+		if text == "vendor" {
+			text = ""
+		}
+		err := os.WriteFile(path, []byte(WrapperText(p, vendor, in.ModelsDir, text)), 0o755)
+		// Every variant but the any-card fallback is the vendor's build,
+		// whose multi-card setup has to be beside the launcher before a
+		// model spanning cards is loaded. The check used to be for "", which
+		// Install never passes, so a fresh install lacked it until restart.
+		if err == nil && variant != "vulkan" {
 			err = in.writeSetup(p, vendor)
 		}
 		if err == nil {

@@ -6,7 +6,7 @@ import {
 import { CheckCircleFilled, ExportOutlined, WarningFilled } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import {
-  engineAction, fetchProviders, pullPercent, pullText, type ProviderBuild, type ProviderCard, type ProvidersPage,
+  engineAction, type EngineAction, fetchProviders, pullPercent, pullText, type ProviderBuild, type ProviderCard, type ProvidersPage,
 } from '../api';
 import { useIsOwner } from '../identity';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -117,7 +117,7 @@ function EngineTile({ card, onOpen }: { card: ProviderCard; onOpen: () => void }
 /** One vendor's build of an engine, with what can be done to it. */
 function BuildRow({ card, build, onAction }: {
   card: ProviderCard; build: ProviderBuild;
-  onAction: (action: 'install' | 'update' | 'enable' | 'disable' | 'remove', opts?: { delete_image?: boolean }) => Promise<void>;
+  onAction: (action: EngineAction, opts?: { delete_image?: boolean }) => Promise<void>;
 }) {
   const [dropImage, setDropImage] = useState(true);
   const st = build.state;
@@ -173,6 +173,36 @@ function BuildRow({ card, build, onAction }: {
           {st.image_size && <Text type="secondary" style={{ fontSize: 12 }}>映像 {st.image_size}</Text>}
           {inUse && <Text type="secondary" style={{ fontSize: 12 }}>{st.used_by.length} 個模型在用</Text>}
         </Space>
+        {st.recipe === 'outdated' && st.recommended && (
+          <Alert
+            type="info" showIcon
+            message="有建議的新版本"
+            description={(
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <div style={{ fontFamily: MONO, fontSize: 11, wordBreak: 'break-all' }}>
+                  {st.image} → {st.recommended}
+                </div>
+                <Popconfirm
+                  title="更新到建議版本？"
+                  description={(
+                    <div style={{ maxWidth: 300 }}>
+                      會下載 <code>{st.recommended}</code> 並改寫啟動腳本。正在跑的模型不受影響，下次載入時才會用新版。
+                    </div>
+                  )}
+                  okText="更新" cancelText="取消"
+                  onConfirm={() => onAction('upgrade')}
+                >
+                  <Button type="primary" size="small">更新到建議版本</Button>
+                </Popconfirm>
+              </Space>
+            )}
+          />
+        )}
+        {st.recipe === 'edited' && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            啟動腳本手動改過，建議版本不會自動套用。
+          </Text>
+        )}
         <Space size={6} wrap>
           <Popconfirm
             title="重新下載最新的映像？"
@@ -214,7 +244,7 @@ function BuildRow({ card, build, onAction }: {
         </Tag>
       </Space>
       <div style={{ fontFamily: MONO, fontSize: 11, opacity: 0.6, marginBottom: 8, wordBreak: 'break-all' }}>
-        {build.image}
+        {(st.managed && st.image) || build.image}
       </div>
       {body}
     </div>
@@ -223,7 +253,7 @@ function BuildRow({ card, build, onAction }: {
 
 function EngineDrawer({ card, onClose, onAction }: {
   card: ProviderCard | null; onClose: () => void;
-  onAction: (card: ProviderCard, build: ProviderBuild, action: 'install' | 'update' | 'enable' | 'disable' | 'remove', opts?: { delete_image?: boolean }) => Promise<void>;
+  onAction: (card: ProviderCard, build: ProviderBuild, action: EngineAction, opts?: { delete_image?: boolean }) => Promise<void>;
 }) {
   return (
     <Drawer open={!!card} onClose={onClose} width={520} title={null} destroyOnClose>
@@ -329,12 +359,12 @@ export default function Engines() {
 
   const onAction = async (
     card: ProviderCard, build: ProviderBuild,
-    action: 'install' | 'update' | 'enable' | 'disable' | 'remove', opts: { delete_image?: boolean } = {},
+    action: EngineAction, opts: { delete_image?: boolean } = {},
   ) => {
     try {
       await engineAction(card.key, build.vendor, action, opts);
       message.success({
-        install: '開始下載', update: '開始更新', enable: '已啟用', disable: '已停用', remove: '已移除',
+        install: '開始下載', update: '開始更新', upgrade: '開始更新到建議版本', enable: '已啟用', disable: '已停用', remove: '已移除',
       }[action]);
       load();
     } catch (error) {

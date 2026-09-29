@@ -526,6 +526,11 @@ export interface EngineState {
   managed: boolean;
   enabled: boolean;
   image: string | null;
+  /** How the launcher stands against the engine's record: `outdated` means
+   *  the console wrote it from an older record and can rewrite it for
+   *  `recommended`; `edited` means changed by hand, and left alone. */
+  recipe?: 'current' | 'outdated' | 'edited';
+  recommended?: string;
   image_size: string | null;
   install: EngineInstall | null;
   used_by: string[];
@@ -686,10 +691,13 @@ export const comfyAction = (
   name: string, action: 'update' | 'remove', delete_image = false,
 ) => send<{ ok: boolean }>('/runtimes/comfy', 'POST', { name, action, delete_image });
 
+export type EngineAction = 'install' | 'update' | 'upgrade' | 'enable' | 'disable' | 'remove';
+
 /** Install, update, enable, disable or remove one engine's build for one
- *  vendor's cards. */
+ *  vendor's cards; `upgrade` moves an outdated launcher to the recommended
+ *  image. */
 export const engineAction = (
-  provider: string, vendor: string, action: 'install' | 'update' | 'enable' | 'disable' | 'remove',
+  provider: string, vendor: string, action: EngineAction,
   options: { variant?: string; delete_image?: boolean } = {},
 ) => send<unknown>('/runtimes/action', 'POST', { provider, vendor, action, ...options });
 

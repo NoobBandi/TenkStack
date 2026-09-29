@@ -624,6 +624,14 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, rec)
 		return
+	case "upgrade":
+		rec, err := s.Installer.Upgrade(ctx, in.Provider, in.Vendor)
+		if err != nil {
+			installError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rec)
+		return
 	case "enable", "disable":
 		if in.Action == "disable" && s.lastOfDefault(in.Provider, in.Vendor) {
 			err = &backends.Invalid{Msg: "llama.cpp 是預設引擎，至少要留一個能用的，不能停用最後一個"}

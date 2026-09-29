@@ -216,9 +216,9 @@ func (c *Client) activeUnit(ctx context.Context) string {
 // Apply downloads the release's binary for this machine, checks it
 // against the release's own checksum, swaps it in under the running
 // process -- which keeps its old inode until it exits -- and then
-// restarts the unit. The old binary stays beside the new one as
-// tenkstack.prev, so a release that will not start can be put back by
-// hand.
+// restarts the unit. The two binaries before it stay beside it, as
+// tenkstack.prev and tenkstack.prev2, so a release that will not start can
+// be put back by hand; an older one is removed, so they never pile up.
 func (c *Client) Apply(ctx context.Context) (api.ReleaseApply, error) {
 	rel := c.Latest(ctx, false)
 	if rel.Latest == nil {
@@ -275,17 +275,9 @@ func (c *Client) Apply(ctx context.Context) (api.ReleaseApply, error) {
 		os.Remove(tmp)
 		return api.ReleaseApply{}, err
 	}
-	// Two renames: the running file becomes .prev, the new one takes its
-	// name. The process keeps running on the old inode either way.
-	os.Remove(exe + ".prev")
-	if err := os.Rename(exe, exe+".prev"); err != nil {
+	if err := rotate(exe, tmp); err != nil {
 		os.Remove(tmp)
-		return api.ReleaseApply{}, fmt.Errorf("搬不開現在的檔案：%w", err)
-	}
-	if err := os.Rename(tmp, exe); err != nil {
-		os.Rename(exe+".prev", exe)
-		os.Remove(tmp)
-		return api.ReleaseApply{}, fmt.Errorf("放不進新的檔案：%w", err)
+		return api.ReleaseApply{}, err
 	}
 	log.Printf("replaced %s with release v%s (%s)", exe, *rel.Latest, short(got))
 
@@ -304,6 +296,37 @@ func (c *Client) Apply(ctx context.Context) (api.ReleaseApply, error) {
 		out.Detail = "檔案換好了；主控台不是 systemd 在跑，請自己重啟"
 	}
 	return out, nil
+}
+
+// rotate puts next in place of exe, keeping the two before it: exe
+// becomes .prev, .prev becomes .prev2, and the old .prev2 goes. The
+// running process keeps its old inode throughout. Anything that fails
+// puts the files back as they were.
+func rotate(exe, next string) error {
+	prev, prev2 := exe+".prev", exe+".prev2"
+	hadPrev := false
+	if _, err := os.Stat(prev); err == nil {
+		hadPrev = true
+		os.Remove(prev2)
+		if err := os.Rename(prev, prev2); err != nil {
+			return fmt.Errorf("搬不開上一版：%w", err)
+		}
+	}
+	undoPrev := func() {
+		if hadPrev {
+			os.Rename(prev2, prev)
+		}
+	}
+	if err := os.Rename(exe, prev); err != nil {
+		undoPrev()
+		return fmt.Errorf("搬不開現在的檔案：%w", err)
+	}
+	if err := os.Rename(next, exe); err != nil {
+		os.Rename(prev, exe)
+		undoPrev()
+		return fmt.Errorf("放不進新的檔案：%w", err)
+	}
+	return nil
 }
 
 func orElse(a, b string) string {

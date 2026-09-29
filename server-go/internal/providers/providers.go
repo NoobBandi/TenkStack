@@ -71,6 +71,10 @@ type MultiCard struct {
 	// Entrypoint is the image's own start command as one shell line, which
 	// running Setup first replaces; it belongs to the image tag above it.
 	Entrypoint string `yaml:"entrypoint"`
+	// Formerly are the start commands of the images this build used
+	// before, so a launcher the console wrote then is still recognised as
+	// its own and can be brought up to date.
+	Formerly []string `yaml:"formerly"`
 	// Flags are docker run arguments added for such an entry.
 	Flags []string `yaml:"flags"`
 

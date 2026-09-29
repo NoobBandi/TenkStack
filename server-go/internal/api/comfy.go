@@ -133,6 +133,13 @@ type RuntimeState struct {
 	ImageSize *string  `json:"image_size"`
 	Install   *Install `json:"install"`
 	UsedBy    []string `json:"used_by"`
+	// Recipe is how the launcher stands against the engine's record:
+	// current, outdated (the console wrote it from an older record and
+	// can bring it up to date), or edited (by hand, left alone).
+	Recipe string `json:"recipe,omitempty"`
+	// Recommended is the image the record uses now for this launcher's
+	// variant.
+	Recommended *string `json:"recommended,omitempty"`
 }
 
 type HeldContainer struct {

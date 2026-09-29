@@ -98,6 +98,9 @@ builds:
         processes: that needs --ipc host and SYS_PTRACE.
       setup: intel-worker-affinity.py
       entrypoint: exec vllm serve "$@"
+      formerly:
+        # intel/llm-scaler-vllm:0.26.0-b2
+        - source /opt/intel/oneapi/setvars.sh --force >/dev/null && source /opt/intel/oneapi/ccl/2021.15/env/vars.sh --force && exec vllm serve "$@"
       flags: [--ipc, host, --cap-add, SYS_PTRACE,
               -e, CCL_SYCL_ALLREDUCE_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_REDUCE_SCATTER_SIMPLE_THRESHOLD=4294967296,
               -e, CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_ALLTOALL_TMP_BUF=1]
