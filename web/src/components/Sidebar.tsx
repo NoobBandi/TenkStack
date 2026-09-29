@@ -9,7 +9,7 @@ import { Link, useLocation } from 'react-router-dom';
 import {
   fetchConsoleVersion, fetchRelease, type GpuSample, type ModelInfo, type SystemSample,
 } from '../api';
-import { ACCENT, LINE, MONO } from '../theme';
+import { ACCENT, LINE, MONO, SURFACE } from '../theme';
 import { deviceTag } from '../hardware';
 import { useMedia } from '../media';
 
@@ -186,20 +186,29 @@ export default function Sidebar({
               // A release newer than this one is marked on 關於 itself, where
               // it is updated, as well as beside the version at the foot.
               const mark = item.key === '/about' && newer;
+              const here = location.pathname === item.key;
               return {
                 key: item.key,
                 icon: mark && collapsed
                   ? <Badge dot color={ACCENT.warn} offset={[2, 2]}>{item.icon}</Badge>
                   : item.icon,
                 label: (
-                  <Link to={item.key}>
+                  <Link to={item.key} style={{ display: 'flex', alignItems: 'center' }}>
                     {item.label}
                     {mark && (
-                      <Badge
-                        count="新版" size="small" color={ACCENT.warn}
-                        title={`有新版 v${newer}`}
-                        style={{ marginInlineStart: 8, boxShadow: 'none' }}
-                      />
+                      // Shaped like the small selects elsewhere -- 4px
+                      // corners, a 1px line -- but yellow, and inert; filled
+                      // while 關於 is the page on screen.
+                      <span title={`有新版 v${newer}`} style={{
+                        marginInlineStart: 'auto', display: 'inline-flex', alignItems: 'center',
+                        height: 20, padding: '0 7px', borderRadius: 4,
+                        border: `1px solid ${ACCENT.warn}`,
+                        color: here ? SURFACE.page : ACCENT.warn,
+                        background: here ? ACCENT.warn : `${ACCENT.warn}14`,
+                        fontSize: 11, lineHeight: 1,
+                      }}>
+                        新版
+                      </span>
                     )}
                   </Link>
                 ),

@@ -110,7 +110,7 @@ const shared: ThemeConfig['token'] = {
  * single unit of blue came back as #1c1c22 on every table and input -- a violet
  * cast against the neutral white-alpha rules drawn over it.
  */
-const SURFACE = {
+export const SURFACE = {
   sider: '#080808',
   page: '#0a0a0a',
   card: '#0f0f0f',
