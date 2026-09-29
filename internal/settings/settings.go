@@ -14,9 +14,12 @@ import (
 )
 
 type Spec struct {
-	Name    string
-	Label   string
+	Name  string
+	Label string
+	// Note is one line under the label; Detail, when the setting needs more,
+	// is behind an info mark beside it.
 	Note    string
+	Detail  string
 	Default int64
 	Minimum int64
 	Maximum int64
@@ -27,28 +30,34 @@ type Spec struct {
 // Specs in display order. minimum and maximum are enforced here because the
 // API is reachable without the browser.
 var Specs = []Spec{
-	{"agent_max_steps", "Agent 步數上限",
-		"模型回答一個問題時，最多可以呼叫幾次工具（搜尋、讀網頁等）。用完後會請模型直接回答。",
-		8, 1, 32, "步", "chat"},
-	{"estimate_depth", "速度預估假設的對話長度",
-		"模型目錄估算 tok/s 時，假設對話已經進行到多長。對話越長生成越慢，數字越大估得越保守。",
-		4096, 256, 131072, "token", "chat"},
-	{"vram_margin_gib", "顯存餘裕",
-		"載入模型前估算要空出多少顯存時，在模型檔大小之外多留的空間。對話快取與運算緩衝都不算在檔案大小裡，太小可能載入到一半失敗。",
-		4, 0, 32, "GiB", "vram"},
-	{"comfyui_idle_gib", "ComfyUI 閒置門檻",
-		"ComfyUI 佔用的顯存低於這個值時，視為沒在用，載入模型不會先停掉它。閒置的 ComfyUI 本來就會留著幾百 MB。",
-		1, 0, 16, "GiB", "vram"},
-	{"vision_cache", "舊圖片改用文字描述",
-		"對話裡除了最新一張圖，較早的圖片改送模型自己寫過的描述。帶圖的對話會讓加速用的草稿模型失效，" +
-			"本機實測生成從 34.7 掉到 12.6 tok/s（llama.cpp#27408）；開啟後速度回來，代價是模型看不到那些舊圖的原圖。",
-		0, 0, 1, "", "chat"},
-	{"log_lines", "日誌保留行數",
-		"日誌頁最多能往回看幾行。",
-		4000, 200, 50000, "行", "history"},
-	{"gpu_history_hours", "顯示卡歷史時長",
-		"顯示卡頁的圖表能往回看多久。每兩秒記一筆，拉長只會多用一點記憶體。",
-		2, 1, 24, "小時", "history"},
+	{Name: "agent_max_steps", Label: "Agent 步數上限",
+		Note:    "回答一個問題最多能呼叫幾次工具（搜尋、讀網頁）",
+		Detail:  "用完後會請模型直接回答。",
+		Default: 8, Minimum: 1, Maximum: 32, Unit: "步", Group: "chat"},
+	{Name: "estimate_depth", Label: "速度預估的對話長度",
+		Note:    "模型目錄估算 tok/s 時，假設對話已經有多長",
+		Detail:  "對話越長生成越慢，數字越大估得越保守。",
+		Default: 4096, Minimum: 256, Maximum: 131072, Unit: "token", Group: "catalog"},
+	{Name: "vram_margin_gib", Label: "顯存餘裕",
+		Note:    "載入模型前，在模型檔大小之外多留的顯存",
+		Detail:  "對話快取與運算緩衝都不算在檔案大小裡，留太少可能載入到一半失敗。",
+		Default: 4, Minimum: 0, Maximum: 32, Unit: "GiB", Group: "vram"},
+	{Name: "comfyui_idle_gib", Label: "ComfyUI 閒置門檻",
+		Note:    "ComfyUI 用量低於這個值就算閒置，載入模型時不會停掉它",
+		Detail:  "閒置的 ComfyUI 本來就會留著幾百 MB。",
+		Default: 1, Minimum: 0, Maximum: 16, Unit: "GiB", Group: "vram"},
+	{Name: "vision_cache", Label: "舊圖片改用文字描述",
+		Note: "較早的圖片改送模型寫過的描述，加速才不會失效",
+		Detail: "帶圖的對話會讓加速用的草稿模型失效，本機實測生成從 34.7 掉到 12.6 tok/s（llama.cpp#27408）。" +
+			"開啟後速度回來，代價是模型看不到那些舊圖的原圖；最新的一張照常送出。",
+		Default: 0, Minimum: 0, Maximum: 1, Group: "chat"},
+	{Name: "log_lines", Label: "日誌保留行數",
+		Note:    "日誌頁最多能往回看幾行",
+		Default: 4000, Minimum: 200, Maximum: 50000, Unit: "行", Group: "history"},
+	{Name: "gpu_history_hours", Label: "顯示卡歷史時長",
+		Note:    "顯示卡頁的圖表能往回看多久",
+		Detail:  "每兩秒記一筆，拉長只會多用一點記憶體。",
+		Default: 2, Minimum: 1, Maximum: 24, Unit: "小時", Group: "history"},
 }
 
 var byName = func() map[string]Spec {
@@ -131,7 +140,7 @@ func (s *Store) Describe() []api.Setting {
 		out = append(out, api.Setting{
 			Name: spec.Name, Value: s.Get(spec.Name), Label: spec.Label, Note: spec.Note,
 			Default: spec.Default, Minimum: spec.Minimum, Maximum: spec.Maximum,
-			Unit: spec.Unit, Group: spec.Group,
+			Unit: spec.Unit, Group: spec.Group, Detail: spec.Detail,
 		})
 	}
 	return out

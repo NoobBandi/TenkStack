@@ -1760,7 +1760,10 @@ export const applyRelease = () =>
 export interface Setting {
   name: string;
   label: string;
+  /** One line under the label. */
   note: string;
+  /** The longer explanation, behind an info mark; absent when there is none. */
+  detail?: string;
   value: number;
   default: number;
   minimum: number;

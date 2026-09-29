@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Collapse, Input, InputNumber, Popconfirm, Select, Space,
-  Switch, Tag, Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Input, Modal, Popconfirm, Select, Space, Switch, Tag, Tooltip,
+  Typography,
 } from 'antd';
 import {
-  CheckOutlined, DeleteOutlined, EditOutlined, LoadingOutlined, PlusOutlined,
+  CheckOutlined, DeleteOutlined, EditOutlined, InfoCircleOutlined, LoadingOutlined, PlusOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import LocationForm from '../components/LocationForm';
 import { bytes } from '../components/files/kit';
@@ -17,96 +18,152 @@ import {
   type SearchService, type Setting,
 } from '../api';
 import { useIsOwner } from '../identity';
-import { ACCENT, LINE, MONO } from '../theme';
+import { ACCENT, LINE, MONO, SURFACE } from '../theme';
 
 const { Text } = Typography;
 
 /**
  * The console's own settings, for the administrator.
  *
- * One column, in the order somebody setting the machine up meets them: where
- * models are kept first, since that is decided before anything is downloaded,
- * then how chat behaves, how the cards are shared with ComfyUI, and how much
- * history is kept. What is for the rare occasion -- the raw llama-swap file,
- * where the install lives -- is folded away under 進階. The versions of what is
- * installed are on the about page, beside the update they explain.
+ * One card per group, all the same width, in as many columns as fit; cards
+ * side by side are the same height. Inside, a row is a name, one line saying
+ * what it does, and its control on the right; a setting that needs more says
+ * it behind the info mark beside its name, and so does a group beside its
+ * title, so the page reads as a list of names rather than a wall of grey
+ * text. What is large -- the llama-swap file -- opens in a dialog rather than
+ * growing its card, so the grid stays even.
+ *
+ * The order is the one somebody setting the machine up meets them: where
+ * models are kept, then downloading them, how chat behaves, how the cards are
+ * shared with ComfyUI, and how much history is kept, then 進階. The versions of
+ * what is installed are on the about page, beside the update they explain.
  *
  * Every control saves itself: a switch or a choice when it changes, a number
  * when the field is left. An apply button across a page of unrelated settings
- * made it easy to change three and keep none.
+ * made it easy to change three and keep none. The Hugging Face token is the
+ * exception, because it is checked with the Hub before it is kept.
  */
-
-/** Which settings each section holds, in the order they are shown. */
-const SECTIONS: { title: string; note: string; names: string[] }[] = [
-  { title: '對話', note: '對話頁與 Agent 的行為', names: ['agent_max_steps', 'vision_cache', 'estimate_depth'] },
-  {
-    title: '顯示卡',
-    note: 'LLM 與 ComfyUI 共用顯示卡時，什麼時候要先停掉 ComfyUI 讓模型載入',
-    names: ['vram_margin_gib', 'comfyui_idle_gib'],
-  },
-  { title: '紀錄保留', note: '伺服器記住多少，給日誌頁與顯示卡頁往回看', names: ['log_lines', 'gpu_history_hours'] },
-];
 
 const UNIT_COLOUR: Record<string, string> = {
   active: 'green', activating: 'orange', failed: 'red', inactive: 'default',
 };
 
-/** A small-caps heading inside a card. */
-function Heading({ children, note }: { children: React.ReactNode; note?: string }) {
-  return (
-    <Space size={8} align="baseline" style={{ marginBottom: 2 }}>
-      <Text style={{ fontSize: 10, letterSpacing: 1, opacity: 0.4 }}>{children}</Text>
-      {note && <Text style={{ fontSize: 11, opacity: 0.35 }}>{note}</Text>}
-    </Space>
-  );
-}
-
-function Line({ label, note, right }: {
-  label: React.ReactNode; note?: React.ReactNode; right: React.ReactNode;
-}) {
-  return (
-    // Wraps: on a narrow screen the control goes under its label rather
-    // than squeezing the label to a word a line.
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 16, rowGap: 8,
-      minHeight: 40, padding: '8px 0', borderBottom: `1px solid ${LINE.faint}`,
-    }}>
-      <div style={{ flex: '1 1 240px', minWidth: 0 }}>
-        <div style={{ fontSize: 13 }}>{label}</div>
-        {note && (
-          <Text type="secondary" style={{
-            fontSize: 12, display: 'block', marginTop: 2, lineHeight: 1.6, overflowWrap: 'anywhere',
-          }}>
-            {note}
-          </Text>
-        )}
-      </div>
-      <div style={{ flex: 'none', maxWidth: '100%' }}>{right}</div>
-    </div>
-  );
-}
-
-/** A section: a card whose title says what the settings in it are about. */
-function Section({ title, note, children, extra }: {
-  title: string; note?: string; children: React.ReactNode; extra?: React.ReactNode;
+/**
+ * One group as a card: its title, with an info mark when the group needs
+ * explaining, and its rows edge to edge, divided by hairlines (index.css).
+ * It fills its grid cell, so cards side by side match in height.
+ */
+function Panel({ title, info, children }: {
+  title: string; info?: React.ReactNode; children: React.ReactNode;
 }) {
   return (
     <Card
       size="small"
+      style={{ height: '100%' }}
+      styles={{ body: { padding: 0 } }}
       title={(
-        <Space size={10} align="baseline">
-          <span>{title}</span>
-          {note && <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>{note}</Text>}
-        </Space>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {title}
+          {info && (
+            <Tooltip title={info} styles={{ root: { maxWidth: 360 } }}>
+              <InfoCircleOutlined style={{ fontSize: 12, opacity: 0.45, cursor: 'help', fontWeight: 400 }} />
+            </Tooltip>
+          )}
+        </span>
       )}
-      extra={extra}
     >
-      {children}
+      <div className="settings-box">{children}</div>
     </Card>
   );
 }
 
+/**
+ * One row: the name with an info mark when there is more to say, a line
+ * under it, the control on the right, and anything that opens from the row
+ * below them at full width.
+ */
+function Row({ label, note, detail, right, children }: {
+  label: React.ReactNode; note?: React.ReactNode; detail?: React.ReactNode;
+  right?: React.ReactNode; children?: React.ReactNode;
+}) {
+  return (
+    <div style={{ padding: '12px 16px' }}>
+      {/* The name gives way first -- its line wraps -- so a card three to a
+          row keeps its controls beside it; only on a phone do they go under.
+          240 px here put the controls of a 450 px card on a line of their own. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 16, rowGap: 8 }}>
+        <div style={{ flex: '1 1 140px', minWidth: 0 }}>
+          <div style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {label}
+            {detail && (
+              <Tooltip title={detail} styles={{ root: { maxWidth: 360 } }}>
+                <InfoCircleOutlined style={{ fontSize: 12, opacity: 0.45, cursor: 'help' }} />
+              </Tooltip>
+            )}
+          </div>
+          {note && (
+            <Text type="secondary" style={{
+              fontSize: 12, display: 'block', marginTop: 2, lineHeight: 1.5, overflowWrap: 'anywhere',
+            }}>
+              {note}
+            </Text>
+          )}
+        </div>
+        {right && (
+          <div style={{ flex: 'none', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {right}
+          </div>
+        )}
+      </div>
+      {children && <div style={{ marginTop: 12 }}>{children}</div>}
+    </div>
+  );
+}
+
+/** A row that says the group is still being read. */
+function Reading() {
+  return <Row label={<Text type="secondary" style={{ fontSize: 13 }}>讀取中…</Text>} />;
+}
+
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+
+/**
+ * A field that takes digits and nothing else. Every setting here is a whole
+ * number from zero up, and InputNumber let letters and signs sit in the field
+ * until it was left. Anything else typed or pasted is dropped as it arrives;
+ * while an input method is composing -- a Chinese one turns number keys into
+ * zhuyin -- the text is left alone, and cleaned when the word is committed.
+ * The arrow keys step by one within the range.
+ */
+function DigitsInput({ value, min, max, onChange, onCommit }: {
+  value: string; min: number; max: number;
+  onChange: (text: string) => void; onCommit: () => void;
+}) {
+  const composing = useRef(false);
+  const digits = (text: string) => text.replace(/\D/g, '').slice(0, String(max).length);
+  const step = (by: number) => {
+    const n = Number(value || 0) + by;
+    onChange(String(Math.min(max, Math.max(min, n))));
+  };
+  return (
+    <Input
+      size="small"
+      value={value}
+      inputMode="numeric"
+      autoComplete="off"
+      style={{ width: 96 }}
+      onChange={(e) => onChange(composing.current ? e.target.value : digits(e.target.value))}
+      onCompositionStart={() => { composing.current = true; }}
+      onCompositionEnd={(e) => { composing.current = false; onChange(digits(e.currentTarget.value)); }}
+      onKeyDown={(e) => {
+        if (e.key === 'ArrowUp') { e.preventDefault(); step(1); }
+        if (e.key === 'ArrowDown') { e.preventDefault(); step(-1); }
+      }}
+      onBlur={onCommit}
+      onPressEnter={onCommit}
+    />
+  );
+}
 
 /**
  * One setting that saves itself. A 0/1 setting with no unit is a switch; a
@@ -115,10 +172,10 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
  */
 function SettingRow({ setting, onSaved }: { setting: Setting; onSaved: (all: Setting[]) => void }) {
   const { message } = AntApp.useApp();
-  const [draft, setDraft] = useState<number | null>(setting.value);
+  const [draft, setDraft] = useState(String(setting.value));
   const [state, setState] = useState<SaveState>('idle');
   const timer = useRef<number | undefined>(undefined);
-  useEffect(() => { setDraft(setting.value); }, [setting.value]);
+  useEffect(() => { setDraft(String(setting.value)); }, [setting.value]);
   useEffect(() => () => window.clearTimeout(timer.current), []);
 
   const toggle = setting.minimum === 0 && setting.maximum === 1 && !setting.unit;
@@ -133,36 +190,45 @@ function SettingRow({ setting, onSaved }: { setting: Setting; onSaved: (all: Set
       timer.current = window.setTimeout(() => setState('idle'), 2000);
     } catch (error) {
       setState('error');
-      setDraft(setting.value);
+      setDraft(String(setting.value));
       message.error((error as Error).message);
     }
   };
 
+  // An empty field puts the saved value back; one outside the range is
+  // pulled to the nearer end, and says what the range is.
   const commit = () => {
-    if (draft === null || Number.isNaN(draft)) { setDraft(setting.value); return; }
-    const clamped = Math.min(setting.maximum, Math.max(setting.minimum, Math.round(draft)));
-    setDraft(clamped);
+    const typed = draft === '' ? NaN : Number(draft);
+    if (Number.isNaN(typed)) { setDraft(String(setting.value)); return; }
+    const clamped = Math.min(setting.maximum, Math.max(setting.minimum, typed));
+    if (clamped !== typed) {
+      message.info(`範圍是 ${setting.minimum}–${setting.maximum}${setting.unit ? ` ${setting.unit}` : ''}`);
+    }
+    setDraft(String(clamped));
     void save(clamped);
   };
 
   const changed = setting.value !== setting.default;
+  const fallback = toggle ? (setting.default ? '開' : '關') : `${setting.default} ${setting.unit}`;
   return (
-    <Line
+    <Row
       label={setting.label}
       note={setting.note}
+      detail={setting.detail}
       right={(
-        <Space size={10}>
-          <span style={{ width: 64, textAlign: 'right', fontSize: 12 }}>
+        <>
+          {/* One slot of one width for saving, saved and 恢復預設, so the
+              controls are as wide after a change as before it: wider, they
+              no longer fit beside the name and the row broke onto two lines. */}
+          <span style={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
             {state === 'saving' && <LoadingOutlined style={{ opacity: 0.6 }} />}
             {state === 'saved' && (
-              <Text style={{ fontSize: 12, color: ACCENT.ok }}><CheckOutlined /> 已儲存</Text>
+              <Tooltip title="已儲存"><CheckOutlined style={{ color: ACCENT.ok }} aria-label="已儲存" /></Tooltip>
             )}
             {state !== 'saving' && state !== 'saved' && changed && (
-              <Tooltip title={`預設是 ${toggle ? (setting.default ? '開' : '關') : `${setting.default} ${setting.unit}`}`}>
-                <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }}
-                        onClick={() => { setDraft(setting.default); void save(setting.default); }}>
-                  恢復預設
-                </Button>
+              <Tooltip title={`恢復預設（${fallback}）`}>
+                <Button size="small" type="text" icon={<UndoOutlined />} aria-label="恢復預設"
+                        onClick={() => { setDraft(String(setting.default)); void save(setting.default); }} />
               </Tooltip>
             )}
           </span>
@@ -173,30 +239,27 @@ function SettingRow({ setting, onSaved }: { setting: Setting; onSaved: (all: Set
               onChange={(on) => void save(on ? 1 : 0)}
             />
           ) : (
-            <InputNumber
-              size="small"
-              min={setting.minimum}
-              max={setting.maximum}
-              value={draft}
-              onChange={(v) => setDraft(v === null ? null : Number(v))}
-              onBlur={commit}
-              onPressEnter={commit}
-              style={{ width: 160 }}
-              // One width for every unit, so the fields line up down the page.
-              addonAfter={<span style={{ fontSize: 11, display: 'inline-block', width: 34, textAlign: 'center' }}>{setting.unit}</span>}
-            />
+            <>
+              <DigitsInput
+                value={draft}
+                min={setting.minimum}
+                max={setting.maximum}
+                onChange={setDraft}
+                onCommit={commit}
+              />
+              {/* One width for every unit, so the fields line up down the page. */}
+              <Text type="secondary" style={{ fontSize: 12, width: 36 }}>{setting.unit}</Text>
+            </>
           )}
-        </Space>
+        </>
       )}
     />
   );
 }
 
 const FORMATS: { key: ModelFormat; label: string; note: string }[] = [
-  { key: 'gguf', label: 'GGUF 下載到', note: 'llama.cpp 用的模型，從「模型目錄」下載' },
-  // Nothing downloads safetensors yet -- the catalog lists GGUF only -- so
-  // the note says when this starts to matter rather than looking inert.
-  { key: 'safetensors', label: 'safetensors 下載到', note: 'vLLM 用的模型資料夾；模型目錄支援 safetensors 下載後生效' },
+  { key: 'gguf', label: 'GGUF 下載到', note: 'llama.cpp 用的模型檔' },
+  { key: 'safetensors', label: 'safetensors 下載到', note: 'vLLM 與 SGLang 用的模型資料夾' },
 ];
 
 /**
@@ -205,11 +268,12 @@ const FORMATS: { key: ModelFormat; label: string; note: string }[] = [
  * downloads of it land in. The primary is CONSOLE_MODELS_DIR and stays; the
  * others can go once no model loads from them, and the files stay behind.
  */
-function ModelLocationsCard() {
+function ModelLocationsGroup() {
   const { message } = AntApp.useApp();
   const [data, setData] = useState<ModelLocations | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  const [managing, setManaging] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(() => {
@@ -242,310 +306,149 @@ function ModelLocationsCard() {
     }
   };
 
-  const locations = data?.locations ?? [];
-  const full = data ? locations.length >= data.max : true;
+  const info = 'llama.cpp、vLLM 與 SGLang 都從這些位置讀模型。移除一個位置只是不再使用，資料夾裡的檔案會留著。';
+  if (!data) {
+    return <Panel title="模型存放" info={info}><Reading /></Panel>;
+  }
+  const locations = data.locations;
+  const full = locations.length >= data.max;
   const options = locations.map((l) => ({ value: l.key, label: locationName(l) }));
+  const models = locations.reduce((n, l) => n + l.models, 0);
+  const used = locations.reduce((n, l) => n + l.used_bytes, 0);
+  const trouble = locations.filter((l) => !l.exists || !l.writable).length;
 
   return (
-    <Card
-      title={(
-        <Space size={10} align="baseline">
-          <span>模型存放</span>
-          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>模型下載到哪裡、從哪裡讀</Text>
-        </Space>
-      )}
-      size="small"
-      loading={!data}
-      extra={(
-        <Tooltip title={full && data ? `最多 ${data.max} 個位置` : undefined}>
-          <Button size="small" icon={<PlusOutlined />} disabled={full || adding || editing !== null}
-                  onClick={() => setAdding(true)}>
-            新增位置
-          </Button>
-        </Tooltip>
-      )}
-    >
-      <Heading note="每種格式各有一個預設位置">下載位置</Heading>
-      {FORMATS.map((f) => {
-        const current = locations.find((l) => l.default_for.includes(f.key));
-        return (
-          <Line
-            key={f.key}
-            label={f.label}
-            note={f.note}
-            right={(
-              <Select
-                size="small"
-                style={{ width: 220 }}
-                value={current?.key}
-                options={options}
-                disabled={busy || locations.length < 2}
-                onChange={(key) => run(() => setModelLocationDefaults({ [f.key]: key }), '已變更下載位置')}
-              />
-            )}
-          />
-        );
-      })}
-
-      <div style={{ marginTop: 14 }}>
-        <Heading note="llama.cpp 與 vLLM 都從這些位置讀模型">位置</Heading>
-        {locations.map((loc) => {
-          const blocked = loc.primary || loc.in_use.length > 0;
-          const why = loc.primary
-            ? '主要位置不能移除'
-            : loc.in_use.length > 0
-              ? `還有模型從這裡載入：${loc.in_use.join('、')}`
-              : undefined;
-          if (editing === loc.key) {
-            return (
-              <LocationForm
-                key={loc.key}
-                initialPath={loc.path}
-                initialLabel={loc.label}
-                lockPath={loc.primary}
-                busy={busy}
-                submit="儲存"
-                onSubmit={(path, label) => onEdit(loc.key, path, label, loc.primary)}
-                onCancel={() => setEditing(null)}
-              />
-            );
-          }
+    <Panel title="模型存放" info={info}>
+        {FORMATS.map((f) => {
+          const current = locations.find((l) => l.default_for.includes(f.key));
           return (
-            <Line
-              key={loc.key}
-              label={(
-                <Space size={6} wrap>
-                  <span>{locationName(loc)}</span>
-                  {loc.primary && <Tag style={{ marginInlineEnd: 0 }}>主要</Tag>}
-                  {loc.default_for.map((f) => (
-                    <Tag key={f} color="blue" style={{ marginInlineEnd: 0 }}>
-                      {f === 'gguf' ? 'GGUF 預設' : 'safetensors 預設'}
-                    </Tag>
-                  ))}
-                  {!loc.exists && <Tag color="error" style={{ marginInlineEnd: 0 }}>找不到資料夾</Tag>}
-                  {loc.exists && !loc.writable && (
-                    <Tag color="warning" style={{ marginInlineEnd: 0 }}>無法寫入</Tag>
-                  )}
-                </Space>
-              )}
-              note={[
-                // Without a label the name already is the path.
-                loc.label || loc.primary ? loc.path : '',
-                `${loc.models} 個模型・${bytes(loc.used_bytes)}`,
-                loc.exists ? `磁碟剩 ${bytes(loc.free_bytes)} / ${bytes(loc.total_bytes)}` : '',
-              ].filter(Boolean).join('　')}
+            <Row
+              key={f.key}
+              label={f.label}
+              note={f.note}
               right={(
-                <Space size={2}>
-                  <Tooltip title={loc.primary ? '改名稱' : '改路徑或名稱'}>
-                    <Button size="small" type="text" icon={<EditOutlined />}
-                            disabled={busy || adding || editing !== null}
-                            onClick={() => setEditing(loc.key)} />
-                  </Tooltip>
-                  <Tooltip title={why}>
-                    <Popconfirm
-                      title="移除這個位置？"
-                      description="只是不再使用，資料夾裡的檔案會留著。"
-                      okText="移除"
-                      cancelText="取消"
-                      disabled={blocked}
-                      onConfirm={() => run(() => removeModelLocation(loc.key), '已移除')}
-                    >
-                      <Button size="small" type="text" danger icon={<DeleteOutlined />}
-                              disabled={blocked || busy} />
-                    </Popconfirm>
-                  </Tooltip>
-                </Space>
+                <Tooltip title={locations.length < 2 ? '只有一個位置；新增位置後可以選' : undefined}>
+                  <Select
+                    size="small"
+                    style={{ width: 200 }}
+                    value={current?.key}
+                    options={options}
+                    disabled={busy || locations.length < 2}
+                    onChange={(key) => run(() => setModelLocationDefaults({ [f.key]: key }), '已變更下載位置')}
+                  />
+                </Tooltip>
               )}
             />
           );
         })}
-        {adding && (
-          <LocationForm
-            busy={busy}
-            submit="加入"
-            onSubmit={onAdd}
-            onCancel={() => setAdding(false)}
-          />
-        )}
-      </div>
-    </Card>
-  );
-}
-
-/**
- * What is here for the rare occasion, folded until asked for: the whole
- * llama-swap file, and where this install lives. Each is read only once its
- * panel is opened.
- */
-function Advanced() {
-  const { message } = AntApp.useApp();
-  const [open, setOpen] = useState<string[]>([]);
-  const [raw, setRaw] = useState('');
-  const [original, setOriginal] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [paths, setPaths] = useState<MachinePath[] | null>(null);
-  const [units, setUnits] = useState<MachineUnit[]>([]);
-
-  const loadConfig = useCallback(() => {
-    fetchConfig().then((c) => { setRaw(c.raw); setOriginal(c.raw); })
-      .catch((e) => message.error((e as Error).message));
-  }, [message]);
-
-  useEffect(() => {
-    if (open.includes('config') && original === null) loadConfig();
-    if (open.includes('machine') && paths === null) {
-      fetchMachine().then((m) => { setPaths(m.paths); setUnits(m.units); }).catch(() => setPaths([]));
-    }
-  }, [open, original, paths, loadConfig]);
-
-  const onSave = async () => {
-    setSaving(true);
-    try {
-      await saveConfigRaw(raw);
-      setOriginal(raw);
-      message.success('已儲存，llama-swap 已重新載入（原檔備份為 config.yaml.bak）');
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const dirty = original !== null && raw !== original;
-
-  return (
-    <Section title="進階" note="平常用不到；改錯可能讓模型全部載入不了">
-      <Collapse
-        ghost
-        activeKey={open}
-        onChange={(keys) => setOpen(keys as string[])}
-        items={[
-          {
-            key: 'config',
-            label: 'llama-swap 設定檔',
-            extra: open.includes('config') && (
-              <Space size={6} onClick={(e) => e.stopPropagation()}>
-                <Button size="small" disabled={!dirty} onClick={() => setRaw(original ?? '')}>還原</Button>
-                <Button size="small" type="primary" loading={saving} disabled={!dirty} onClick={onSave}>
-                  儲存
-                </Button>
-              </Space>
-            ),
-            children: (
-              <>
-                <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10, lineHeight: 1.7 }}>
-                  「模型」頁與這一頁的修改最後都會寫進這個檔案。儲存後會等 llama-swap 確認：
-                  它不接受的內容會自動還原，不會留在檔案裡。原檔備份為 config.yaml.bak。
-                </Text>
-                <textarea
-                  value={raw}
-                  onChange={(e) => setRaw(e.target.value)}
-                  spellCheck={false}
-                  style={{
-                    width: '100%', height: '52vh', fontFamily: MONO, fontSize: 12, lineHeight: 1.5,
-                    padding: 12, borderRadius: 6, border: `1px solid ${LINE.faint}`,
-                    background: 'transparent', color: 'inherit', resize: 'vertical',
-                  }}
-                />
-              </>
-            ),
-          },
-          {
-            key: 'machine',
-            label: '路徑與服務',
-            children: (
-              <>
-                <Heading note="用環境變數設定，這裡只顯示">路徑</Heading>
-                {(paths ?? []).map((path) => (
-                  <Line
-                    key={path.variable}
-                    label={(
-                      <Space size={6}>
-                        <span>{path.label}</span>
-                        {!path.exists && <Tag color="warning">不存在</Tag>}
-                      </Space>
-                    )}
-                    note={path.path}
-                    right={<Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>{path.variable}</Text>}
-                  />
-                ))}
-                <div style={{ marginTop: 14 }}>
-                  <Heading>systemd 服務</Heading>
-                  {units.map((unit) => (
-                    <Line
-                      key={unit.name}
-                      label={<span style={{ fontFamily: MONO, fontSize: 12 }}>{unit.name.replace(/\.service$/, '')}</span>}
-                      note={unit.note}
-                      right={(
-                        <Tooltip title={unit.since || undefined}>
-                          <Tag color={UNIT_COLOUR[unit.active] ?? 'default'} style={{ marginInlineEnd: 0 }}>
-                            {unit.active === 'active' ? '執行中' : unit.active}
-                          </Tag>
-                        </Tooltip>
-                      )}
-                    />
-                  ))}
-                </div>
-              </>
-            ),
-          },
-        ]}
-      />
-    </Section>
-  );
-}
-
-/**
- * The web search the agent uses, and a way to bring it back. It is a
- * container of its own, and when it stops the chat quietly stops offering
- * search -- so whether it answers is said here, beside the agent's settings,
- * rather than on a page of containers.
- */
-function SearchServiceLine() {
-  const { message } = AntApp.useApp();
-  const [svc, setSvc] = useState<SearchService | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const load = useCallback(() => {
-    fetchSearchService().then(setSvc).catch(() => setSvc(null));
-  }, []);
-  useEffect(load, [load]);
-
-  const restart = async () => {
-    setBusy(true);
-    try {
-      await restartSearch();
-      message.success('已重啟搜尋服務');
-      // SearXNG takes a few seconds to answer after it starts.
-      window.setTimeout(load, 4000);
-    } catch (error) {
-      message.error((error as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (!svc) return null;
-  const tag = svc.available
-    ? <Tag color="green" style={{ marginInlineEnd: 0 }}>可以使用</Tag>
-    : svc.installed
-      ? <Tag color="error" style={{ marginInlineEnd: 0 }}>沒有回應</Tag>
-      : <Tag style={{ marginInlineEnd: 0 }}>未安裝</Tag>;
-  return (
-    <Line
-      label="網頁搜尋"
-      note={svc.installed
-        ? <>SearXNG，讓 Agent 能上網查資料。停掉時對話頁不會提供搜尋工具。{' '}<span style={{ fontFamily: MONO, opacity: 0.7 }}>{svc.unit ?? svc.container}</span></>
-        : '沒有安裝 SearXNG，對話頁不會提供搜尋工具。用 install.sh --searxng 重新安裝即可加上。'}
-      right={(
-        <Space size={8}>
-          <Tooltip title={svc.since || undefined}>{tag}</Tooltip>
-          {svc.installed && (
-            <Button size="small" loading={busy} onClick={() => void restart()}>重啟</Button>
+        <Row
+          label="存放位置"
+          note={`${locations.length} 個位置・${models} 個模型・${bytes(used)}`}
+          right={(
+            <>
+              {trouble > 0 && <Tag color="warning" style={{ marginInlineEnd: 0 }}>{trouble} 個有問題</Tag>}
+              <Button size="small" onClick={() => setManaging(true)}>管理</Button>
+            </>
           )}
-        </Space>
-      )}
-    />
+        />
+
+      <Modal
+        title="存放位置"
+        open={managing}
+        width={760}
+        footer={null}
+        onCancel={() => { setManaging(false); setAdding(false); setEditing(null); }}
+      >
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12, lineHeight: 1.7 }}>
+          {info}
+        </Text>
+        <div className="settings-box" style={{ border: `1px solid ${LINE.faint}`, borderRadius: 6, overflow: 'hidden' }}>
+          {locations.map((loc) => {
+            const blocked = loc.primary || loc.in_use.length > 0;
+            const why = loc.primary
+              ? '主要位置不能移除'
+              : loc.in_use.length > 0
+                ? `還有模型從這裡載入：${loc.in_use.join('、')}`
+                : undefined;
+            if (editing === loc.key) {
+              return (
+                <div key={loc.key} style={{ padding: '12px 16px' }}>
+                  <LocationForm
+                    initialPath={loc.path}
+                    initialLabel={loc.label}
+                    lockPath={loc.primary}
+                    busy={busy}
+                    submit="儲存"
+                    onSubmit={(path, label) => onEdit(loc.key, path, label, loc.primary)}
+                    onCancel={() => setEditing(null)}
+                  />
+                </div>
+              );
+            }
+            return (
+              <Row
+                key={loc.key}
+                label={(
+                  <>
+                    <span>{locationName(loc)}</span>
+                    {loc.primary && <Tag style={{ marginInlineEnd: 0 }}>主要</Tag>}
+                    {loc.default_for.map((f) => (
+                      <Tag key={f} color="blue" style={{ marginInlineEnd: 0 }}>
+                        {f === 'gguf' ? 'GGUF 預設' : 'safetensors 預設'}
+                      </Tag>
+                    ))}
+                    {!loc.exists && <Tag color="error" style={{ marginInlineEnd: 0 }}>找不到資料夾</Tag>}
+                    {loc.exists && !loc.writable && (
+                      <Tag color="warning" style={{ marginInlineEnd: 0 }}>無法寫入</Tag>
+                    )}
+                  </>
+                )}
+                note={[
+                  // Without a label the name already is the path.
+                  loc.label || loc.primary ? loc.path : '',
+                  `${loc.models} 個模型・${bytes(loc.used_bytes)}`,
+                  loc.exists ? `磁碟剩 ${bytes(loc.free_bytes)} / ${bytes(loc.total_bytes)}` : '',
+                ].filter(Boolean).join('　')}
+                right={(
+                  <Space size={2}>
+                    <Tooltip title={loc.primary ? '改名稱' : '改路徑或名稱'}>
+                      <Button size="small" type="text" icon={<EditOutlined />} aria-label="編輯"
+                              disabled={busy || adding || editing !== null}
+                              onClick={() => setEditing(loc.key)} />
+                    </Tooltip>
+                    <Tooltip title={why}>
+                      <Popconfirm
+                        title="移除這個位置？"
+                        description="只是不再使用，資料夾裡的檔案會留著。"
+                        okText="移除"
+                        cancelText="取消"
+                        disabled={blocked}
+                        onConfirm={() => run(() => removeModelLocation(loc.key), '已移除')}
+                      >
+                        <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label="移除"
+                                disabled={blocked || busy} />
+                      </Popconfirm>
+                    </Tooltip>
+                  </Space>
+                )}
+              />
+            );
+          })}
+          {adding ? (
+            <div style={{ padding: '12px 16px' }}>
+              <LocationForm busy={busy} submit="加入" onSubmit={onAdd} onCancel={() => setAdding(false)} />
+            </div>
+          ) : (
+            <Tooltip title={full ? `最多 ${data.max} 個位置` : undefined}>
+              <Button className="settings-add" type="text" icon={<PlusOutlined />}
+                      disabled={full || editing !== null} onClick={() => setAdding(true)}>
+                新增位置
+              </Button>
+            </Tooltip>
+          )}
+        </div>
+      </Modal>
+    </Panel>
   );
 }
 
@@ -555,7 +458,7 @@ function SearchServiceLine() {
  * checked with the Hub before it is kept, and never shown again -- only whose
  * it is and its last four characters.
  */
-function HuggingFaceCard() {
+function HuggingFaceRow() {
   const { message } = AntApp.useApp();
   const [state, setState] = useState<HuggingFaceToken | null>(null);
   const [editing, setEditing] = useState(false);
@@ -589,57 +492,251 @@ function HuggingFaceCard() {
     }
   };
 
-  const form = (
-    <Space.Compact style={{ width: 360, maxWidth: '100%' }}>
-      <Input.Password
-        placeholder="hf_…"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onPressEnter={() => void save()}
-        autoComplete="off"
-      />
-      <Button type="primary" loading={saving} disabled={!draft.trim()} onClick={() => void save()}>
-        儲存
-      </Button>
-    </Space.Compact>
+  const set = !!state?.set;
+  return (
+    <Row
+      label="Hugging Face token"
+      note={state === null
+        ? '讀取中…'
+        : set
+          ? <>屬於 <b>{state.user || '（讀不到帳號）'}</b>・{state.hint}</>
+          : '下載需要授權的模型（Llama、Gemma 等）時用'}
+      detail={(
+        <>
+          到 <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">huggingface.co/settings/tokens</a>{' '}
+          建立一個權限是 Read 的 token。儲存前會先向 Hugging Face 確認它有效，只存在這台機器上，不會再顯示出來。
+          需要授權的模型，還要先到它的模型頁同意使用條款。
+        </>
+      )}
+      right={state !== null && !editing && (
+        set ? (
+          <>
+            <Button size="small" onClick={() => setEditing(true)}>更換</Button>
+            <Popconfirm title="移除 token？" description="需要授權的模型就下載不了了。"
+                        okText="移除" cancelText="取消" onConfirm={() => void remove()}>
+              <Button size="small" danger>移除</Button>
+            </Popconfirm>
+          </>
+        ) : (
+          <Button size="small" onClick={() => setEditing(true)}>設定</Button>
+        )
+      )}
+    >
+      {editing && (
+        <Space wrap>
+          <Space.Compact style={{ width: 360, maxWidth: '100%' }}>
+            <Input.Password
+              placeholder="hf_…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onPressEnter={() => void save()}
+              autoComplete="off"
+              autoFocus
+            />
+            <Button type="primary" loading={saving} disabled={!draft.trim()} onClick={() => void save()}>
+              儲存
+            </Button>
+          </Space.Compact>
+          <Button onClick={() => { setEditing(false); setDraft(''); }}>取消</Button>
+        </Space>
+      )}
+    </Row>
   );
+}
+
+/**
+ * The web search the agent uses, and a way to bring it back. It is a
+ * container of its own, and when it stops the chat quietly stops offering
+ * search -- so whether it answers is said here, beside the agent's settings,
+ * rather than on a page of containers.
+ */
+function SearchServiceRow() {
+  const { message } = AntApp.useApp();
+  const [svc, setSvc] = useState<SearchService | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    fetchSearchService().then(setSvc).catch(() => setSvc(null));
+  }, []);
+  useEffect(load, [load]);
+
+  const restart = async () => {
+    setBusy(true);
+    try {
+      await restartSearch();
+      message.success('已重啟搜尋服務');
+      // SearXNG takes a few seconds to answer after it starts.
+      window.setTimeout(load, 4000);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!svc) return null;
+  const tag = svc.available
+    ? <Tag color="green" style={{ marginInlineEnd: 0 }}>可以使用</Tag>
+    : svc.installed
+      ? <Tag color="error" style={{ marginInlineEnd: 0 }}>沒有回應</Tag>
+      : <Tag style={{ marginInlineEnd: 0 }}>未安裝</Tag>;
+  return (
+    <Row
+      label="網頁搜尋"
+      note={svc.installed ? '讓 Agent 能上網查資料（SearXNG）' : '沒有安裝 SearXNG，對話頁不會提供搜尋'}
+      detail={svc.installed
+        ? <>停掉時對話頁不會提供搜尋工具。服務：<span style={{ fontFamily: MONO }}>{svc.unit ?? svc.container}</span></>
+        : '用 install.sh --searxng 重新安裝即可加上。'}
+      right={(
+        <>
+          <Tooltip title={svc.since || undefined}>{tag}</Tooltip>
+          {svc.installed && (
+            <Button size="small" loading={busy} onClick={() => void restart()}>重啟</Button>
+          )}
+        </>
+      )}
+    />
+  );
+}
+
+/** A plain line in the paths dialog: a name, a value, something on the right. */
+function Item({ label, value, right }: { label: React.ReactNode; value?: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', alignItems: 'center', columnGap: 12, rowGap: 4,
+      padding: '8px 0', borderTop: `1px solid ${LINE.faint}`,
+    }}>
+      <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+        <div style={{ fontSize: 13 }}>{label}</div>
+        {value && <Text type="secondary" style={{ fontSize: 12, fontFamily: MONO, overflowWrap: 'anywhere' }}>{value}</Text>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+/**
+ * What is here for the rare occasion: the whole llama-swap file, and where
+ * this install lives. Each opens in a dialog, and is read only then.
+ */
+function AdvancedGroup() {
+  const { message, modal } = AntApp.useApp();
+  const [open, setOpen] = useState<'config' | 'machine' | null>(null);
+  const [raw, setRaw] = useState('');
+  const [original, setOriginal] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [paths, setPaths] = useState<MachinePath[] | null>(null);
+  const [units, setUnits] = useState<MachineUnit[]>([]);
+
+  // Read afresh each time it opens: the models page writes the same file.
+  const openConfig = () => {
+    setOpen('config');
+    fetchConfig().then((c) => { setRaw(c.raw); setOriginal(c.raw); })
+      .catch((e) => message.error((e as Error).message));
+  };
+  const openMachine = () => {
+    setOpen('machine');
+    fetchMachine().then((m) => { setPaths(m.paths); setUnits(m.units); }).catch(() => setPaths([]));
+  };
+
+  const onSave = async () => {
+    setSaving(true);
+    try {
+      await saveConfigRaw(raw);
+      setOriginal(raw);
+      message.success('已儲存，llama-swap 已重新載入（原檔備份為 config.yaml.bak）');
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = original !== null && raw !== original;
 
   return (
-    <Section title="Hugging Face" note="下載需要授權的模型（Llama、Gemma 等）時用">
-      {state === null ? (
-        <Text type="secondary" style={{ fontSize: 12 }}>讀取中…</Text>
-      ) : state.set && !editing ? (
-        <Line
-          label="Access token"
-          note={<>屬於 <b>{state.user || '（讀不到帳號）'}</b>，{state.hint}。只存在這台機器上，不會再顯示出來。</>}
-          right={(
-            <Space>
-              <Button size="small" onClick={() => setEditing(true)}>更換</Button>
-              <Popconfirm title="移除 token？" description="需要授權的模型就下載不了了。"
-                          okText="移除" cancelText="取消" onConfirm={() => void remove()}>
-                <Button size="small" danger>移除</Button>
-              </Popconfirm>
-            </Space>
-          )}
+    <Panel title="進階" info="平常用不到的東西。">
+      <Row
+        label="llama-swap 設定檔"
+        note="所有模型設定最後都寫進這裡；改錯可能讓模型全部載入不了"
+        detail="「模型」頁與這一頁的修改最後都會寫進這個檔案。儲存後會等 llama-swap 確認：它不接受的內容會自動還原，不會留在檔案裡。原檔備份為 config.yaml.bak。"
+        right={<Button size="small" onClick={openConfig}>編輯</Button>}
+      />
+      <Row
+        label="路徑與服務"
+        note="這次安裝放在哪裡、跑著哪些服務"
+        detail="路徑由環境變數設定，這裡只顯示。"
+        right={<Button size="small" onClick={openMachine}>查看</Button>}
+      />
+
+      <Modal
+        title="llama-swap 設定檔"
+        open={open === 'config'}
+        width={960}
+        onCancel={() => {
+          if (!dirty) { setOpen(null); return; }
+          modal.confirm({
+            title: '還沒儲存，確定關閉？',
+            content: '這次的修改會不見。',
+            okText: '關閉', cancelText: '繼續編輯', okButtonProps: { danger: true },
+            onOk: () => { setRaw(original ?? ''); setOpen(null); },
+          });
+        }}
+        footer={(
+          <Space>
+            <Button disabled={!dirty} onClick={() => setRaw(original ?? '')}>還原</Button>
+            <Button type="primary" loading={saving} disabled={!dirty} onClick={onSave}>儲存</Button>
+          </Space>
+        )}
+      >
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10, lineHeight: 1.7 }}>
+          儲存後會等 llama-swap 確認：它不接受的內容會自動還原，不會留在檔案裡。原檔備份為 config.yaml.bak。
+        </Text>
+        <textarea
+          value={original === null ? '讀取中…' : raw}
+          readOnly={original === null}
+          onChange={(e) => setRaw(e.target.value)}
+          spellCheck={false}
+          style={{
+            width: '100%', height: '60vh', fontFamily: MONO, fontSize: 12, lineHeight: 1.5,
+            padding: 12, borderRadius: 6, border: `1px solid ${LINE.faint}`,
+            background: SURFACE.page, color: 'inherit', resize: 'vertical',
+          }}
         />
-      ) : (
-        <Line
-          label="Access token"
-          note={(
-            <>
-              到 <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer">huggingface.co/settings/tokens</a> 建立一個
-              權限是 Read 的 token 貼在這裡，儲存前會先向 Hugging Face 確認它有效。需要授權的模型，還要先到它的模型頁按同意使用條款。
-            </>
-          )}
-          right={(
-            <Space>
-              {form}
-              {editing && <Button onClick={() => { setEditing(false); setDraft(''); }}>取消</Button>}
-            </Space>
-          )}
-        />
-      )}
-    </Section>
+      </Modal>
+
+      <Modal
+        title="路徑與服務"
+        open={open === 'machine'}
+        width={720}
+        footer={null}
+        onCancel={() => setOpen(null)}
+      >
+        {paths === null && <Text type="secondary">讀取中…</Text>}
+        {(paths ?? []).map((path) => (
+          <Item
+            key={path.variable}
+            label={<Space size={6}>{path.label}{!path.exists && <Tag color="warning">不存在</Tag>}</Space>}
+            value={path.path}
+            right={<Text type="secondary" style={{ fontFamily: MONO, fontSize: 11 }}>{path.variable}</Text>}
+          />
+        ))}
+        {units.map((unit) => (
+          <Item
+            key={unit.name}
+            label={<span style={{ fontFamily: MONO, fontSize: 12 }}>{unit.name.replace(/\.service$/, '')}</span>}
+            value={unit.note}
+            right={(
+              <Tooltip title={unit.since || undefined}>
+                <Tag color={UNIT_COLOUR[unit.active] ?? 'default'} style={{ marginInlineEnd: 0 }}>
+                  {unit.active === 'active' ? '執行中' : unit.active}
+                </Tag>
+              </Tooltip>
+            )}
+          />
+        ))}
+      </Modal>
+    </Panel>
   );
 }
 
@@ -663,21 +760,37 @@ export default function Settings() {
   }
 
   const byName = new Map((settings ?? []).map((s) => [s.name, s]));
+  const rows = (...names: string[]) => (settings === null
+    ? <Reading />
+    : names
+      .map((name) => byName.get(name))
+      .filter((s): s is Setting => !!s)
+      .map((s) => <SettingRow key={s.name} setting={s} onSaved={setSettings} />));
 
+  // Filled row by row. The order pairs cards of like height -- the long
+  // model locations beside chat -- so a row's shorter card is not left mostly
+  // empty; one column reads in the order somebody setting up meets them.
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%', maxWidth: 1080 }}>
-      <ModelLocationsCard />
-      <HuggingFaceCard />
-      {SECTIONS.map((section) => (
-        <Section key={section.title} title={section.title} note={section.note}>
-          {settings === null && <Text type="secondary" style={{ fontSize: 12 }}>讀取中…</Text>}
-          {section.names.map((name) => byName.get(name)).filter((s): s is Setting => !!s).map((s) => (
-            <SettingRow key={s.name} setting={s} onSaved={setSettings} />
-          ))}
-          {section.title === '對話' && <SearchServiceLine />}
-        </Section>
-      ))}
-      <Advanced />
-    </Space>
+    <div style={{
+      display: 'grid', gap: 16, alignItems: 'stretch', paddingBottom: 24,
+      gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 440px), 1fr))',
+    }}>
+      <ModelLocationsGroup />
+      <Panel title="對話">
+        {rows('agent_max_steps', 'vision_cache')}
+        {settings !== null && <SearchServiceRow />}
+      </Panel>
+      <Panel title="模型目錄">
+        <HuggingFaceRow />
+        {rows('estimate_depth')}
+      </Panel>
+      <Panel title="顯示卡" info="LLM 與 ComfyUI 共用顯示卡時，用來判斷載入模型前要不要先停掉 ComfyUI。">
+        {rows('vram_margin_gib', 'comfyui_idle_gib')}
+      </Panel>
+      <Panel title="紀錄保留" info="伺服器記住多少，給日誌頁與顯示卡頁往回看。">
+        {rows('log_lines', 'gpu_history_hours')}
+      </Panel>
+      <AdvancedGroup />
+    </div>
   );
 }

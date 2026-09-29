@@ -7,6 +7,7 @@ type Setting struct {
 	Value   int64  `json:"value"`
 	Label   string `json:"label"`
 	Note    string `json:"note"`
+	Detail  string `json:"detail,omitempty"`
 	Default int64  `json:"default"`
 	Minimum int64  `json:"minimum"`
 	Maximum int64  `json:"maximum"`
