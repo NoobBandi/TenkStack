@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Layout, Menu, Tooltip, Typography } from 'antd';
+import { Badge, Layout, Menu, Tooltip, Typography } from 'antd';
 import {
   ApiOutlined, AppstoreOutlined, CloudDownloadOutlined,
   DashboardOutlined, DeploymentUnitOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined,
@@ -182,11 +182,29 @@ export default function Sidebar({
                 {group.label.toUpperCase()}
               </span>
             ),
-            children: group.items.map((item) => ({
-              key: item.key,
-              icon: item.icon,
-              label: <Link to={item.key}>{item.label}</Link>,
-            })),
+            children: group.items.map((item) => {
+              // A release newer than this one is marked on 關於 itself, where
+              // it is updated, as well as beside the version at the foot.
+              const mark = item.key === '/about' && newer;
+              return {
+                key: item.key,
+                icon: mark && collapsed
+                  ? <Badge dot color={ACCENT.warn} offset={[2, 2]}>{item.icon}</Badge>
+                  : item.icon,
+                label: (
+                  <Link to={item.key}>
+                    {item.label}
+                    {mark && (
+                      <Badge
+                        count="新版" size="small" color={ACCENT.warn}
+                        title={`有新版 v${newer}`}
+                        style={{ marginInlineStart: 8, boxShadow: 'none' }}
+                      />
+                    )}
+                  </Link>
+                ),
+              };
+            }),
           }))}
         />
       </div>
