@@ -44,6 +44,7 @@ import (
 	"github.com/NoobBandi/TenkStack/server-go/internal/release"
 	"github.com/NoobBandi/TenkStack/server-go/internal/search"
 	"github.com/NoobBandi/TenkStack/server-go/internal/settings"
+	"github.com/NoobBandi/TenkStack/server-go/internal/setup"
 	"github.com/NoobBandi/TenkStack/server-go/internal/store"
 	"github.com/NoobBandi/TenkStack/server-go/internal/system"
 	"github.com/NoobBandi/TenkStack/server-go/internal/users"
@@ -56,6 +57,16 @@ import (
 var version = "dev"
 
 func main() {
+	// The installer's two helpers share this binary, so install.sh has one
+	// download to make; they touch nothing the console owns.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "setup":
+			os.Exit(setup.MainSetup(os.Args[2:]))
+		case "provision":
+			os.Exit(setup.MainProvision(os.Args[2:]))
+		}
+	}
 	listen := flag.String("listen", envOr("CONSOLE_LISTEN", "127.0.0.1:8071"), "address to serve on")
 	webDist := flag.String("web", os.Getenv("CONSOLE_WEB_DIST"), "serve the frontend from this directory instead of the embedded copy")
 	showVersion := flag.Bool("version", false, "print the version and exit")

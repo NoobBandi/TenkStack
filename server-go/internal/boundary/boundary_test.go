@@ -61,6 +61,9 @@ var allowed = map[string][]string{
 	"versions":         {"api"},
 	"release":          {"api"},
 	"quant":            {"api", "vendors", "providers"},
+	// The installer's screens and its provisioning; it talks to a running
+	// console over HTTP, never through the console's own packages.
+	"setup": {"providers"},
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "locations", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",

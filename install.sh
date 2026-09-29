@@ -68,6 +68,15 @@ WANT_TLS=""
 SEARXNG_PORT="${CONSOLE_SEARXNG_PORT:-8090}"
 ASSUME_YES=false
 DRY_RUN=false
+# The terminal UI (`tenkstack setup`) asks the questions when it can: a
+# terminal on both ends, and a binary to run it. --no-tui keeps the
+# plain questions below.
+NO_TUI=false
+# Engines and ComfyUI cards to install once the console is up, as
+# `tenkstack provision` takes them: comma-separated registry keys and PCI
+# addresses. Empty unless chosen on the setup screen or given as flags.
+ENGINES=""
+COMFY_CARDS=""
 
 # How the console is reached from outside the machine. Caddy is the only
 # thing that listens beyond loopback, and this decides what it does with TLS:
@@ -100,6 +109,34 @@ MISSING_GROUPS=()
 SUDO_NEEDED=false
 
 # --------------------------------------------------------------------------
+# Language
+#
+# Every message comes in Traditional Chinese and English, side by side at
+# the place it is printed: `L "中文" "English"`. The language is --lang,
+# then the choice on the first setup screen, then the locale.
+# --------------------------------------------------------------------------
+
+UI_LANG=""
+__prev=""
+for __a in "$@"; do
+  case $__prev in --lang) UI_LANG=$__a ;; esac
+  __prev=$__a
+done
+unset __a __prev
+lang_of() {
+  case ${1,,} in
+    zh|zh-tw|zh_tw*|zh-hk|zh_hk*|zh-hant*|zh_hant*) echo zh-TW ;;
+    en|en-*|en_*) echo en ;;
+  esac
+}
+UI_LANG=$(lang_of "$UI_LANG")
+LANG_GIVEN=false
+if [[ -n $UI_LANG ]]; then LANG_GIVEN=true; else UI_LANG=$(lang_of "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"); fi
+UI_LANG=${UI_LANG:-en}
+
+L() { if [[ $UI_LANG == en ]]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
+# --------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------
 
@@ -125,13 +162,13 @@ die() {
   exit 1
 }
 
-trap 'die "安裝在第 $LINENO 行中止了。" "上面最後一個 ==> 步驟是失敗的地方；修好之後重跑這個腳本，已經完成的部分會自動跳過。"' ERR
+trap 'die "$(L "安裝在第 $LINENO 行中止了。" "The install stopped at line $LINENO.")" "$(L "上面最後一個 ==> 步驟是失敗的地方；修好之後重跑這個腳本，已經完成的部分會自動跳過。" "The last ==> step above is where it failed; fix that and run this script again, and whatever already finished is skipped.")"' ERR
 
 # `run` is the only way anything happens, so --dry-run has one place to be
 # honoured rather than a check at every call site.
 run() {
   if $DRY_RUN; then
-    printf '  %s會執行:%s %s\n' "$C_DIM" "$C_OFF" "$*"
+    printf '  %s%s:%s %s\n' "$C_DIM" "$(L 會執行 "would run")" "$C_OFF" "$*"
     return 0
   fi
   "$@"
@@ -139,7 +176,7 @@ run() {
 
 as_root() {
   if $DRY_RUN; then
-    printf '  %s會執行（sudo）:%s %s\n' "$C_DIM" "$C_OFF" "$*"
+    printf '  %s%s:%s %s\n' "$C_DIM" "$(L "會執行（sudo）" "would run (sudo)")" "$C_OFF" "$*"
     return 0
   fi
   sudo "$@"
@@ -158,7 +195,7 @@ ask() {
   local __var=$1 prompt=$2 default=$3 answer=""
   if $ASSUME_YES || [[ ! -t 0 ]]; then
     printf -v "$__var" '%s' "$default"
-    skip "$prompt$default（未互動）"
+    skip "$prompt$default$(L "（未互動）" " (not interactive)")"
     return
   fi
   read -r -p "  $prompt[$default] " answer || true
@@ -168,10 +205,10 @@ ask() {
 ask_yn() {
   # ask_yn VAR "prompt" "y|n" -- honours an answer already set by a flag
   local __var=$1 prompt=$2 default=$3 answer=""
-  if [[ -n "${!__var}" ]]; then skip "$prompt${!__var}（由參數決定）"; return; fi
+  if [[ -n "${!__var}" ]]; then skip "$prompt${!__var}$(L "（由參數決定）" " (set by a flag)")"; return; fi
   if $ASSUME_YES || [[ ! -t 0 ]]; then
     printf -v "$__var" '%s' "$default"
-    skip "$prompt$default（未互動）"
+    skip "$prompt$default$(L "（未互動）" " (not interactive)")"
     return
   fi
   local hint="[y/N]"
@@ -186,9 +223,35 @@ ask_yn() {
 # --------------------------------------------------------------------------
 
 usage() {
-  cat <<EOF
+  if [[ $UI_LANG == en ]]; then
+    cat <<EOF
 TenkStack installer
 
+  --lang en|zh-TW     language of the installer (default: asked first, else the locale)
+  --dir PATH          install directory (default $ROOT_DEFAULT)
+  --source            build from source instead of downloading a release (installs Go and Node)
+  --code PATH         where the source goes with --source (default $CODE_DEFAULT)
+  --tls internal      HTTPS with Caddy's own CA (an isolated LAN; each device trusts it once)
+  --tls CERT,KEY      HTTPS with your own certificate
+  --domain NAME       a public domain, certificate from Let's Encrypt (80/443 reachable)
+                      none of the three = plain HTTP on :$CONSOLE_TLS_PORT, for a proxy in front
+  --searxng           install SearXNG (Docker, loopback :$SEARXNG_PORT: web search for the models)
+  --no-searxng        do not
+  --engines LIST      inference engines to install once the console is up: llamacpp,vllm,sglang
+  --comfyui LIST      PCI addresses of the cards to run ComfyUI on, e.g. 0000:0c:00.0
+  --no-tui            ask plain questions instead of the setup screens
+  --yes               take every default, ask nothing
+  --dry-run           print what would be done, do none of it
+  --help
+
+Environment: TENKSTACK_REPO, TENKSTACK_REF, CONSOLE_PORT, CONSOLE_TLS_PORT, CONSOLE_API_PORT
+EOF
+    return
+  fi
+  cat <<EOF
+TenkStack 安裝程式
+
+  --lang en|zh-TW     安裝程式的語言（預設：一開始先問，否則照系統語系）
   --dir PATH          安裝目錄（預設 $ROOT_DEFAULT）
   --source            從原始碼 build，不下載 release（會裝 Go 與 Node）
   --code PATH         --source 時程式碼放哪（預設 $CODE_DEFAULT）
@@ -198,7 +261,9 @@ TenkStack installer
                       三個都不給 = 純 HTTP :$CONSOLE_TLS_PORT，外面已有反向代理時選這個
   --searxng           裝 SearXNG（Docker，loopback :$SEARXNG_PORT，讓模型能上網搜尋）
   --no-searxng        不裝
-                      ComfyUI 不在這裡裝：它是按顯示卡裝的，主控台的顯示卡頁會做
+  --engines LIST      主控台啟動後要裝的推論引擎：llamacpp,vllm,sglang
+  --comfyui LIST      要跑 ComfyUI 的顯示卡 PCI 位址，例如 0000:0c:00.0
+  --no-tui            用一般問答，不用安裝畫面
   --yes               全部用預設值，完全不問
   --dry-run           印出會做什麼，不執行任何動作
   --help
@@ -209,25 +274,27 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --dir)         ROOT=${2:?--dir 需要一個路徑}; shift 2 ;;
-    --code)        CODE=${2:?--code 需要一個路徑}; shift 2 ;;
+    --lang)        shift 2 ;;
+    --dir)         ROOT=${2:?$(L "--dir 需要一個路徑" "--dir needs a path")}; shift 2 ;;
+    --code)        CODE=${2:?$(L "--code 需要一個路徑" "--code needs a path")}; shift 2 ;;
     --source)      FROM_SOURCE=true; shift ;;
     --searxng)     WANT_SEARXNG=y; shift ;;
     --no-searxng)  WANT_SEARXNG=n; shift ;;
-    --comfyui|--no-comfyui)
-      die "ComfyUI 不由這個腳本裝。" "它是按顯示卡裝的；主控台裝好後到「顯示卡」頁開啟。" ;;
+    --engines)     ENGINES=${2?$(L "--engines 需要引擎清單" "--engines needs a list of engines")}; shift 2 ;;
+    --comfyui)     COMFY_CARDS=${2?$(L "--comfyui 需要顯示卡位址" "--comfyui needs card addresses")}; shift 2 ;;
+    --no-tui)      NO_TUI=true; shift ;;
     --tls)
-      case "${2:?--tls 需要 internal 或 CERT,KEY}" in
+      case "${2:?$(L "--tls 需要 internal 或 CERT,KEY" "--tls needs internal or CERT,KEY")}" in
         internal) TLS_MODE=internal ;;
         *,*)      TLS_MODE=cert; TLS_CERT=${2%%,*}; TLS_KEY=${2#*,} ;;
-        *)        die "不認得的 --tls 值：$2" "用 internal，或 憑證檔,金鑰檔。" ;;
+        *)        die "$(L "不認得的 --tls 值：$2" "Unknown --tls value: $2")" "$(L "用 internal，或 憑證檔,金鑰檔。" "Use internal, or cert-file,key-file.")" ;;
       esac
       shift 2 ;;
-    --domain)      DOMAIN=${2:?--domain 需要一個網域名稱}; TLS_MODE=domain; shift 2 ;;
+    --domain)      DOMAIN=${2:?$(L "--domain 需要一個網域名稱" "--domain needs a domain name")}; TLS_MODE=domain; shift 2 ;;
     --yes|-y)      ASSUME_YES=true; shift ;;
     --dry-run)     DRY_RUN=true; shift ;;
     --help|-h)     usage; exit 0 ;;
-    *)             die "不認得的參數：$1" "用 --help 看可用的參數。" ;;
+    *)             die "$(L "不認得的參數：$1" "Unknown option: $1")" "$(L "用 --help 看可用的參數。" "See --help for the options.")" ;;
   esac
 done
 
@@ -236,20 +303,20 @@ done
 # --------------------------------------------------------------------------
 
 survey_os() {
-  [[ -r /etc/os-release ]] || die "讀不到 /etc/os-release。" "這個腳本只支援 systemd 的 Linux 發行版。"
+  [[ -r /etc/os-release ]] || die "$(L "讀不到 /etc/os-release。" "Cannot read /etc/os-release.")" "$(L "這個腳本只支援 systemd 的 Linux 發行版。" "This script supports systemd Linux distributions only.")"
   # shellcheck disable=SC1091
   . /etc/os-release
   OS_ID="${ID:-unknown}"; OS_VER="${VERSION_ID:-}"; OS_PRETTY="${PRETTY_NAME:-$OS_ID}"
-  ok "$OS_PRETTY，核心 $(uname -r)"
+  ok "$OS_PRETTY$(L "，核心 " ", kernel ")$(uname -r)"
 
   case "$OS_ID" in
     ubuntu|debian|pop|linuxmint) : ;;
-    *) warn "沒有在 $OS_ID 上測過。套件安裝那幾步可能要你自己來。" ;;
+    *) warn "$(L "沒有在 $OS_ID 上測過。套件安裝那幾步可能要你自己來。" "Not tested on $OS_ID. The package steps may need doing by hand.")" ;;
   esac
 
-  if [[ $(id -u) -eq 0 ]]; then die "請不要用 root 跑這個腳本。" \
-      "主控台是 systemd user service，用一般帳號跑。需要 sudo 的三個地方會分別提示。"; fi
-  command -v systemctl >/dev/null || die "找不到 systemctl。" "這個腳本需要 systemd。"
+  if [[ $(id -u) -eq 0 ]]; then die "$(L "請不要用 root 跑這個腳本。" "Do not run this script as root.")" \
+      "$(L "主控台是 systemd user service，用一般帳號跑。需要 sudo 的三個地方會分別提示。" "The console is a systemd user service run by an ordinary account. The few steps that need sudo say so.")"; fi
+  command -v systemctl >/dev/null || die "$(L "找不到 systemctl。" "systemctl was not found.")" "$(L "這個腳本需要 systemd。" "This script needs systemd.")"
 }
 
 # Vendors are read from PCI IDs, which need no driver -- the whole point is to
@@ -257,7 +324,7 @@ survey_os() {
 survey_cards() {
   local ids
   ids=$(lspci -nn 2>/dev/null | grep -iE 'vga|display|3d' || true)
-  if [[ -z $ids ]]; then warn "看不到任何顯示卡。CPU 也能跑，只是很慢。"; return; fi
+  if [[ -z $ids ]]; then warn "$(L "看不到任何顯示卡。CPU 也能跑，只是很慢。" "No graphics card found. The CPU can run models too, slowly.")"; return; fi
 
   local seen=""
   while IFS= read -r line; do
@@ -274,9 +341,9 @@ survey_cards() {
 
   for v in "${VENDORS[@]}"; do
     local n; n=$(grep -ci "" <<<"$(grep -iE 'vga|display|3d' <<<"$ids")" || true)
-    ok "偵測到 $v 顯示卡（$n 張顯示裝置）"
+    ok "$(L "偵測到 $v 顯示卡（$n 張顯示裝置）" "Found $v graphics ($n display devices)")"
   done
-  if [[ ${#VENDORS[@]} -eq 0 ]]; then warn "顯示卡的廠商認不出來，會照純 CPU 安裝。"; fi
+  if [[ ${#VENDORS[@]} -eq 0 ]]; then warn "$(L "顯示卡的廠商認不出來，會照純 CPU 安裝。" "The graphics vendor is not one this knows; installing for the CPU.")"; fi
 }
 
 # Which of the three needs anything installed at all. On a current kernel the
@@ -295,26 +362,26 @@ survey_drivers() {
         local mod=xe
         if [[ $v == amd ]]; then mod=amdgpu; fi
         if grep -qE "^($mod|i915)\b" <<<"$mods"; then
-          ok "$v：核心模組已載入，沒有驅動要裝"
+          ok "$(L "$v：核心模組已載入，沒有驅動要裝" "$v: kernel module loaded, no driver to install")"
         else
-          warn "$v：核心模組沒有載入。$mod 在主線核心裡，通常代表韌體或核心參數的問題。"
+          warn "$(L "$v：核心模組沒有載入。$mod 在主線核心裡，通常代表韌體或核心參數的問題。" "$v: kernel module not loaded. $mod is in the mainline kernel, so this usually means firmware or a kernel parameter.")"
         fi
-        if [[ ! -e /dev/dri ]]; then warn "沒有 /dev/dri，容器拿不到這張卡。"; fi
+        if [[ ! -e /dev/dri ]]; then warn "$(L "沒有 /dev/dri，容器拿不到這張卡。" "No /dev/dri: containers cannot reach this card.")"; fi
         ;;
       nvidia)
         if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
-          ok "nvidia：驅動已就緒"
+          ok "$(L "nvidia：驅動已就緒" "nvidia: driver ready")"
         else
           MISSING_PKGS+=("nvidia-driver")
           NEEDS_REBOOT=true
-          REBOOT_WHY="剛安裝 NVIDIA 驅動"
+          REBOOT_WHY="$(L "剛安裝 NVIDIA 驅動" "the NVIDIA driver was just installed")"
           if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
-            REBOOT_WHY="$REBOOT_WHY（Secure Boot 開著，開機時會要求輸入 MOK 密碼）"
+            REBOOT_WHY="$REBOOT_WHY$(L "（Secure Boot 開著，開機時會要求輸入 MOK 密碼）" " (Secure Boot is on: the boot will ask for the MOK password)")"
           fi
-          warn "nvidia：需要安裝驅動，而且會需要重新開機一次"
+          warn "$(L "nvidia：需要安裝驅動，而且會需要重新開機一次" "nvidia: the driver needs installing, and then one reboot")"
         fi
         if docker info 2>/dev/null | grep -q nvidia; then
-          ok "nvidia-container-toolkit 已設定"
+          ok "$(L "nvidia-container-toolkit 已設定" "nvidia-container-toolkit is set up")"
         else
           MISSING_PKGS+=("nvidia-container-toolkit")
         fi
@@ -326,30 +393,30 @@ survey_drivers() {
 survey_deps() {
   local need=(git curl docker)
   for t in "${need[@]}"; do
-    if command -v "$t" >/dev/null; then ok "$t"; else MISSING_PKGS+=("$t"); warn "缺 $t"; fi
+    if command -v "$t" >/dev/null; then ok "$t"; else MISSING_PKGS+=("$t"); warn "$(L "缺 $t" "missing $t")"; fi
   done
   # uv and node are installed from their own upstreams rather than apt: the
   # distro versions are routinely too old, and this needs 3.12+ and Node 24+.
   # Go and Node are only for --source; a release install needs neither.
   if $FROM_SOURCE; then
-    command -v go   >/dev/null && ok "go $(go version | awk '{print $3}')" || { MISSING_PKGS+=("go");   warn "缺 go（會裝到 $ROOT/go）"; }
-    command -v node >/dev/null && ok "node $(node --version)" || { MISSING_PKGS+=("node"); warn "缺 node"; }
+    command -v go   >/dev/null && ok "go $(go version | awk '{print $3}')" || { MISSING_PKGS+=("go");   warn "$(L "缺 go（會裝到 $ROOT/go）" "missing go (goes to $ROOT/go)")"; }
+    command -v node >/dev/null && ok "node $(node --version)" || { MISSING_PKGS+=("node"); warn "$(L "缺 node" "missing node")"; }
   fi
   command -v caddy >/dev/null && ok "caddy" || MISSING_PKGS+=("caddy")
 
   for g in docker render; do
     getent group "$g" >/dev/null || continue
     if id -nG | tr ' ' '\n' | grep -qx "$g"; then
-      ok "已在 $g 群組"
+      ok "$(L "已在 $g 群組" "already in group $g")"
     else
       MISSING_GROUPS+=("$g")
-      warn "不在 $g 群組"
+      warn "$(L "不在 $g 群組" "not in group $g")"
     fi
   done
 
   local free; free=$(df -BG --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
   if [[ -n $free && $free -lt 40 ]]; then
-    warn "家目錄只剩 ${free}G，模型權重通常要幾十 G。"
+    warn "$(L "家目錄只剩 ${free}G，模型權重通常要幾十 G。" "Only ${free}G free in the home directory; model weights usually take tens of GB.")"
   fi
 
   local listening; listening=$(ss -ltn 2>/dev/null || true)
@@ -359,9 +426,9 @@ survey_deps() {
       # --dry-run on a machine that already runs this stack would otherwise
       # stop before printing the plan it was asked for.
       if $DRY_RUN; then
-        warn "連接埠 $p 已經被佔用（dry-run，繼續）"
+        warn "$(L "連接埠 $p 已經被佔用（dry-run，繼續）" "Port $p is in use (dry run, carrying on)")"
       else
-        die "連接埠 $p 已經被佔用。" "換一個（CONSOLE_PORT=…）或把佔用它的東西停掉。"
+        die "$(L "連接埠 $p 已經被佔用。" "Port $p is in use.")" "$(L "換一個（CONSOLE_PORT=…）或把佔用它的東西停掉。" "Pick another (CONSOLE_PORT=…) or stop what holds it.")"
       fi
     fi
   done
@@ -377,16 +444,16 @@ survey_deps() {
 check_choices() {
   case $TLS_MODE in
     cert)
-      [[ -r $TLS_CERT ]] || die "讀不到憑證檔 $TLS_CERT" "--tls 要的是 憑證檔,金鑰檔。"
-      [[ -r $TLS_KEY  ]] || die "讀不到金鑰檔 $TLS_KEY"  "--tls 要的是 憑證檔,金鑰檔。"
-      ok "憑證 $TLS_CERT" ;;
+      [[ -r $TLS_CERT ]] || die "$(L "讀不到憑證檔 $TLS_CERT" "Cannot read the certificate $TLS_CERT")" "$(L "--tls 要的是 憑證檔,金鑰檔。" "--tls takes cert-file,key-file.")"
+      [[ -r $TLS_KEY  ]] || die "$(L "讀不到金鑰檔 $TLS_KEY" "Cannot read the key $TLS_KEY")"  "$(L "--tls 要的是 憑證檔,金鑰檔。" "--tls takes cert-file,key-file.")"
+      ok "$(L "憑證" "certificate") $TLS_CERT" ;;
     domain)
       # Binding :80 and :443 without root needs a capability on the binary,
       # and that needs setcap. Everything else Caddy does runs unprivileged.
       command -v setcap >/dev/null || MISSING_PKGS+=("libcap2-bin")
-      ok "網域 $DOMAIN（Let's Encrypt；80/443 要能從外面連到這台）" ;;
-    internal) ok "HTTPS，Caddy 自簽 CA（每台裝置要信任一次）" ;;
-    "")       ok "純 HTTP（外層若有反向代理，由它負責 TLS）" ;;
+      ok "$(L "網域 $DOMAIN（Let's Encrypt；80/443 要能從外面連到這台）" "domain $DOMAIN (Let's Encrypt; 80/443 must reach this machine from outside)")" ;;
+    internal) ok "$(L "HTTPS，Caddy 自簽 CA（每台裝置要信任一次）" "HTTPS with Caddy's own CA (each device trusts it once)")" ;;
+    "")       ok "$(L "純 HTTP（外層若有反向代理，由它負責 TLS）" "plain HTTP (a proxy in front, if any, does TLS)")" ;;
   esac
 
   local listening; listening=$(ss -ltn 2>/dev/null || true)
@@ -395,46 +462,49 @@ check_choices() {
   if [[ $WANT_SEARXNG == y ]]; then extra+=("$SEARXNG_PORT"); fi
   for p in "${extra[@]}"; do
     if grep -q ":$p " <<<"$listening"; then
-      if $DRY_RUN; then warn "連接埠 $p 已經被佔用（dry-run，繼續）"
-      else die "連接埠 $p 已經被佔用。" "換一個，或把佔用它的東西停掉。"; fi
+      if $DRY_RUN; then warn "$(L "連接埠 $p 已經被佔用（dry-run，繼續）" "Port $p is in use (dry run, carrying on)")"
+      else die "$(L "連接埠 $p 已經被佔用。" "Port $p is in use.")" "$(L "換一個，或把佔用它的東西停掉。" "Pick another, or stop what holds it.")"; fi
     fi
   done
 }
 
 show_plan() {
-  step "計畫"
-  say "  安裝目錄      $ROOT"
-  if $FROM_SOURCE; then say "  程式碼        $CODE（--source，本機 build）"; else say "  主控台        $RELEASE_URL 的 release binary"; fi
-  say "  顯示卡        ${VENDORS[*]:-（無）}"
-  say "  SearXNG       $( [[ $WANT_SEARXNG == y ]] && echo "裝，loopback :$SEARXNG_PORT" || echo 不裝 )"
+  step "$(L "計畫" "Plan")"
+  local host; host=$(L "<這台>" "<this-machine>")
+  say "  $(L "安裝目錄      " "Directory     ")$ROOT"
+  if $FROM_SOURCE; then say "  $(L "程式碼        " "Source        ")$CODE$(L "（--source，本機 build）" " (--source, built here)")"; else say "  $(L "主控台        " "Console       ")$(L "$RELEASE_URL 的 release binary" "release binary from $RELEASE_URL")"; fi
+  say "  $(L "顯示卡        " "Graphics      ")${VENDORS[*]:-$(L "（無）" "(none)")}"
+  say "  $(L "推論引擎      " "Engines       ")${ENGINES:-$(L "（不裝，之後在「推論引擎」頁裝）" "(none now; the Engines page installs them later)")}"
+  say "  ComfyUI       ${COMFY_CARDS:-$(L "（不裝）" "(none)")}"
+  say "  SearXNG       $( [[ $WANT_SEARXNG == y ]] && L "裝，loopback :$SEARXNG_PORT" "yes, loopback :$SEARXNG_PORT" || L 不裝 no )"
   case $TLS_MODE in
-    "")       say "  對外          http://<這台>:$CONSOLE_TLS_PORT（無 TLS）" ;;
-    internal) say "  對外          https://<這台>:$CONSOLE_TLS_PORT（自簽 CA，會跑 caddy trust）" ;;
-    cert)     say "  對外          https://<這台>:$CONSOLE_TLS_PORT（$TLS_CERT）" ;;
-    domain)   say "  對外          https://$DOMAIN（Let's Encrypt，會 setcap caddy）" ;;
+    "")       say "  $(L "對外          " "Access        ")http://$host:$CONSOLE_TLS_PORT$(L "（無 TLS）" " (no TLS)")" ;;
+    internal) say "  $(L "對外          " "Access        ")https://$host:$CONSOLE_TLS_PORT$(L "（自簽 CA，會跑 caddy trust）" " (own CA; runs caddy trust)")" ;;
+    cert)     say "  $(L "對外          " "Access        ")https://$host:$CONSOLE_TLS_PORT（$TLS_CERT）" ;;
+    domain)   say "  $(L "對外          " "Access        ")https://$DOMAIN$(L "（Let's Encrypt，會 setcap caddy）" " (Let's Encrypt; runs setcap on caddy)")" ;;
   esac
-  if [[ ${#MISSING_PKGS[@]}   -gt 0 ]]; then say "  會安裝        ${MISSING_PKGS[*]}"; fi
-  if [[ ${#MISSING_GROUPS[@]} -gt 0 ]]; then say "  會加入群組    ${MISSING_GROUPS[*]}"; fi
+  if [[ ${#MISSING_PKGS[@]}   -gt 0 ]]; then say "  $(L "會安裝        " "Installs      ")${MISSING_PKGS[*]}"; fi
+  if [[ ${#MISSING_GROUPS[@]} -gt 0 ]]; then say "  $(L "會加入群組    " "Joins groups  ")${MISSING_GROUPS[*]}"; fi
   if [[ $TLS_MODE == internal || $TLS_MODE == domain ]]; then SUDO_NEEDED=true; fi
   if $NEEDS_REBOOT; then
     say ""
-    warn "這次安裝結束後需要重新開機一次：$REBOOT_WHY"
-    warn "重開機是最後一步。開機後服務會自己啟動，不用再跑這個腳本。"
+    warn "$(L "這次安裝結束後需要重新開機一次：$REBOOT_WHY" "One reboot is needed when this finishes: $REBOOT_WHY")"
+    warn "$(L "重開機是最後一步。開機後服務會自己啟動，不用再跑這個腳本。" "The reboot is the last step. The services start on their own after it; this script need not run again.")"
   else
     say ""
-    ok "不需要重新開機"
+    ok "$(L "不需要重新開機" "No reboot needed")"
   fi
 
   if [[ ${#MISSING_PKGS[@]} -gt 0 || ${#MISSING_GROUPS[@]} -gt 0 ]]; then
     SUDO_NEEDED=true
-    say "  ${C_DIM}上面的安裝與群組變更會用到 sudo，其他步驟都以 $USER 身分執行。${C_OFF}"
+    say "  ${C_DIM}$(L "上面的安裝與群組變更會用到 sudo，其他步驟都以 $USER 身分執行。" "The installs and group changes above use sudo; everything else runs as $USER.")${C_OFF}"
   fi
 
-  if $DRY_RUN; then say ""; skip "--dry-run：以下只會印出，不會執行"; fi
+  if $DRY_RUN; then say ""; skip "$(L "--dry-run：以下只會印出，不會執行" "--dry-run: what follows is printed, not done")"; fi
   if $ASSUME_YES || [[ ! -t 0 ]]; then return; fi
   local go=""
-  read -r -p "  繼續？[Y/n] " go || true
-  if [[ ${go:-y} =~ ^[Nn] ]]; then say "  取消了，什麼都沒有動。"; exit 0; fi
+  read -r -p "  $(L "繼續？[Y/n] " "Go ahead? [Y/n] ")" go || true
+  if [[ ${go:-y} =~ ^[Nn] ]]; then say "  $(L "取消了，什麼都沒有動。" "Cancelled. Nothing was changed.")"; exit 0; fi
 }
 
 # --------------------------------------------------------------------------
@@ -446,7 +516,7 @@ apt_install() {
 }
 
 install_deps() {
-  if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then skip "相依都齊了"; return; fi
+  if [[ ${#MISSING_PKGS[@]} -eq 0 ]]; then skip "$(L "相依都齊了" "every dependency is present")"; return; fi
 
   # Refresh the index, never upgrade. See the header.
   local apt_wanted=()
@@ -458,36 +528,36 @@ install_deps() {
   if [[ ${#apt_wanted[@]} -gt 0 ]]; then
     as_root apt-get update -qq
     apt_install "${apt_wanted[@]}"
-    ok "裝好 ${apt_wanted[*]}"
+    ok "$(L "裝好 ${apt_wanted[*]}" "installed ${apt_wanted[*]}")"
   fi
 
   for p in "${MISSING_PKGS[@]}"; do
     case $p in
       docker)
         run bash -c 'curl -fsSL https://get.docker.com | sh'
-        ok "裝好 docker" ;;
+        ok "$(L "裝好 docker" "installed docker")" ;;
       go)
         # A private copy under the install root, not a system package: the
         # distribution's Go is usually too old for the go.mod here.
         run bash -c "curl -fsSL 'https://go.dev/dl/$(curl -fsSL 'https://go.dev/VERSION?m=text' | head -1).linux-$(dpkg --print-architecture 2>/dev/null || echo amd64).tar.gz' | tar -xz -C '$ROOT'"
-        ok "裝好 go（$ROOT/go/bin）" ;;
+        ok "$(L "裝好 go（$ROOT/go/bin）" "installed go ($ROOT/go/bin)")" ;;
       node)
         run bash -c 'curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -'
         apt_install nodejs
-        ok "裝好 node" ;;
+        ok "$(L "裝好 node" "installed node")" ;;
       caddy)
         run mkdir -p "$HOME/.local/bin"
         run curl -fsSL -o "$HOME/.local/bin/caddy" \
             "https://caddyserver.com/api/download?os=linux&arch=$(dpkg --print-architecture 2>/dev/null || echo amd64)"
         run chmod +x "$HOME/.local/bin/caddy"
-        ok "裝好 caddy" ;;
+        ok "$(L "裝好 caddy" "installed caddy")" ;;
       nvidia-driver)
         if command -v ubuntu-drivers >/dev/null; then
           as_root ubuntu-drivers install
         else
-          warn "這個發行版沒有 ubuntu-drivers；請自行安裝 NVIDIA 驅動後重跑。"
+          warn "$(L "這個發行版沒有 ubuntu-drivers；請自行安裝 NVIDIA 驅動後重跑。" "This distribution has no ubuntu-drivers; install the NVIDIA driver yourself and run this again.")"
         fi
-        ok "裝好 NVIDIA 驅動（重開機後生效）" ;;
+        ok "$(L "裝好 NVIDIA 驅動（重開機後生效）" "installed the NVIDIA driver (active after the reboot)")" ;;
       nvidia-container-toolkit)
         run bash -c 'curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
             | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg'
@@ -498,33 +568,33 @@ install_deps() {
         apt_install nvidia-container-toolkit
         as_root nvidia-ctk runtime configure --runtime=docker
         as_root systemctl restart docker
-        ok "裝好 nvidia-container-toolkit" ;;
+        ok "$(L "裝好 nvidia-container-toolkit" "installed nvidia-container-toolkit")" ;;
     esac
   done
 }
 
 install_groups() {
-  if [[ ${#MISSING_GROUPS[@]} -eq 0 ]]; then skip "群組都對了"; return; fi
+  if [[ ${#MISSING_GROUPS[@]} -eq 0 ]]; then skip "$(L "群組都對了" "groups are right")"; return; fi
   for g in "${MISSING_GROUPS[@]}"; do
     as_root usermod -aG "$g" "$USER"
-    ok "加入 $g 群組"
+    ok "$(L "加入 $g 群組" "joined group $g")"
   done
   # A group is granted at login, so the session running this script still does
   # not have it. Not a reboot -- but the services must not be started before it
   # takes effect, which is why the reboot (or re-login) is at the end.
   NEEDS_REBOOT=true
-  REBOOT_WHY="${REBOOT_WHY:-群組變更要重新登入才會生效}"
+  REBOOT_WHY="${REBOOT_WHY:-$(L "群組變更要重新登入才會生效" "group changes take effect at the next login")}"
 }
 
 fetch_code() {
   if [[ -d $CODE/.git ]]; then
     run git -C "$CODE" fetch --quiet origin "$REPO_REF"
     run git -C "$CODE" checkout --quiet "$REPO_REF"
-    ok "更新 $CODE"
+    ok "$(L "更新 $CODE" "updated $CODE")"
   else
     run mkdir -p "$(dirname "$CODE")"
     run git clone --quiet --branch "$REPO_REF" "$REPO_URL" "$CODE"
-    ok "clone 到 $CODE"
+    ok "$(L "clone 到 $CODE" "cloned to $CODE")"
   fi
 }
 
@@ -541,22 +611,22 @@ fetch_console() {
     if run curl -fsSL -o "$bin.new" "$RELEASE_URL/tenkstack-linux-$arch"; then
       run chmod +x "$bin.new"
       run mv "$bin.new" "$bin"
-      ok "主控台 $("$bin" -version 2>/dev/null || echo "（$arch）")"
+      ok "$(L 主控台 console) $("$bin" -version 2>/dev/null || echo "($arch)")"
       return
     fi
     rm -f "$bin.new"
-    die "下載不到 release binary（$RELEASE_URL/tenkstack-linux-$arch）。" \
-        "還沒有 release 的話用 --source 從原始碼 build。"
+    die "$(L "下載不到 release binary（$RELEASE_URL/tenkstack-linux-$arch）。" "Could not download the release binary ($RELEASE_URL/tenkstack-linux-$arch).")" \
+        "$(L "還沒有 release 的話用 --source 從原始碼 build。" "If there is no release yet, build from source with --source.")"
   fi
 
   fetch_code
   local go=go
   command -v go >/dev/null || go="$ROOT/go/bin/go"
   run bash -c "cd '$CODE/web' && npm ci --silent && npm run build --silent"
-  ok "前端 build"
+  ok "$(L "前端 build" "built the frontend")"
   run bash -c "cd '$CODE/server-go' && PATH='$(dirname "$go"):$PATH' ./build.sh"
   run cp "$CODE/server-go/tenkstack" "$bin"
-  ok "主控台 build 完成"
+  ok "$(L "主控台 build 完成" "built the console")"
 }
 
 make_skeleton() {
@@ -565,21 +635,21 @@ make_skeleton() {
   for d in models llama-swap comfyui caddy/channels console; do
     run mkdir -p "$ROOT/$d"
   done
-  ok "建好 $ROOT"
+  ok "$(L "建好 $ROOT" "created $ROOT")"
 
   if [[ ! -x $ROOT/llama-swap/llama-swap ]]; then
     local tag arch
     tag=$(curl -sfL https://api.github.com/repos/mostlygeek/llama-swap/releases/latest \
           | grep -oP '"tag_name":\s*"\K[^"]+' || echo "")
     if [[ -z $tag ]]; then
-      die "問不到 llama-swap 的最新版本。" "檢查網路，或先手動放一份到 $ROOT/llama-swap/。"
+      die "$(L "問不到 llama-swap 的最新版本。" "Could not find llama-swap's latest release.")" "$(L "檢查網路，或先手動放一份到 $ROOT/llama-swap/。" "Check the network, or put a copy in $ROOT/llama-swap/ by hand.")"
     fi
     arch=$([[ $(uname -m) == aarch64 ]] && echo arm64 || echo amd64)
     run bash -c "curl -sfL 'https://github.com/mostlygeek/llama-swap/releases/download/$tag/llama-swap_${tag#v}_linux_${arch}.tar.gz' \
         | tar -xz -C '$ROOT/llama-swap' llama-swap"
     ok "llama-swap $tag"
   else
-    skip "llama-swap 已存在"
+    skip "$(L "llama-swap 已存在" "llama-swap is already there")"
   fi
 
   # A skeleton rather than a template full of models: an entry naming a GGUF
@@ -587,11 +657,11 @@ make_skeleton() {
   # writes real entries once there are weights to name.
   if [[ ! -e $ROOT/llama-swap/config.yaml ]]; then
     run bash -c "cat > '$ROOT/llama-swap/config.yaml' <<'YAML'
-# 由 TenkStack 安裝腳本產生。之後主控台會改寫這個檔案。
+# Written by the TenkStack installer. The console rewrites this file from here on.
 macros:
   models-dir: \"$ROOT/models\"
 
-# 還沒有模型。到主控台的「模型目錄」下載權重，或用「新增模型」指向已有的檔案。
+# No models yet. Download weights from the console's Catalog page, or add a model that points at files you already have.
 models: {}
 
 groups:
@@ -604,9 +674,9 @@ groups:
     exclusive: false
     members: []
 YAML"
-    ok "llama-swap 設定骨架"
+    ok "$(L "llama-swap 設定骨架" "llama-swap config skeleton")"
   else
-    skip "llama-swap 設定已存在，沒有覆蓋"
+    skip "$(L "llama-swap 設定已存在，沒有覆蓋" "llama-swap config exists, left as it is")"
   fi
 }
 
@@ -622,7 +692,7 @@ write_caddy() {
   run mkdir -p "$dir/channels/binds" "$dir/channels/disabled"
 
   if [[ -e $dir/Caddyfile ]]; then
-    skip "Caddyfile 已存在，沒有覆蓋（$dir/Caddyfile）"
+    skip "$(L "Caddyfile 已存在，沒有覆蓋（$dir/Caddyfile）" "Caddyfile exists, left as it is ($dir/Caddyfile)")"
     return
   fi
 
@@ -641,7 +711,7 @@ write_caddy() {
 
   local scheme=https site_tls="" site_addr site_note=""
   case $TLS_MODE in
-    "")       scheme=http; site_note=" 純 HTTP：TLS 由外層代理負責，或這個環境不需要。" ;;
+    "")       scheme=http; site_note=" Plain HTTP: TLS is done by a proxy in front, or not needed here." ;;
     internal) site_tls="	tls internal" ;;
     cert)     site_tls="	tls $TLS_CERT $TLS_KEY" ;;
   esac
@@ -653,7 +723,7 @@ write_caddy() {
   fi
 
   run bash -c "cat > '$dir/Caddyfile' <<CADDY
-# 由 TenkStack 安裝腳本產生。主控台自己的站台在這裡；可開關的入口在 channels/。
+# Written by the TenkStack installer. The console's own site is here; the switchable entrances are in channels/.
 {
 	# Unix socket rather than :2019, so caddy reload works and the console can
 	# apply a channel change without dropping open connections.
@@ -722,9 +792,9 @@ CADDY"
 
   if ! $DRY_RUN; then
     "$HOME/.local/bin/caddy" validate --config "$dir/Caddyfile" --adapter caddyfile >/dev/null 2>&1 \
-      || die "產生的 Caddyfile 沒有通過 caddy validate。" "看 $HOME/.local/bin/caddy validate --config $dir/Caddyfile"
+      || die "$(L "產生的 Caddyfile 沒有通過 caddy validate。" "The generated Caddyfile failed caddy validate.")" "$(L "看" "See") $HOME/.local/bin/caddy validate --config $dir/Caddyfile"
   fi
-  ok "Caddy 設定（${TLS_MODE:-http}）"
+  ok "$(L "Caddy 設定" "Caddy config") (${TLS_MODE:-http})"
 }
 
 # What the TLS mode needs from root, done here so the plan could announce it.
@@ -735,12 +805,12 @@ trust_caddy() {
       # and curl on this machine accept the certificate. Other devices import
       # the same file by hand; finish() prints where it is.
       as_root "$HOME/.local/bin/caddy" trust
-      ok "caddy trust（這台機器信任自簽 CA）" ;;
+      ok "caddy trust$(L "（這台機器信任自簽 CA）" " (this machine trusts the own CA)")" ;;
     domain)
       # A user service cannot open :80/:443. Granting the binary the one
       # capability it needs is narrower than running it as root.
       as_root setcap cap_net_bind_service=+ep "$HOME/.local/bin/caddy"
-      ok "setcap（讓 caddy 以一般帳號綁 80/443）" ;;
+      ok "setcap$(L "（讓 caddy 以一般帳號綁 80/443）" " (lets caddy bind 80/443 as an ordinary user)")" ;;
   esac
 }
 
@@ -765,7 +835,7 @@ write_searxng() {
     run bash -c "umask 077; printf 'SEARXNG_SECRET=%s\n' \"\$(head -c 32 /dev/urandom | base64 -w0)\" > '$dir/env'"
     ok "SearXNG secret"
   else
-    skip "SearXNG secret 已存在"
+    skip "$(L "SearXNG secret 已存在" "SearXNG secret already there")"
   fi
   local docker; docker=$(command -v docker || echo /usr/bin/docker)
   local unit="$HOME/.config/systemd/user/tenkstack-searxng.service"
@@ -836,7 +906,7 @@ UNIT"
   if [[ " ${VENDORS[*]} " == *" intel "* ]]; then
     local dropin=/etc/systemd/system/user@.service.d
     if [[ -e $dropin/tenkstack-xpu-smi-log.conf ]]; then
-      skip "xpu-smi 的 journal 過濾已在"
+      skip "$(L "xpu-smi 的 journal 過濾已在" "xpu-smi journal filter already there")"
     else
       as_root mkdir -p "$dropin"
       run bash -c "printf '%s\n' \
@@ -850,7 +920,7 @@ UNIT"
         'LogFilterPatterns=~HECI init' \
         | sudo tee '$dropin/tenkstack-xpu-smi-log.conf' >/dev/null"
       as_root systemctl daemon-reload
-      ok "xpu-smi 的 journal 過濾（user@.service drop-in）"
+      ok "$(L "xpu-smi 的 journal 過濾" "xpu-smi journal filter") (user@.service drop-in)"
     fi
   fi
 
@@ -891,7 +961,7 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 UNIT"
-  ok "寫好 systemd unit"
+  ok "$(L "寫好 systemd unit" "wrote the systemd units")"
 }
 
 # Enabled before anything is started, and before any reboot. That ordering is
@@ -901,17 +971,17 @@ enable_units() {
   run systemctl --user daemon-reload
   # shellcheck disable=SC2046
   run systemctl --user enable --quiet $(units)
-  ok "已註冊為開機啟動"
+  ok "$(L "已註冊為開機啟動" "enabled at boot")"
   if [[ $(loginctl show-user "$USER" -p Linger --value 2>/dev/null) != yes ]]; then
     as_root loginctl enable-linger "$USER"
-    ok "enable-linger（登出之後服務仍然繼續跑）"
+    ok "enable-linger$(L "（登出之後服務仍然繼續跑）" " (the services keep running after logout)")"
   else
-    skip "linger 已開啟"
+    skip "$(L "linger 已開啟" "linger already on")"
   fi
 }
 
 start_and_verify() {
-  if $NEEDS_REBOOT; then skip "需要重開機，服務等開機後自己啟動"; return; fi
+  if $NEEDS_REBOOT; then skip "$(L "需要重開機，服務等開機後自己啟動" "a reboot is needed; the services start after it")"; return; fi
   # shellcheck disable=SC2046
   run systemctl --user start $(units)
 
@@ -924,29 +994,29 @@ start_and_verify() {
     until curl -sfo /dev/null "http://127.0.0.1:$SEARXNG_PORT/"; do
       n=$((n + 1))
       if [[ $n -gt 180 ]]; then
-        die "SearXNG 沒有回應。" "看 journalctl --user -u tenkstack-searxng -n 50；映像是 docker.io/searxng/searxng。"
+        die "$(L "SearXNG 沒有回應。" "SearXNG did not answer.")" "$(L "看 journalctl --user -u tenkstack-searxng -n 50；映像是 docker.io/searxng/searxng。" "See journalctl --user -u tenkstack-searxng -n 50; the image is docker.io/searxng/searxng.")"
       fi
       sleep 1
     done
-    ok "SearXNG 回應了（拉映像花了 ${n}s）"
+    ok "$(L "SearXNG 回應了（拉映像花了 ${n}s）" "SearXNG answered (pulling the image took ${n}s)")"
   fi
   local n=0
   until curl -sfo /dev/null "http://127.0.0.1:$CONSOLE_PORT/api/health"; do
     n=$((n + 1))
     if [[ $n -gt 30 ]]; then
-      die "主控台起不來。" "看 journalctl --user -u tenkstack-console -n 50 找原因。"
+      die "$(L "主控台起不來。" "The console did not start.")" "$(L "看 journalctl --user -u tenkstack-console -n 50 找原因。" "See journalctl --user -u tenkstack-console -n 50 for why.")"
     fi
     sleep 1
   done
-  ok "主控台回應了"
+  ok "$(L "主控台回應了" "the console answered")"
 
   # Through the gateway too, so "installed" means reachable and not merely
   # running. In domain mode the name resolves elsewhere and the certificate
   # is not issued until the first real request from the internet, so that one
   # is checked only as far as the unit being up.
   if [[ $TLS_MODE == domain ]]; then
-    systemctl --user is-active --quiet caddy || die "Caddy 起不來。" "看 journalctl --user -u caddy -n 50。"
-    ok "Caddy 在跑（憑證會在第一次從外面連到 $DOMAIN 時申請）"
+    systemctl --user is-active --quiet caddy || die "$(L "Caddy 起不來。" "Caddy did not start.")" "$(L "看" "See") journalctl --user -u caddy -n 50."
+    ok "$(L "Caddy 在跑（憑證會在第一次從外面連到 $DOMAIN 時申請）" "Caddy is running (the certificate is requested on the first outside request to $DOMAIN)")"
     return
   fi
   local scheme=https; [[ -z $TLS_MODE ]] && scheme=http
@@ -954,11 +1024,11 @@ start_and_verify() {
   until curl -skfo /dev/null "$scheme://127.0.0.1:$CONSOLE_TLS_PORT/api/health"; do
     n=$((n + 1))
     if [[ $n -gt 15 ]]; then
-      die "Caddy 沒有把主控台放出來。" "看 journalctl --user -u caddy -n 50，或 $HOME/.local/bin/caddy validate --config $ROOT/caddy/Caddyfile"
+      die "$(L "Caddy 沒有把主控台放出來。" "Caddy is not serving the console.")" "$(L "看" "See") journalctl --user -u caddy -n 50, $(L "或" "or") $HOME/.local/bin/caddy validate --config $ROOT/caddy/Caddyfile"
     fi
     sleep 1
   done
-  ok "經 Caddy 也回應了"
+  ok "$(L "經 Caddy 也回應了" "it answers through Caddy too")"
 }
 
 finish() {
@@ -968,50 +1038,135 @@ finish() {
     "")     url="http://$host:$CONSOLE_TLS_PORT" ;;
     *)      url="https://$host:$CONSOLE_TLS_PORT" ;;
   esac
-  step "完成"
+  step "$(L "完成" "Done")"
   if $NEEDS_REBOOT; then
-    say "  還差一次重新開機：$REBOOT_WHY"
-    say "  開機後服務會自己啟動，不需要再跑這個腳本。"
+    say "  $(L "還差一次重新開機：$REBOOT_WHY" "One reboot to go: $REBOOT_WHY")"
+    say "  $(L "開機後服務會自己啟動，不需要再跑這個腳本。" "The services start on their own after it; this script need not run again.")"
     say ""
     say "  ${C_B}sudo reboot${C_OFF}"
     say ""
-    say "  回來之後：$url"
+    say "  $(L "回來之後：" "Then: ")$url"
   else
     say "  $url"
-    say "  ${C_DIM}（第一次進去是註冊畫面。第一個帳號建立之後才會開始要求登入。）${C_OFF}"
+    say "  ${C_DIM}$(L "（第一次進去是註冊畫面。第一個帳號建立之後才會開始要求登入。）" "(The first visit shows sign-up. Signing in is required once the first account exists.)")${C_OFF}"
   fi
   case $TLS_MODE in
     internal)
-      say "  ${C_DIM}（自簽 CA。這台已經信任了；別台裝置要匯入這個檔案："
-      say "    $HOME/.local/share/caddy/pki/authorities/local/root.crt）${C_OFF}" ;;
+      say "  ${C_DIM}$(L "（自簽 CA。這台已經信任了；別台裝置要匯入這個檔案：" "(Own CA. This machine trusts it already; other devices import this file:")"
+      say "    $HOME/.local/share/caddy/pki/authorities/local/root.crt$(L "）" ")")${C_OFF}" ;;
     "")
-      say "  ${C_DIM}（純 HTTP：密碼和 API key 在網路上是明文。若這台會被區網以外連到，"
-      say "    重跑並加 --tls internal 或 --domain，或在前面放一個負責 TLS 的代理。）${C_OFF}" ;;
+      say "  ${C_DIM}$(L "（純 HTTP：密碼和 API key 在網路上是明文。若這台會被區網以外連到，" "(Plain HTTP: passwords and API keys cross the network in the clear. If this is reachable beyond the LAN,")"
+      say "    $(L "重跑並加 --tls internal 或 --domain，或在前面放一個負責 TLS 的代理。）" "run again with --tls internal or --domain, or put a TLS-terminating proxy in front.)")${C_OFF}" ;;
   esac
-  say "  ${C_DIM}純 /v1 的 HTTP 入口在 :$API_PORT，給不信任私有 CA 的 CLI 工具用；連線頁可以關掉它。${C_OFF}"
+  say "  ${C_DIM}$(L "純 /v1 的 HTTP 入口在 :$API_PORT，給不信任私有 CA 的 CLI 工具用；連線頁可以關掉它。" "A plain-HTTP /v1 entrance is on :$API_PORT for CLI tools that do not trust a private CA; the Connections page can close it.")${C_OFF}"
   say ""
-  say "  接下來在主控台裡："
-  say "    ・「顯示卡」開啟每張卡要不要跑模型、要不要畫圖（ComfyUI 在這裡裝）"
-  say "    ・「模型目錄」下載權重"
+  say "  $(L "接下來在主控台裡：" "Next, in the console:")"
+  say "    $(L "・「推論引擎」安裝或更新推論引擎" "- Engines: install or update inference engines")"
+  say "    $(L "・「ComfyUI」在每張卡上開啟生圖" "- ComfyUI: turn on image generation per card")"
+  say "    $(L "・「模型目錄」下載權重" "- Catalog: download weights")"
   if [[ $WANT_SEARXNG == y ]]; then
-    say "    ・搜尋已經接好：對話裡的 agent 可以上網查（SearXNG，只聽 127.0.0.1:$SEARXNG_PORT）"
+    say "    $(L "・搜尋已經接好：對話裡的 agent 可以上網查（SearXNG，只聽 127.0.0.1:$SEARXNG_PORT）" "- Search is wired up: the chat's agent can search the web (SearXNG, on 127.0.0.1:$SEARXNG_PORT only)")"
   else
-    say "    ・要讓模型能上網搜尋，重跑並加 --searxng"
+    say "    $(L "・要讓模型能上網搜尋，重跑並加 --searxng" "- For web search, run this again with --searxng")"
   fi
 }
 
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# The setup screens
+# --------------------------------------------------------------------------
+
+# `tenkstack setup` asks everything above on a few screens -- language
+# first -- and writes the answers as assignments this sources. It runs from
+# the release binary, fetched to a temporary directory: the same file the
+# install puts in place later, so there is one thing to trust. Returns
+# non-zero when it cannot run, and the plain questions take over.
+run_setup_ui() {
+  if $NO_TUI || $ASSUME_YES || [[ ! -t 0 || ! -t 1 ]]; then return 1; fi
+  local arch tmp bin code=0
+  arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
+  case $arch in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
+  tmp=$(mktemp -d)
+  bin="$tmp/tenkstack"
+  printf '\n  %s\n' "Loading the setup screens / 載入安裝畫面…"
+  if ! curl -fsSL -o "$bin" "$RELEASE_URL/tenkstack-linux-$arch"; then rm -rf "$tmp"; return 1; fi
+  # A release from before the setup screens would take `setup` for noise
+  # and start serving, so it is recognised by a marker in the file rather
+  # than by running it.
+  if ! grep -qa "TENKSTACK_SETUP_PROTOCOL=1" "$bin"; then rm -rf "$tmp"; return 1; fi
+  chmod +x "$bin"
+
+  local args=(setup --out "$tmp/answers" --dir "${ROOT:-$ROOT_DEFAULT}")
+  if $LANG_GIVEN; then args+=(--lang "$UI_LANG"); fi
+  if [[ -n $ENGINES ]]; then args+=(--engines "$ENGINES"); fi
+  if [[ -n $COMFY_CARDS ]]; then args+=(--comfyui "$COMFY_CARDS"); fi
+  if [[ -n $WANT_SEARXNG ]]; then args+=(--searxng "$WANT_SEARXNG"); fi
+  case $TLS_MODE in internal|domain) args+=(--tls "$TLS_MODE") ;; esac
+  if [[ -n $DOMAIN ]]; then args+=(--domain "$DOMAIN"); fi
+
+  if "$bin" "${args[@]}"; then code=0; else code=$?; fi
+  case $code in
+    0)
+      # A certificate given as a flag has no place on the screens; it
+      # survives them.
+      local mode=$TLS_MODE cert=$TLS_CERT key=$TLS_KEY
+      # shellcheck disable=SC1091
+      . "$tmp/answers"
+      if [[ $mode == cert ]]; then TLS_MODE=cert; TLS_CERT=$cert; TLS_KEY=$key; fi
+      rm -rf "$tmp"
+      return 0 ;;
+    1) rm -rf "$tmp"; exit 0 ;;
+    *) rm -rf "$tmp"; return 1 ;;
+  esac
+}
+
+# The plain path's first question, when neither --lang nor a screen said.
+ask_language() {
+  if $LANG_GIVEN || $ASSUME_YES || [[ ! -t 0 ]]; then return; fi
+  local answer="" default=1
+  [[ $UI_LANG == zh-TW ]] && default=2
+  printf '\n  Language / 語言\n    1) English\n    2) 繁體中文\n'
+  read -r -p "  [$default] " answer || true
+  case ${answer:-$default} in 2) UI_LANG=zh-TW ;; *) UI_LANG=en ;; esac
+}
+
+# Engines and ComfyUI, installed by the console itself once it is up and
+# before anyone has signed up -- until then it asks for no password.
+provision() {
+  if [[ -z $ENGINES && -z $COMFY_CARDS ]]; then return; fi
+  step "$(L "⑧ 推論引擎與 ComfyUI" "⑧ Engines and ComfyUI")"
+  if $NEEDS_REBOOT; then
+    skip "$(L "要等重開機之後，到「推論引擎」與「ComfyUI」頁安裝" "after the reboot, install them from the Engines and ComfyUI pages")"
+    return
+  fi
+  local args=(provision --api "http://127.0.0.1:$CONSOLE_PORT" --lang "$UI_LANG")
+  if [[ -n $ENGINES ]]; then args+=(--engines "$ENGINES"); fi
+  if [[ -n $COMFY_CARDS ]]; then args+=(--comfyui "$COMFY_CARDS"); fi
+  run "$ROOT/console/tenkstack" "${args[@]}" \
+    || warn "$(L "沒有全部裝好；之後可以在主控台的「推論引擎」與「ComfyUI」頁再裝。" "Not everything installed; the console's Engines and ComfyUI pages can finish it.")"
+}
+
 main() {
-  step "① 盤點"
+  local screens=false
+  if run_setup_ui; then screens=true; else ask_language; fi
+
+  step "$(L "① 盤點" "① Survey")"
   survey_os
   survey_cards
   survey_drivers
   survey_deps
 
-  step "② 選項"
-  ask    ROOT "安裝目錄 " "${ROOT:-$ROOT_DEFAULT}"
-  if $FROM_SOURCE; then ask CODE "程式碼放哪 " "${CODE:-$CODE_DEFAULT}"; else CODE="${CODE:-$CODE_DEFAULT}"; fi
-  ask_yn WANT_SEARXNG "裝 SearXNG（讓模型能上網搜尋）？" n
+  step "$(L "② 選項" "② Choices")"
+  if $screens; then
+    ROOT=${ROOT/#\~/$HOME}
+    skip "$(L "已在安裝畫面選好" "chosen on the setup screens")"
+    if [[ -n $TLS_MODE ]]; then WANT_TLS=y; fi
+    if $FROM_SOURCE; then CODE="${CODE:-$CODE_DEFAULT}"; fi
+    CODE="${CODE:-$CODE_DEFAULT}"
+  else
+  ask    ROOT "$(L "安裝目錄 " "Install directory ")" "${ROOT:-$ROOT_DEFAULT}"
+  if $FROM_SOURCE; then ask CODE "$(L "程式碼放哪 " "Where the source goes ")" "${CODE:-$CODE_DEFAULT}"; else CODE="${CODE:-$CODE_DEFAULT}"; fi
+  ask_yn WANT_SEARXNG "$(L "裝 SearXNG（讓模型能上網搜尋）？" "Install SearXNG (web search for the models)? ")" n
   # TLS: a flag pre-answers this the same way --searxng pre-answers the one
   # above. Otherwise two questions at most -- whether to encrypt, and if so
   # whether there is a public name for Let's Encrypt; no name means Caddy's
@@ -1019,37 +1174,40 @@ main() {
   # a second certificate behind one only gets in its way.
   if [[ -n $TLS_MODE ]]; then
     WANT_TLS=y
-    skip "HTTPS：${TLS_MODE}（由參數決定）"
+    skip "HTTPS: ${TLS_MODE}$(L "（由參數決定）" " (set by a flag)")"
   else
-    ask_yn WANT_TLS "要 HTTPS 嗎？（前面已有反向代理就選 n）" n
+    ask_yn WANT_TLS "$(L "要 HTTPS 嗎？（前面已有反向代理就選 n）" "HTTPS? (n when a proxy in front already does TLS) ")" n
     if [[ $WANT_TLS == y ]]; then
-      ask DOMAIN "有公開網域嗎？留空就用 Caddy 自簽 CA " ""
+      ask DOMAIN "$(L "有公開網域嗎？留空就用 Caddy 自簽 CA " "A public domain? Empty uses Caddy's own CA ")" ""
       if [[ -n $DOMAIN ]]; then TLS_MODE=domain; else TLS_MODE=internal; fi
     fi
+  fi
   fi
   check_choices
 
   show_plan
 
-  step "③ 安裝相依"
+  step "$(L "③ 安裝相依" "③ Dependencies")"
   install_deps
   install_groups
   trust_caddy
 
-  step "④ 取得主控台"
+  step "$(L "④ 取得主控台" "④ The console")"
   fetch_console
 
-  step "⑤ 建立目錄與設定"
+  step "$(L "⑤ 建立目錄與設定" "⑤ Directories and settings")"
   make_skeleton
   write_caddy
   write_searxng
 
-  step "⑥ 註冊服務"
+  step "$(L "⑥ 註冊服務" "⑥ Services")"
   write_units
   enable_units
 
-  step "⑦ 啟動"
+  step "$(L "⑦ 啟動" "⑦ Start")"
   start_and_verify
+
+  provision
 
   finish
 }

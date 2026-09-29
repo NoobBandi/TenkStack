@@ -35,7 +35,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NoobBandi/TenkStack/main/ins
 ```
 
 Use `bash <(...)` as written, not `curl | bash` — piped, the script cannot ask
-you anything. It shows its plan and waits for a yes before changing the
+you anything. In a terminal it opens setup screens — English or Traditional
+Chinese, chosen on the first one — where you pick the install directory, the
+inference engines, which cards run ComfyUI, SearXNG and how the console is
+reached; without a terminal, or with `--no-tui`, it asks the same as plain
+questions. It then shows its plan and waits for a yes before changing the
 machine, runs as your user (`sudo` only for packages, groups, the NVIDIA
 driver, and the TLS step if you pick one), and never reboots on its own. When
 it finishes the console is at `http://<host>:8443`; the first visit registers
@@ -50,14 +54,20 @@ How it is reached from other machines is one flag:
 | `--tls CERT,KEY` | HTTPS with a certificate you already have. |
 | `--domain NAME` | HTTPS with Let's Encrypt, obtained and renewed by Caddy. Needs `:80`/`:443` reachable from the internet. |
 
-The script asks the same thing interactively; the flag only pre-answers it.
+The setup screens ask the same thing; the flag only pre-answers it.
 Likewise `--searxng` installs [SearXNG](https://github.com/searxng/searxng)
 on loopback so the chat's agent can search the web — optional, and the
-console offers the model that tool only while an instance answers. ComfyUI
-is not installed here: it is set up per card from the console's GPU page.
+console offers the model that tool only while an instance answers.
 
-Other flags: `--dir PATH` (default `~/tenkstack`), `--yes`, `--dry-run`,
-`--help`.
+Engines and ComfyUI are installed last, by the console itself once it is up
+and before the first account exists: `--engines llamacpp,vllm` and
+`--comfyui 0000:0c:00.0` (PCI addresses, as `lspci -D` prints them)
+pre-answer those screens. Anything left out, or anything that fails, is
+installed later from the console's Engines and ComfyUI pages. On Intel,
+ComfyUI needs `xpu-smi` present for the console to see the cards.
+
+Other flags: `--lang en|zh-TW`, `--dir PATH` (default `~/tenkstack`),
+`--no-tui`, `--yes`, `--dry-run`, `--help`.
 
 Tested on Ubuntu 24.04. NVIDIA drivers are installed when missing; Intel and
 AMD cards need the vendor's compute stack already present.
