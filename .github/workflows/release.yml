@@ -1,5 +1,5 @@
-# A tag v* builds the console for both Linux architectures and attaches the
-# binaries to the release. install.sh downloads from here.
+# A tag v* runs CI, which also builds both Linux architectures, and
+# publishes those binaries as the release. install.sh downloads from here.
 #
 # A tag with a suffix, such as v0.7.0-rc1, is published as a pre-release:
 # GitHub's latest release skips it, so neither installs nor the about
@@ -15,53 +15,42 @@ permissions:
   contents: write
 
 jobs:
-  checks:
-    uses: ./.github/workflows/ci.yml
-
-  build:
-    needs: checks
+  # The binary reports VERSION and the update check compares it with the
+  # tag, so a tag without the matching VERSION would ship a release that
+  # offers itself as an update forever.
+  version:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          # The frontend's build stamp is `git describe`; without the tags
-          # it would show a bare hash where the release name belongs.
-          fetch-depth: 0
-      # The binary reports VERSION and the update check compares it with
-      # the tag, so a tag without the matching VERSION would ship a release
-      # that offers itself as an update forever.
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
       - name: Version matches the tag
         run: |
           version=$(tr -d '[:space:]' < VERSION)
           if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
             echo "VERSION says $version but the tag is $GITHUB_REF_NAME"; exit 1
           fi
-      # pnpm first, so setup-node can cache its store. The version is the
-      # one web/package.json pins.
-      - uses: pnpm/action-setup@v6
+
+  checks:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release: true
+
+  publish:
+    needs: [version, checks]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
         with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@v7
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v8
         with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Frontend
-        run: cd web && pnpm install --frozen-lockfile && pnpm build
-      - name: Binaries
-        run: |
-          for arch in amd64 arm64; do
-            GOARCH=$arch scripts/build.sh
-            mv tenkstack "tenkstack-linux-$arch"
-          done
-          sha256sum tenkstack-linux-* > SHA256SUMS
-      # The runner is amd64; the arm64 build comes from the same source.
-      - name: Smoke
-        run: scripts/smoke.sh tenkstack-linux-amd64 "${GITHUB_REF_NAME#v}"
+          pattern: tenkstack-linux-*
+          merge-multiple: true
+      - name: Checksums
+        run: sha256sum tenkstack-linux-* | tee SHA256SUMS
       # The release text is the tag's own message, which the about page
       # shows under 說明. checkout can leave the tag lightweight, so it is
       # fetched again as the annotated object before it is read.
