@@ -22,7 +22,7 @@ jobs:
     needs: checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The frontend's build stamp is `git describe`; without the tags
           # it would show a bare hash where the release name belongs.
@@ -36,12 +36,12 @@ jobs:
           if [[ "v$version" != "$GITHUB_REF_NAME" ]]; then
             echo "VERSION says $version but the tag is $GITHUB_REF_NAME"; exit 1
           fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -65,7 +65,7 @@ jobs:
           git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
           git tag -l --format='%(contents)' "${GITHUB_REF_NAME}" > release-notes.md
           cat release-notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           body_path: release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
