@@ -160,8 +160,8 @@ AMD cards need the vendor's compute stack already present.
   administrator updates with one press: the release's binary for this
   architecture is fetched, checked against the release's SHA256SUMS, swapped
   in under the running process and the service restarted — the same file the
-  installer would fetch, in the same place, with the two before it kept beside
-  it as `tenkstack.prev` and `tenkstack.prev2`. Nothing phones home.
+  installer would fetch, in the same place, with the old one kept beside it as
+  `tenkstack.prev`. Nothing phones home.
   A release can also move an engine to another image; the Engines page then
   offers the new one for each launcher the console wrote, and leaves a
   launcher edited by hand alone.

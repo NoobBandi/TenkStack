@@ -1,9 +1,6 @@
 package release
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
 func TestNewer(t *testing.T) {
 	cases := []struct {
@@ -26,26 +23,5 @@ func TestNewer(t *testing.T) {
 		if got := Newer(c.a, c.b); got != c.want {
 			t.Errorf("Newer(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
 		}
-	}
-}
-
-// Three updates in a row keep the running binary and the two before it.
-func TestRotateKeepsTwo(t *testing.T) {
-	dir := t.TempDir()
-	exe := dir + "/tenkstack"
-	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
-	os.WriteFile(exe, []byte("v1"), 0o755)
-	for _, v := range []string{"v2", "v3", "v4"} {
-		os.WriteFile(exe+".new", []byte(v), 0o755)
-		if err := rotate(exe, exe+".new"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if read(exe) != "v4" || read(exe+".prev") != "v3" || read(exe+".prev2") != "v2" {
-		t.Errorf("got %q %q %q", read(exe), read(exe+".prev"), read(exe+".prev2"))
-	}
-	entries, _ := os.ReadDir(dir)
-	if len(entries) != 3 {
-		t.Errorf("only three files should remain, got %d", len(entries))
 	}
 }
