@@ -488,6 +488,12 @@ check_choices() {
 }
 
 show_plan() {
+  # Confirmed on the setup screens, which listed all of this already.
+  if $CONFIRMED; then
+    if $NEEDS_REBOOT; then warn "$(L "這次安裝結束後需要重新開機一次：$REBOOT_WHY" "One reboot is needed when this finishes: $REBOOT_WHY")"; fi
+    if $DRY_RUN; then skip "$(L "--dry-run：以下只會印出，不會執行" "--dry-run: what follows is printed, not done")"; fi
+    return
+  fi
   step "$(L "計畫" "Plan")"
   local host; host=$(L "<這台>" "<this-machine>")
   say "  $(L "安裝目錄      " "Directory     ")$ROOT"
@@ -541,7 +547,7 @@ install_deps() {
   local apt_wanted=()
   for p in "${MISSING_PKGS[@]}"; do
     case $p in
-      git|curl) apt_wanted+=("$p") ;;
+      git|curl|libcap2-bin) apt_wanted+=("$p") ;;
     esac
   done
   if [[ ${#apt_wanted[@]} -gt 0 ]]; then
@@ -1095,48 +1101,87 @@ finish() {
 # The setup screens
 # --------------------------------------------------------------------------
 
-# `tenkstack setup` asks everything above on a few screens -- language
-# first -- and writes the answers as assignments this sources. It runs from
-# the release binary, fetched to a temporary directory: the same file the
-# install puts in place later, so there is one thing to trust. Returns
-# non-zero when it cannot run, and the plain questions take over.
-run_setup_ui() {
+# `tenkstack setup` shows the questions as screens, in two phases around the
+# survey: first the language (and, when an install is found, install or
+# uninstall), then -- with the survey's findings -- the install's choices,
+# ending on the one confirmation. It runs from the release binary, fetched to
+# a temporary directory: the same file the install puts in place later, so
+# there is one thing to trust. When it cannot run, the plain questions below
+# take over.
+SETUP_BIN=""
+SETUP_TMP=""
+CONFIRMED=false
+
+setup_ui_fetch() {
   if $NO_TUI || $ASSUME_YES || [[ ! -t 0 || ! -t 1 ]]; then return 1; fi
-  local arch tmp bin code=0
+  local arch
   arch=$(dpkg --print-architecture 2>/dev/null || uname -m)
   case $arch in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac
-  tmp=$(mktemp -d)
-  bin="$tmp/tenkstack"
+  SETUP_TMP=$(mktemp -d)
+  trap 'rm -rf "$SETUP_TMP"' EXIT
   printf '\n  %s\n' "Loading the setup screens / 載入安裝畫面…"
-  if ! curl -fsSL -o "$bin" "$RELEASE_URL/tenkstack-linux-$arch"; then rm -rf "$tmp"; return 1; fi
+  if ! curl -fsSL -o "$SETUP_TMP/tenkstack" "$RELEASE_URL/tenkstack-linux-$arch"; then return 1; fi
   # A release from before the setup screens would take `setup` for noise
   # and start serving, so it is recognised by a marker in the file rather
   # than by running it.
-  if ! grep -qa "TENKSTACK_SETUP_PROTOCOL=1" "$bin"; then rm -rf "$tmp"; return 1; fi
-  chmod +x "$bin"
+  if ! grep -qa "TENKSTACK_SETUP_PROTOCOL=1" "$SETUP_TMP/tenkstack"; then return 1; fi
+  chmod +x "$SETUP_TMP/tenkstack"
+  SETUP_BIN="$SETUP_TMP/tenkstack"
+}
 
-  local args=(setup --out "$tmp/answers" --dir "${ROOT:-$ROOT_DEFAULT}")
+# Runs one phase; 0 answered, exits on a cancel, 1 when it could not run.
+setup_ui_run() {
+  local code=0
+  if "$SETUP_BIN" setup --out "$SETUP_TMP/answers" "$@"; then code=0; else code=$?; fi
+  case $code in
+    0) return 0 ;;
+    1) exit 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+setup_ui_start() {
+  local args=(--phase start)
   if $LANG_GIVEN; then args+=(--lang "$UI_LANG"); fi
+  setup_ui_run "${args[@]}" || return 1
+  # shellcheck disable=SC1091
+  . "$SETUP_TMP/answers"
+}
+
+# What the survey found, for the confirmation to list every change.
+write_facts() {
+  local listening busy=() p
+  listening=$(ss -ltn 2>/dev/null || true)
+  for p in 80 443 "$SEARXNG_PORT"; do
+    if grep -q ":$p " <<<"$listening"; then busy+=("$p"); fi
+  done
+  {
+    printf 'MISSING_PKGS="%s"\nMISSING_GROUPS="%s"\n' "${MISSING_PKGS[*]}" "${MISSING_GROUPS[*]}"
+    printf 'NEEDS_REBOOT="%s"\nREBOOT_WHY="%s"\n' "$NEEDS_REBOOT" "$REBOOT_WHY"
+    printf 'HAVE_SETCAP="%s"\n' "$(command -v setcap >/dev/null && echo true || echo false)"
+    printf 'LINGER="%s"\n' "$([[ $(loginctl show-user "$USER" -p Linger --value 2>/dev/null) == yes ]] && echo true || echo false)"
+    printf 'XPU_FILTER="%s"\n' "$([[ -e /etc/systemd/system/user@.service.d/tenkstack-xpu-smi-log.conf ]] && echo true || echo false)"
+    printf 'INTEL="%s"\n' "$([[ " ${VENDORS[*]} " == *" intel "* ]] && echo true || echo false)"
+    printf 'BUSY_PORTS="%s"\nSEARXNG_PORT="%s"\nCONSOLE_TLS_PORT="%s"\n' "${busy[*]}" "$SEARXNG_PORT" "$CONSOLE_TLS_PORT"
+    printf 'HOST="%s"\nDRY_RUN="%s"\n' "$(hostname -f 2>/dev/null || hostname)" "$DRY_RUN"
+  } > "$SETUP_TMP/facts"
+}
+
+setup_ui_install() {
+  write_facts
+  local args=(--phase install --lang "$UI_LANG" --facts "$SETUP_TMP/facts" --dir "${ROOT:-$ROOT_DEFAULT}")
   if [[ -n $ENGINES ]]; then args+=(--engines "$ENGINES"); fi
   if [[ -n $COMFY_CARDS ]]; then args+=(--comfyui "$COMFY_CARDS"); fi
   if [[ -n $WANT_SEARXNG ]]; then args+=(--searxng "$WANT_SEARXNG"); fi
   case $TLS_MODE in internal|domain) args+=(--tls "$TLS_MODE") ;; esac
   if [[ -n $DOMAIN ]]; then args+=(--domain "$DOMAIN"); fi
-
-  if "$bin" "${args[@]}"; then code=0; else code=$?; fi
-  case $code in
-    0)
-      # A certificate given as a flag has no place on the screens; it
-      # survives them.
-      local mode=$TLS_MODE cert=$TLS_CERT key=$TLS_KEY
-      # shellcheck disable=SC1091
-      . "$tmp/answers"
-      if [[ $mode == cert ]]; then TLS_MODE=cert; TLS_CERT=$cert; TLS_KEY=$key; fi
-      rm -rf "$tmp"
-      return 0 ;;
-    1) rm -rf "$tmp"; exit 0 ;;
-    *) rm -rf "$tmp"; return 1 ;;
-  esac
+  setup_ui_run "${args[@]}" || return 1
+  # A certificate given as a flag has no place on the screens; it survives them.
+  local mode=$TLS_MODE cert=$TLS_CERT key=$TLS_KEY
+  # shellcheck disable=SC1091
+  . "$SETUP_TMP/answers"
+  if [[ $mode == cert ]]; then TLS_MODE=cert; TLS_CERT=$cert; TLS_KEY=$key; fi
+  CONFIRMED=true
 }
 
 # The plain path's first question, when neither --lang nor a screen said.
@@ -1167,7 +1212,7 @@ provision() {
 
 main() {
   local screens=false
-  if run_setup_ui; then screens=true; else ask_language; fi
+  if setup_ui_fetch && setup_ui_start; then screens=true; else ask_language; fi
   # The screens offer to remove an install they found.
   if [[ $ACTION == uninstall ]]; then uninstall_main; return; fi
 
@@ -1178,7 +1223,7 @@ main() {
   survey_deps
 
   step "$(L "② 選項" "② Choices")"
-  if $screens; then
+  if $screens && setup_ui_install; then
     ROOT=${ROOT/#\~/$HOME}
     skip "$(L "已在安裝畫面選好" "chosen on the setup screens")"
     if [[ -n $TLS_MODE ]]; then WANT_TLS=y; fi

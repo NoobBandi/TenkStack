@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ErrCancelled is the user leaving the setup without an answer.
@@ -138,9 +139,10 @@ func summary(l Lang, m Machine) string {
 	return b.String()
 }
 
-// Ask runs the setup screens and returns the answers, starting from the
-// preset (the flags install.sh was given).
-func Ask(m Machine, preset Answers) (Answers, error) {
+// Ask runs the install screens and returns the answers, starting from the
+// preset (the flags install.sh was given). The last screen is the only
+// confirmation: it lists every change to the machine from the survey's facts.
+func Ask(m Machine, preset Answers, facts Facts) (Answers, error) {
 	l := preset.Lang
 	a := preset
 	engines := EnginesFor(m.Vendors())
@@ -229,10 +231,22 @@ func Ask(m Machine, preset Answers) (Answers, error) {
 				}),
 		).WithHideFunc(func() bool { return access != "domain" }),
 		huh.NewGroup(
+			// A fixed height, the most it can take: the text grows with the
+			// choices after the page is laid out, and huh would crop it.
 			huh.NewNote().Title(T(l, "review.title")).DescriptionFunc(func() string {
-				return review(l, m, engines, a, access)
-			}, &a),
-			huh.NewConfirm().Affirmative(T(l, "review.continue")).Negative(T(l, "review.cancel")).Value(&proceed),
+				c := a
+				c.TLS = access
+				return review(l, m, engines, c, facts)
+			}, []any{&a, &access}).Height(reviewHeight(l, m, engines, facts)),
+			huh.NewConfirm().Affirmative(startLabel(l, facts)).Negative(T(l, "review.cancel")).Value(&proceed).
+				Validate(func(start bool) error {
+					c := a
+					c.TLS = access
+					if busy := facts.Busy(c); start && len(busy) > 0 {
+						return errors.New(Tf(l, "review.busy", strings.Join(busy, ", ")))
+					}
+					return nil
+				}),
 		),
 	)
 
@@ -252,48 +266,126 @@ func Ask(m Machine, preset Answers) (Answers, error) {
 	return a, nil
 }
 
-// review is the last screen's summary of the choices.
-func review(l Lang, m Machine, engines []Engine, a Answers, access string) string {
-	names := map[string]string{}
+// reviewHeight is the most lines the confirmation can take on this machine:
+// every engine and card ticked, the longest list of system changes any
+// access mode brings, and the two notes under the box.
+func reviewHeight(l Lang, m Machine, engines []Engine, f Facts) int {
+	changes := 0
+	for _, tls := range []string{"", "internal", "domain"} {
+		changes = max(changes, len(f.Changes(l, Answers{TLS: tls})))
+	}
+	// title, blank, two borders; location, blank, heading, base line,
+	// SearXNG, blank, two access lines, blank, heading, reboot line
+	return 4 + 12 + len(engines) + max(len(m.Cards), 1) + max(changes, 1) + 2
+}
+
+func startLabel(l Lang, f Facts) string {
+	if f.DryRun {
+		return T(l, "review.start.dry")
+	}
+	return T(l, "review.start")
+}
+
+var (
+	styleOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	styleWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styleErr  = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	styleDim  = lipgloss.NewStyle().Faint(true)
+	styleHead = lipgloss.NewStyle().Bold(true)
+	styleBox  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+)
+
+// pad right-pads to a display width, counting wide characters as two.
+func pad(s string, width int) string {
+	if w := lipgloss.Width(s); w < width {
+		return s + strings.Repeat(" ", width-w)
+	}
+	return s
+}
+
+// review is the confirmation: where, what, how it is reached, and what
+// changes on the machine beyond the install directory.
+func review(l Lang, m Machine, engines []Engine, a Answers, f Facts) string {
+	var lines []string
+	add := func(s ...string) { lines = append(lines, s...) }
+	label := func(k string) string { return pad(T(l, k), 8) }
+	vendorName := map[string]string{"intel": "Intel", "nvidia": "NVIDIA", "amd": "AMD"}
+
+	add(label("review.location")+" "+a.Root, "")
+
+	add(styleHead.Render(T(l, "review.installs")))
+	chosen := map[string]bool{}
+	for _, k := range a.Engines {
+		chosen[k] = true
+	}
+	width := lipgloss.Width("SearXNG")
 	for _, e := range engines {
-		names[e.Key] = e.Name
+		width = max(width, lipgloss.Width(e.Name))
 	}
-	list := func(items []string, name func(string) string) string {
-		if len(items) == 0 {
-			return T(l, "review.none")
+	width += 2
+	add("  " + styleOK.Render("✓") + " " + T(l, "review.base"))
+	for _, e := range engines {
+		if !chosen[e.Key] {
+			continue
 		}
-		var out []string
-		for _, it := range items {
-			out = append(out, name(it))
+		var vs []string
+		for _, v := range e.Vendors {
+			vs = append(vs, vendorName[v])
 		}
-		return strings.Join(out, ", ")
+		add("  " + styleOK.Render("✓") + " " + pad(e.Name, width) + strings.Join(vs, ", "))
 	}
-	cards := map[string]string{}
-	for _, c := range m.Cards {
-		cards[c.Address] = c.Name + " (" + c.Address + ")"
+	for _, c := range a.Comfy {
+		add("  " + styleOK.Render("✓") + " " + pad("ComfyUI", width) + c)
 	}
-	accessText := T(l, "access.http")
-	switch access {
-	case "internal":
-		accessText = T(l, "access.internal")
-	case "domain":
-		accessText = Tf(l, "review.domain", a.Domain)
+	if len(a.Comfy) == 0 {
+		add("  " + styleDim.Render("· "+pad("ComfyUI", width)+T(l, "review.skip")))
 	}
-	yn := T(l, "no")
 	if a.SearXNG {
-		yn = T(l, "yes")
+		add("  " + styleOK.Render("✓") + " " + pad("SearXNG", width) + "127.0.0.1:" + f.SearXNGPort)
+	} else {
+		add("  " + styleDim.Render("· "+pad("SearXNG", width)+T(l, "review.skip")))
 	}
-	rows := [][2]string{
-		{T(l, "review.dir"), a.Root},
-		{T(l, "review.engines"), list(a.Engines, func(k string) string { return names[k] })},
-		{T(l, "review.comfy"), list(a.Comfy, func(k string) string { return cards[k] })},
-		{T(l, "review.searxng"), yn},
-		{T(l, "review.access"), accessText},
+	add("")
+
+	var url, how string
+	switch a.TLS {
+	case "internal":
+		url, how = "https://"+f.Host+":"+f.TLSPort, T(l, "review.how.internal")
+	case "domain":
+		url, how = "https://"+a.Domain, T(l, "review.how.domain")
+	default:
+		url, how = "http://"+f.Host+":"+f.TLSPort, T(l, "review.how.http")
 	}
-	var b strings.Builder
-	for _, r := range rows {
-		fmt.Fprintf(&b, "%s: %s\n", r[0], r[1])
+	add(label("review.access")+" "+url, pad("", 8)+" "+styleDim.Render(how), "")
+
+	add(styleHead.Render(T(l, "review.system")))
+	changes := f.Changes(l, a)
+	if len(changes) == 0 {
+		add("  " + styleOK.Render("✓") + " " + T(l, "review.nosystem"))
 	}
-	b.WriteString("\n" + T(l, "review.next"))
-	return b.String()
+	for _, c := range changes {
+		mark := styleOK.Render("✓")
+		text := c.Text
+		if c.Sudo {
+			mark = styleWarn.Render("!")
+			text += styleDim.Render("  sudo")
+		}
+		add("  " + mark + " " + text)
+	}
+	if f.NeedsReboot {
+		add("  " + styleWarn.Render("!") + " " + Tf(l, "review.reboot", f.RebootWhy))
+	} else if len(f.MissingGroups) > 0 {
+		add("  " + styleWarn.Render("!") + " " + T(l, "review.relogin"))
+	} else {
+		add("  " + styleOK.Render("✓") + " " + T(l, "review.noreboot"))
+	}
+
+	out := styleBox.Render(strings.Join(lines, "\n"))
+	if busy := f.Busy(a); len(busy) > 0 {
+		out += "\n" + styleErr.Render(Tf(l, "review.busy", strings.Join(busy, ", ")))
+	}
+	if f.DryRun {
+		out += "\n" + styleDim.Render(T(l, "review.dry"))
+	}
+	return out
 }

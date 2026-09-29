@@ -255,3 +255,43 @@ func TestShellUninstallFlags(t *testing.T) {
 		t.Fatalf("%q %v", out, err)
 	}
 }
+
+func TestFacts(t *testing.T) {
+	f := ParseFacts(`MISSING_PKGS="git docker caddy go"
+MISSING_GROUPS="render"
+NEEDS_REBOOT="false"
+HAVE_SETCAP="false"
+LINGER="true"
+XPU_FILTER="false"
+INTEL="true"
+BUSY_PORTS="443 8090"
+SEARXNG_PORT="8090"
+CONSOLE_TLS_PORT="8443"
+HOST="box"
+`)
+	if len(f.MissingPkgs) != 4 || f.Host != "box" || !f.Intel || f.Linger != true {
+		t.Fatalf("parsed %+v", f)
+	}
+	if got := f.Busy(Answers{}); len(got) != 0 {
+		t.Errorf("plain HTTP without SearXNG needs neither busy port: %v", got)
+	}
+	if got := f.Busy(Answers{TLS: "domain", SearXNG: true}); strings.Join(got, " ") != "443 8090" {
+		t.Errorf("a domain needs 443, SearXNG its port: %v", got)
+	}
+	var texts []string
+	for _, c := range f.Changes(English, Answers{TLS: "domain"}) {
+		if strings.Contains(c.Text, "Caddy to ~/.local/bin") == c.Sudo {
+			t.Errorf("only the Caddy download runs without sudo: %+v", c)
+		}
+		texts = append(texts, c.Text)
+	}
+	joined := strings.Join(texts, " | ")
+	for _, want := range []string{"git, docker, libcap2-bin", "render", "setcap", "xpu-smi"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("changes lack %q: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "linger") {
+		t.Errorf("linger is already on: %s", joined)
+	}
+}
