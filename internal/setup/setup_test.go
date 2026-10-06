@@ -110,8 +110,14 @@ func TestEnginesFor(t *testing.T) {
 	if _, ok := keys["vllm"]; !ok {
 		t.Error("vLLM has an Intel build")
 	}
-	if e, ok := keys["sglang"]; ok && e.Verified {
-		t.Error("SGLang on Intel is not verified")
+	if e, ok := keys["sglang"]; !ok || !e.Verified {
+		t.Error("SGLang has an Intel build, verified on a B70")
+	}
+	// A build never run on the hardware is shown as such.
+	for _, e := range EnginesFor([]string{"nvidia"}) {
+		if e.Key == "sglang" && e.Verified {
+			t.Error("SGLang on NVIDIA is not verified")
+		}
 	}
 	if len(EnginesFor(nil)) != 0 {
 		t.Error("no vendor, no engine")

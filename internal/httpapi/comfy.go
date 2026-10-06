@@ -587,10 +587,12 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Provider    string `json:"provider"`
-		Vendor      string `json:"vendor"`
-		Action      string `json:"action"`
-		Variant     string `json:"variant"`
+		Provider string `json:"provider"`
+		Vendor   string `json:"vendor"`
+		Action   string `json:"action"`
+		Variant  string `json:"variant"`
+		// Image picks one of a build's images, to install or to switch to.
+		Image       string `json:"image"`
 		DeleteImage bool   `json:"delete_image"`
 	}
 	if err := readJSON(r, &in); err != nil {
@@ -609,7 +611,7 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		if variant == "" {
 			variant = "vendor"
 		}
-		rec, err := s.Installer.Install(ctx, in.Provider, in.Vendor, variant)
+		rec, err := s.Installer.Install(ctx, in.Provider, in.Vendor, variant, in.Image)
 		if err != nil {
 			installError(w, err)
 			return
@@ -624,8 +626,16 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, rec)
 		return
+	case "adopt":
+		rec, err := s.Installer.Adopt(ctx, in.Provider, in.Vendor)
+		if err != nil {
+			installError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, rec)
+		return
 	case "upgrade":
-		rec, err := s.Installer.Upgrade(ctx, in.Provider, in.Vendor)
+		rec, err := s.Installer.Upgrade(ctx, in.Provider, in.Vendor, in.Image)
 		if err != nil {
 			installError(w, err)
 			return

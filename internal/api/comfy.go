@@ -197,14 +197,24 @@ type JobStarted struct {
 
 // ProviderBuild is one provider on one vendor's cards: the image and what
 // of it exists here.
+// ImageChoice is one image a build can run, as the store offers it.
+type ImageChoice struct {
+	Image string `json:"image"`
+	Label string `json:"label"`
+	Note  string `json:"note,omitempty"`
+}
+
 type ProviderBuild struct {
-	Vendor      string       `json:"vendor"`
-	VendorLabel string       `json:"vendor_label"`
-	Macro       string       `json:"macro"`
-	Image       string       `json:"image"`
-	Requires    *string      `json:"requires"`
-	Verified    bool         `json:"verified"`
-	State       RuntimeState `json:"state"`
+	Vendor      string `json:"vendor"`
+	VendorLabel string `json:"vendor_label"`
+	Macro       string `json:"macro"`
+	Image       string `json:"image"`
+	// Images are the ones to choose between, Image first; one when the
+	// build offers no alternatives.
+	Images   []ImageChoice `json:"images"`
+	Requires *string       `json:"requires"`
+	Verified bool          `json:"verified"`
+	State    RuntimeState  `json:"state"`
 }
 
 // ProviderCard is one provider as the store shows it, with a build per

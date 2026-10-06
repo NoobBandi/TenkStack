@@ -61,9 +61,13 @@ func (s *Server) readProviders(w http.ResponseWriter, r *http.Request) {
 			if !ok || !present[v.Key] {
 				continue
 			}
+			images := []api.ImageChoice{}
+			for _, c := range p.Builds[v.Key].Choices() {
+				images = append(images, api.ImageChoice{Image: c.Image, Label: c.Label, Note: c.Note})
+			}
 			card.Builds = append(card.Builds, api.ProviderBuild{
 				Vendor: v.Key, VendorLabel: v.Label, Macro: p.Macro(v.Key),
-				Image: t.Image, Requires: t.Requires, Verified: t.Verified,
+				Image: t.Image, Images: images, Requires: t.Requires, Verified: t.Verified,
 				State: s.Installer.State(ctx, p.Key, v.Key),
 			})
 		}

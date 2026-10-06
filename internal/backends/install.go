@@ -544,7 +544,8 @@ func (in *Installer) State(ctx context.Context, key, vendor string) api.RuntimeS
 }
 
 // Install pulls the image, writes the launcher, and names it in the config.
-func (in *Installer) Install(ctx context.Context, key, vendor, variant string) (api.Install, error) {
+// image is one of the build's choices, or "" for its own.
+func (in *Installer) Install(ctx context.Context, key, vendor, variant, image string) (api.Install, error) {
 	p, err := providers.Lookup(key)
 	if err != nil {
 		return api.Install{}, &Invalid{err.Error()}
@@ -553,6 +554,11 @@ func (in *Installer) Install(ctx context.Context, key, vendor, variant string) (
 	if spec == nil {
 		return api.Install{}, &Invalid{fmt.Sprintf("%s 沒有 %s 顯示卡的版本", p.Name, vendor)}
 	}
+	if image == "" {
+		image = spec.Image
+	} else if !offers(p, vendor, variant, image) {
+		return api.Install{}, &Invalid{image + " 不是這個引擎提供的版本"}
+	}
 	if running := in.busy(p, vendor); running != nil {
 		return *running, nil
 	}
@@ -560,14 +566,14 @@ func (in *Installer) Install(ctx context.Context, key, vendor, variant string) (
 	if _, err := os.Stat(path); err == nil {
 		return api.Install{}, &Invalid{filepath.Base(path) + " 已經存在，沒有覆寫它"}
 	}
-	rec := &api.Install{Provider: p.Key, Vendor: vendor, Image: spec.Image, State: "pulling"}
+	rec := &api.Install{Provider: p.Key, Vendor: vendor, Image: image, State: "pulling"}
 	in.Probe.mu.Lock()
 	in.Probe.installs[slot(p, vendor)] = rec
 	in.Probe.mu.Unlock()
 
 	go func() {
 		bg := context.Background()
-		if !in.Images.Pull(bg, spec.Image, installProgress{in.Probe, rec}) {
+		if !in.Images.Pull(bg, image, installProgress{in.Probe, rec}) {
 			return
 		}
 		in.Probe.mu.Lock()
@@ -580,7 +586,7 @@ func (in *Installer) Install(ctx context.Context, key, vendor, variant string) (
 		if text == "vendor" {
 			text = ""
 		}
-		err := os.WriteFile(path, []byte(WrapperText(p, vendor, in.ModelsDir, text)), 0o755)
+		err := os.WriteFile(path, []byte(withImage(WrapperText(p, vendor, in.ModelsDir, text), image)), 0o755)
 		// Every variant but the any-card fallback is the vendor's build,
 		// whose multi-card setup has to be beside the launcher before a
 		// model spanning cards is loaded. The check used to be for "", which

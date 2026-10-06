@@ -35,6 +35,16 @@ import (
 // running it needs of the host.
 type Build struct {
 	Image string `yaml:"image"`
+	// Label and Note name Image among its alternatives, for the person
+	// choosing: 正式版, 每日版, the card family it is built for. Needed only
+	// when there are alternatives.
+	Label string `yaml:"label"`
+	Note  string `yaml:"note"`
+	// Alternatives are other images of the same build -- a nightly beside
+	// the release, the build for another card family -- run with the same
+	// flags and command. Image stays the one installed unless another is
+	// picked, and the one an outdated launcher is brought up to.
+	Alternatives []Choice `yaml:"alternatives"`
 	// Requires names something the host must already have, so the UI can
 	// say it before a multi-gigabyte download.
 	Requires string `yaml:"requires"`
@@ -57,6 +67,23 @@ type Build struct {
 	// fp8, int4, …) a model has been loaded in on this build. The catalog
 	// marks any other 未驗證 rather than refusing it.
 	Precisions []string `yaml:"precisions"`
+}
+
+// Choice is one image a build can run.
+type Choice struct {
+	Image string `yaml:"image"`
+	Label string `yaml:"label"`
+	Note  string `yaml:"note"`
+}
+
+// Choices are the build's images, its own first.
+func (b Build) Choices() []Choice {
+	return append([]Choice{{Image: b.Image, Label: b.Label, Note: b.Note}}, b.Alternatives...)
+}
+
+// Offers is whether image is one of the build's choices.
+func (b Build) Offers(image string) bool {
+	return slices.ContainsFunc(b.Choices(), func(c Choice) bool { return c.Image == image })
 }
 
 // MultiCard is applied by the launcher only when an entry's card selector
@@ -218,16 +245,12 @@ type Provider struct {
 	iconData []byte
 }
 
-// fallback is how engine.yaml writes the fallback build, with its label.
-type fallback struct {
-	Build `yaml:",inline"`
-	Label string `yaml:"label"`
-}
-
 // record is engine.yaml as written.
 type record struct {
 	Provider `yaml:",inline"`
-	Fallback *fallback `yaml:"fallback"`
+	// The fallback build's label is its Build.Label, which names its image
+	// the way a build's own label does.
+	Fallback *Build `yaml:"fallback"`
 }
 
 // Macro is the llama-swap macro naming this provider's launcher for one
@@ -348,8 +371,7 @@ func loadOne(files fs.FS, dir string) (Provider, error) {
 	}
 	p := r.Provider
 	if r.Fallback != nil {
-		b := r.Fallback.Build
-		p.Fallback, p.FallbackLabel = &b, r.Fallback.Label
+		p.Fallback, p.FallbackLabel = r.Fallback, r.Fallback.Label
 	}
 	switch {
 	case p.Key != dir:
@@ -379,6 +401,21 @@ func loadOne(files fs.FS, dir string) (Provider, error) {
 		}
 		if b.Image == "" {
 			return p, fmt.Errorf("build for %s has no image", vendor)
+		}
+		if len(b.Alternatives) > 0 {
+			if b.Label == "" {
+				return p, fmt.Errorf("build for %s has alternatives, so its own image needs a label", vendor)
+			}
+			seen := map[string]bool{}
+			for _, c := range b.Choices() {
+				if c.Image == "" || c.Label == "" {
+					return p, fmt.Errorf("build for %s: every alternative needs an image and a label", vendor)
+				}
+				if seen[c.Image] {
+					return p, fmt.Errorf("build for %s offers %s twice", vendor, c.Image)
+				}
+				seen[c.Image] = true
+			}
 		}
 		if m := b.MultiCard; m != nil {
 			if vendors.Get(vendor).SelectorVar == "" {

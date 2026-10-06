@@ -39,20 +39,50 @@ env_prefix: SGLANG
 
 builds:
   intel:
-    # Written from SGLang's XPU guide, which names the Arc Pro B-series;
-    # not yet run on this project's hardware.
+    # Run on an Arc Pro B70, 2026-09-30: Qwen3.5-9B bf16 on one card, 30.8
+    # tok/s for one user and 123 for four, 33.8 with the XPU decode graph;
+    # the nightly with MTP 47-54, and 52-61 with online FP8, which is slow on
+    # the release (18). vLLM's FP8 + MTP was 64-78 on the same card.
     image: lmsysorg/sglang:v0.5.20-xpu
-    flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --ipc, host, -e, HF_HUB_OFFLINE=1]
-    # The image's entrypoint is a shell; XPU needs its device and attention
-    # backend named.
-    command: [sglang, serve, --device, xpu, --attention-backend, intel_xpu]
+    label: 正式版
+    note: SGLang 的第一個 XPU 正式版
+    alternatives:
+      - image: intel/sglang-dev:latest
+        label: 每日版
+        note: Intel 每天從 main 建置、針對 Battlemage 的版本；MTP 推測解碼要用這版，正式版一開就會崩潰
+    verified: true
+    precisions: [bf16]
+    flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --ipc, host, --shm-size, 16g, -e, HF_HUB_OFFLINE=1]
+    # The image's entrypoint is a shell. SGLang's XPU guide names the device
+    # and attention backend, a page size intel_xpu takes (32, 64 or 128),
+    # and no overlap schedule.
+    command: [sglang, serve, --device, xpu, --attention-backend, intel_xpu, --page-size, "64", --disable-overlap-schedule]
   nvidia:
     image: lmsysorg/sglang:latest
+    label: 正式版
+    note: 最新的正式發布版
+    alternatives:
+      - image: lmsysorg/sglang:dev
+        label: 每日版
+        note: 每天從 main 建置，修正比較新，但偶爾會壞
     requires: nvidia-container-toolkit
     flags: [--gpus, all, --ipc, host, -e, HF_HUB_OFFLINE=1]
     command: [sglang, serve]
 
 recommended:
+  # Qwen3.5/3.8 mix Gated DeltaNet layers in. SGLang keeps their state for
+  # the prefix cache only at page size 1 (no_buffer), which intel_xpu
+  # attention does not take, and extra_buffer does not support the
+  # architecture yet -- the release and the 9/28 nightly alike.
+  - match: ^Qwen3_5
+    vendors: [intel]
+    flags: [--disable-radix-cache]
+    note: XPU 上這類混合架構還不能用前綴快取
+  # Qwen3.5/3.8 write tool calls as XML; the qwen parser swallows them,
+  # leaving neither content nor a tool call.
+  - match: ^Qwen3_5
+    flags: [--reasoning-parser qwen3, --tool-call-parser qwen3_coder]
+    note: Qwen3.5/3.8 的工具呼叫是 XML 格式
   - match: ^Qwen3
-    flags: [--reasoning-parser qwen3, --tool-call-parser qwen25]
+    flags: [--reasoning-parser qwen3, --tool-call-parser qwen]
     note: 思考過程與工具呼叫分開回傳

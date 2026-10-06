@@ -24,6 +24,12 @@ script_prefix: llama-server-
 builds:
   intel:
     image: ghcr.io/ggml-org/llama.cpp:server-intel
+    label: 最新版
+    note: 跟著 llama.cpp 每次發布更新，新模型最快能用
+    alternatives:
+      - image: ghcr.io/ggml-org/llama.cpp:server-intel-b11176
+        label: 已驗證版（b11176）
+        note: 這個專案在 Arc Pro B70 上一直在用的版本，不會自己變動
     # Run on an Arc Pro B70, 2026-09-25, build b11151: Qwen3.8-27B Q6_K_XL,
     # q8_0 KV, ubatch 1024, one card -- prompt 889 tok/s at 4K and 952 at
     # 16K, generation 18.3 and 15.9. The image is built with GGML_SYCL_F16,

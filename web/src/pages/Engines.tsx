@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Card, Checkbox, Drawer, Empty, Popconfirm, Progress, Space, Tag,
-  Tooltip, Typography,
+  Alert, App as AntApp, Button, Card, Checkbox, Drawer, Empty, Popconfirm, Progress, Radio, Select, Space,
+  Tag, Tooltip, Typography,
 } from 'antd';
 import { CheckCircleFilled, ExportOutlined, WarningFilled } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
@@ -117,10 +117,14 @@ function EngineTile({ card, onOpen }: { card: ProviderCard; onOpen: () => void }
 /** One vendor's build of an engine, with what can be done to it. */
 function BuildRow({ card, build, onAction }: {
   card: ProviderCard; build: ProviderBuild;
-  onAction: (action: EngineAction, opts?: { delete_image?: boolean }) => Promise<void>;
+  onAction: (action: EngineAction, opts?: { delete_image?: boolean; image?: string }) => Promise<void>;
 }) {
   const [dropImage, setDropImage] = useState(true);
+  const { modal } = AntApp.useApp();
   const st = build.state;
+  const choices = build.images ?? [];
+  const [pick, setPick] = useState(build.image);
+  const current = choices.find((c) => c.image === st.image);
   const install = st.install;
   const inUse = st.used_by.length > 0;
   const lastDefault = card.default && card.launchers.length === 0
@@ -147,17 +151,38 @@ function BuildRow({ card, build, onAction }: {
             這個版本是照官方文件寫的，還沒在 {build.vendor_label} 的卡上實際跑過。
           </Text>
         )}
+        {choices.length > 1 && (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            可選版本：{choices.map((c) => c.label).join('、')}（安裝時選，之後也能換）
+          </Text>
+        )}
         <Popconfirm
           title={`安裝 ${card.name}（${build.vendor_label}）？`}
           description={(
-            <div style={{ maxWidth: 300 }}>
-              會下載映像 <code>{build.image}</code>，通常好幾 GB，時間看網速。
+            <div style={{ maxWidth: 340 }}>
+              {choices.length > 1 ? (
+                // The release and a nightly, or builds for two card families:
+                // chosen here, and switchable later from the installed row.
+                <Radio.Group value={pick} onChange={(e) => setPick(e.target.value)}
+                             style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '4px 0 8px' }}>
+                  {choices.map((c) => (
+                    <Radio key={c.image} value={c.image}>
+                      <span style={{ fontWeight: 600 }}>{c.label}</span>
+                      {c.note && <div style={{ fontSize: 12, opacity: 0.65, lineHeight: 1.5 }}>{c.note}</div>}
+                      <div style={{ fontFamily: MONO, fontSize: 11, opacity: 0.5, wordBreak: 'break-all' }}>{c.image}</div>
+                    </Radio>
+                  ))}
+                </Radio.Group>
+              ) : (
+                <div>會下載映像 <code>{build.image}</code>。</div>
+              )}
+              映像通常好幾 GB，時間看網速。
               {build.requires && <div>主機需要先有：{build.requires}</div>}
             </div>
           )}
           okText="安裝"
           cancelText="取消"
-          onConfirm={() => onAction('install')}
+          onConfirm={() => onAction('install', { image: pick })}
         >
           <Button type="primary" size="small">安裝</Button>
         </Popconfirm>
@@ -173,35 +198,90 @@ function BuildRow({ card, build, onAction }: {
           {st.image_size && <Text type="secondary" style={{ fontSize: 12 }}>映像 {st.image_size}</Text>}
           {inUse && <Text type="secondary" style={{ fontSize: 12 }}>{st.used_by.length} 個模型在用</Text>}
         </Space>
+        {choices.length > 1 && (
+          // Switching is the same rewrite as bringing a launcher up to date,
+          // onto the image picked here. A launcher edited by hand shows the
+          // choice too, but has to be adopted before it can be rewritten.
+          <Space size={8} wrap>
+            <Text type="secondary" style={{ fontSize: 12 }}>版本</Text>
+            <Tooltip title={st.recipe === 'edited' ? '啟動腳本手動改過，要先改用主控台的啟動腳本才能切換' : undefined}>
+            <Select
+              size="small"
+              style={{ minWidth: 180 }}
+              disabled={st.recipe === 'edited'}
+              value={current ? current.image : undefined}
+              placeholder="不在清單上的映像"
+              options={choices.map((c) => ({ value: c.image, label: c.label }))}
+              onChange={(image: string) => {
+                const next = choices.find((c) => c.image === image);
+                modal.confirm({
+                  title: `切換到${next?.label ?? '這個版本'}？`,
+                  content: (
+                    <div>
+                      {next?.note && <div style={{ marginBottom: 6 }}>{next.note}</div>}
+                      會下載 <code>{image}</code> 並改寫啟動腳本。正在跑的模型不受影響，下次載入時才會用新版。
+                    </div>
+                  ),
+                  okText: '切換', cancelText: '取消',
+                  onOk: () => onAction('upgrade', { image }),
+                });
+              }}
+            />
+            </Tooltip>
+          </Space>
+        )}
         {st.recipe === 'outdated' && st.recommended && (
           <Alert
             type="info" showIcon
-            message="有建議的新版本"
+            // The same image with a newer launcher around it, or another
+            // image: an old record's, which is no longer offered.
+            message={st.recommended === st.image ? '啟動設定有更新' : '有建議的新版本'}
             description={(
               <Space direction="vertical" size={6} style={{ width: '100%' }}>
                 <div style={{ fontFamily: MONO, fontSize: 11, wordBreak: 'break-all' }}>
-                  {st.image} → {st.recommended}
+                  {st.recommended === st.image ? `映像不變：${st.image}` : `${st.image} → ${st.recommended}`}
                 </div>
                 <Popconfirm
-                  title="更新到建議版本？"
+                  title={st.recommended === st.image ? '套用新的啟動設定？' : '更新到建議版本？'}
                   description={(
                     <div style={{ maxWidth: 300 }}>
-                      會下載 <code>{st.recommended}</code> 並改寫啟動腳本。正在跑的模型不受影響，下次載入時才會用新版。
+                      {st.recommended === st.image
+                        ? '會改寫啟動腳本，映像不用重新下載。'
+                        : <>會下載 <code>{st.recommended}</code> 並改寫啟動腳本。</>}
+                      正在跑的模型不受影響，下次載入時才會生效。
                     </div>
                   )}
-                  okText="更新" cancelText="取消"
+                  okText="套用" cancelText="取消"
                   onConfirm={() => onAction('upgrade')}
                 >
-                  <Button type="primary" size="small">更新到建議版本</Button>
+                  <Button type="primary" size="small">
+                    {st.recommended === st.image ? '套用' : '更新到建議版本'}
+                  </Button>
                 </Popconfirm>
               </Space>
             )}
           />
         )}
         {st.recipe === 'edited' && (
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            啟動腳本手動改過，建議版本不會自動套用。
-          </Text>
+          <Space size={8} wrap>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              啟動腳本手動改過，建議版本不會自動套用，也不能從這裡切換版本。
+            </Text>
+            <Popconfirm
+              title="改用主控台的啟動腳本？"
+              description={(
+                <div style={{ maxWidth: 320 }}>
+                  會照主控台的寫法重寫 <code>{build.macro}</code> 的啟動腳本，你改過的版本另存成
+                  <code>.edited-日期</code> 放在旁邊。{current ? `映像維持${current.label}。` : `映像換成${choices[0]?.label ?? '建議版本'}。`}
+                  正在跑的模型不受影響，下次載入時才會用新的腳本。
+                </div>
+              )}
+              okText="改寫" cancelText="取消"
+              onConfirm={() => onAction('adopt')}
+            >
+              <Button size="small">改用主控台的啟動腳本</Button>
+            </Popconfirm>
+          </Space>
         )}
         <Space size={6} wrap>
           <Popconfirm
@@ -253,7 +333,7 @@ function BuildRow({ card, build, onAction }: {
 
 function EngineDrawer({ card, onClose, onAction }: {
   card: ProviderCard | null; onClose: () => void;
-  onAction: (card: ProviderCard, build: ProviderBuild, action: EngineAction, opts?: { delete_image?: boolean }) => Promise<void>;
+  onAction: (card: ProviderCard, build: ProviderBuild, action: EngineAction, opts?: { delete_image?: boolean; image?: string }) => Promise<void>;
 }) {
   return (
     <Drawer open={!!card} onClose={onClose} width={520} title={null} destroyOnClose>
@@ -359,12 +439,12 @@ export default function Engines() {
 
   const onAction = async (
     card: ProviderCard, build: ProviderBuild,
-    action: EngineAction, opts: { delete_image?: boolean } = {},
+    action: EngineAction, opts: { delete_image?: boolean; image?: string } = {},
   ) => {
     try {
       await engineAction(card.key, build.vendor, action, opts);
       message.success({
-        install: '開始下載', update: '開始更新', upgrade: '開始更新到建議版本', enable: '已啟用', disable: '已停用', remove: '已移除',
+        install: '開始下載', update: '開始更新', upgrade: '開始更新到建議版本', adopt: '開始改寫啟動腳本', enable: '已啟用', disable: '已停用', remove: '已移除',
       }[action]);
       load();
     } catch (error) {

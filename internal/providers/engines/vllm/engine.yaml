@@ -66,6 +66,12 @@ builds:
     # FP8 TP=2 MTP3 44/57/80 tok/s zh/en/code (b2 46/62/86), host RAM 11.8 GB
     # (16), prefix caching on by default (off in b2).
     image: vllm/vllm-openai-xpu:v0.30.0
+    label: 正式版
+    note: vLLM 的正式發布版，這個專案在 Arc Pro B70 上驗證過
+    alternatives:
+      - image: vllm/vllm-openai-xpu:nightly
+        label: 每日版
+        note: 每天從 vLLM 的 main 建置，修正比較新，但沒有驗證過，偶爾會壞
     verified: true
     # OneCCL opens every render node by path, so by-path goes in read-only.
     # XPU graph replays a whole decode step instead of launching each kernel
@@ -106,11 +112,25 @@ builds:
               -e, CCL_SYCL_ALLGATHERV_SIMPLE_THRESHOLD=4294967296, -e, CCL_SYCL_ALLTOALL_TMP_BUF=1]
   nvidia:
     image: vllm/vllm-openai:latest
+    label: 正式版
+    note: 最新的正式發布版
+    alternatives:
+      - image: vllm/vllm-openai:cu129-nightly
+        label: 每日版
+        note: 每天從 vLLM 的 main 建置，修正比較新，但偶爾會壞
     requires: nvidia-container-toolkit
     flags: [--gpus, all, --ipc, host, -e, HF_HUB_OFFLINE=1]
     cache_dir: /root/.cache/vllm
   amd:
-    image: rocm/vllm:latest
+    # AMD publishes no latest tag -- rocm/vllm:latest does not exist -- but
+    # one image per card family, named for its ROCm and vLLM versions.
+    image: rocm/vllm:rocm7.14.1_rdna_ubuntu24.04_py3.14_pytorch_2.11_vllm_0.23.0
+    label: Radeon（RDNA）
+    note: 給 Radeon 顯示卡
+    alternatives:
+      - image: rocm/vllm:rocm7.14.1_cdna_ubuntu24.04_py3.14_pytorch_2.11_vllm_0.23.0
+        label: Instinct（CDNA）
+        note: 給 Instinct 資料中心加速卡
     flags: [--device, /dev/dri, --device, /dev/kfd, --group-add, video, --security-opt, seccomp=unconfined, --ipc, host, -e, HF_HUB_OFFLINE=1]
     # The ROCm image's entrypoint is a shell, not the server.
     command: [vllm, serve]

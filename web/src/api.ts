@@ -536,11 +536,20 @@ export interface EngineState {
   used_by: string[];
 }
 
+/** One image a build can run: the release, a nightly, another card family. */
+export interface ImageChoice {
+  image: string;
+  label: string;
+  note?: string;
+}
+
 export interface ProviderBuild {
   vendor: string;
   vendor_label: string;
   macro: string;
   image: string;
+  /** The images to choose between, `image` first; one when there is no choice. */
+  images: ImageChoice[];
   requires: string | null;
   /** False for a recipe written from documentation and not yet run on the
    *  vendor's hardware. */
@@ -691,14 +700,14 @@ export const comfyAction = (
   name: string, action: 'update' | 'remove', delete_image = false,
 ) => send<{ ok: boolean }>('/runtimes/comfy', 'POST', { name, action, delete_image });
 
-export type EngineAction = 'install' | 'update' | 'upgrade' | 'enable' | 'disable' | 'remove';
+export type EngineAction = 'install' | 'update' | 'upgrade' | 'adopt' | 'enable' | 'disable' | 'remove';
 
 /** Install, update, enable, disable or remove one engine's build for one
  *  vendor's cards; `upgrade` moves an outdated launcher to the recommended
  *  image. */
 export const engineAction = (
   provider: string, vendor: string, action: EngineAction,
-  options: { variant?: string; delete_image?: boolean } = {},
+  options: { variant?: string; delete_image?: boolean; image?: string } = {},
 ) => send<unknown>('/runtimes/action', 'POST', { provider, vendor, action, ...options });
 
 /** One container's CPU and memory at one moment, read from cgroup. */

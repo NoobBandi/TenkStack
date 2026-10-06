@@ -74,8 +74,9 @@ func TestRegistry(t *testing.T) {
 		t.Fatalf("vllm record: %+v", v)
 	}
 	s := Get("sglang")
-	if s == nil || s.ServerFlags[FlagContext] != "--context-length" || s.Builds["intel"].Verified {
-		t.Errorf("sglang should be a server engine, unverified on Intel: %+v", s)
+	// Run on a B70 on 2026-09-30; NVIDIA's build is still from the docs.
+	if s == nil || s.ServerFlags[FlagContext] != "--context-length" || !s.Builds["intel"].Verified || s.Builds["nvidia"].Verified {
+		t.Errorf("sglang should be a server engine, verified on Intel and not on NVIDIA: %+v", s)
 	}
 }
 
