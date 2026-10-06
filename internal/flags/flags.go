@@ -138,11 +138,19 @@ type key struct {
 type Cache struct {
 	mu    sync.Mutex
 	items map[key][]api.Flag
-	// Quantisation methods per image id, from the image itself.
-	quant map[string][]string
+	// Quantisation methods per image id, from the image itself, with the
+	// ids being asked now and when an attempt last failed.
+	quant  map[string][]string
+	asking map[string]bool
+	failed map[string]time.Time
 }
 
-func NewCache() *Cache { return &Cache{items: map[key][]api.Flag{}, quant: map[string][]string{}} }
+func NewCache() *Cache {
+	return &Cache{
+		items: map[key][]api.Flag{}, quant: map[string][]string{},
+		asking: map[string]bool{}, failed: map[string]time.Time{},
+	}
+}
 
 // vLLM's own list of what --quantization accepts. Asked of the image rather
 // than written here, because the list moves with every release and the
@@ -154,36 +162,53 @@ const quantListing = "from vllm.model_executor.layers.quantization import QUANTI
 
 // Quantizations is the methods one vLLM image accepts, cached by image id
 // so a rolling tag re-asked after an update gets a fresh answer. Empty when
-// the image cannot say, which the caller treats as "offer the record's".
-func (c *Cache) Quantizations(ctx context.Context, image, imageID string) []string {
+// the image has not said yet, which the caller treats as "offer the
+// record's".
+//
+// The image is asked in the background, never within the request that
+// wanted the answer: starting vLLM's Python takes longer than a page waits,
+// so asked inline the command was killed with the request every time, the
+// answer was never cached, and every visit to the engines page stalled for
+// the length of the attempt. A failed attempt is not repeated for a while.
+func (c *Cache) Quantizations(_ context.Context, image, imageID string) []string {
 	if imageID == "" {
 		imageID = image
 	}
 	c.mu.Lock()
-	cached, ok := c.quant[imageID]
-	c.mu.Unlock()
-	if ok {
+	defer c.mu.Unlock()
+	if cached, ok := c.quant[imageID]; ok {
 		return cached
 	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", "python3", image, "-c", quantListing).Output()
-	if err != nil {
-		log.Printf("could not ask %s for its quantization methods: %v", image, err)
+	if c.asking[imageID] || time.Since(c.failed[imageID]) < quantRetry {
 		return nil
 	}
+	c.asking[imageID] = true
+	go c.askQuantizations(image, imageID)
+	return nil
+}
+
+// quantRetry is how long a failed attempt to ask an image stands.
+const quantRetry = 10 * time.Minute
+
+func (c *Cache) askQuantizations(image, imageID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", "python3", image, "-c", quantListing).Output()
 	var methods []string
 	for _, line := range strings.Split(string(out), "\n") {
 		if t := strings.TrimSpace(line); t != "" && !strings.ContainsAny(t, " :[") {
 			methods = append(methods, t)
 		}
 	}
-	if len(methods) > 0 {
-		c.mu.Lock()
-		c.quant[imageID] = methods
-		c.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.asking, imageID)
+	if err != nil || len(methods) == 0 {
+		log.Printf("could not ask %s for its quantization methods: %v", image, err)
+		c.failed[imageID] = time.Now()
+		return
 	}
-	return methods
+	c.quant[imageID] = methods
 }
 
 // LlamaServer asks a launcher for its flags. Run through the wrapper
