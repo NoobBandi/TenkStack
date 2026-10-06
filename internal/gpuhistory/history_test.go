@@ -45,3 +45,39 @@ func TestCapacityAndResize(t *testing.T) {
 }
 
 func floatp(f float64) *float64 { return &f }
+
+// The points outlive a restart: saved, then read back by a fresh History,
+// less whatever has fallen out of the window meanwhile.
+func TestKeptAcrossRestarts(t *testing.T) {
+	file := t.TempDir() + "/gpu-history.json"
+	before := New(&fake{})
+	before.SetFile(file)
+	for i := 0; i < 5; i++ {
+		before.record(1, api.GpuSample{PowerW: floatp(float64(i))})
+	}
+	// One point from before the window, as a file left by a long stop has.
+	before.mu.Lock()
+	stale := before.points[1][0]
+	stale.T -= 3 * 3600
+	before.points[1] = append([]api.GpuHistoryPoint{stale}, before.points[1]...)
+	before.mu.Unlock()
+	before.save()
+
+	after := New(&fake{})
+	after.SetFile(file)
+	after.load()
+	got := after.Points(1, nil, 0)
+	if len(got) != 5 {
+		t.Fatalf("read back %d points, want the 5 inside the window", len(got))
+	}
+	if *got[4].Power != 4 {
+		t.Errorf("the newest point should come back last, got %v", *got[4].Power)
+	}
+
+	missing := New(&fake{})
+	missing.SetFile(t.TempDir() + "/none.json")
+	missing.load()
+	if len(missing.Points(1, nil, 0)) != 0 {
+		t.Error("no file, no points")
+	}
+}

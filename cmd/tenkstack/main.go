@@ -104,6 +104,7 @@ func main() {
 	cards := gpu.NewRegistry(intel.New(), amd.New(), nvidia.New())
 	history := gpuhistory.New(cards)
 	history.SetHours(int(prefs.Get("gpu_history_hours")))
+	history.SetFile(filepath.Join(layout.StateDir, "gpu-history.json"))
 
 	config := llamaswap.NewStore(layout.LlamaSwapConfig)
 	models := &llamaswap.Models{Store: config, Dir: layout.ModelsDir,

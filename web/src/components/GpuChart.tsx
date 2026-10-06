@@ -250,6 +250,17 @@ export default function GpuChart({ latest }: Props) {
    * its own ceiling over the same plot height, so the fractions are already in
    * the same units the eye is using.
    */
+  // Round minutes across the window, about six of them.
+  const now = Date.now() / 1000;
+  const ticks = useMemo(() => {
+    const step = [60, 120, 180, 300, 600, 900, 1200, 1800, 3600].find((s) => seconds / s <= 7) ?? 3600;
+    const out: number[] = [];
+    for (let t = Math.ceil((now - seconds) / step) * step; t <= now; t += step) out.push(t);
+    return out;
+    // Recomputed as the window moves on, a step at a time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seconds, Math.floor(now / 60)]);
+
   const handleMove = useCallback((state: MouseHandlerDataParam, e: { clientY?: number }) => {
     // Typed `number | TooltipIndex | undefined`, and TooltipIndex is a *string*
     // -- recharts hands the index over as "17", not 17. A `typeof === 'number'`
@@ -355,8 +366,15 @@ export default function GpuChart({ latest }: Props) {
               </defs>
 
               <CartesianGrid stroke={LINE.faint} vertical={false} />
+              {/* The window chosen, not the span of the data: fitted to the
+                  data, a history of three minutes filled the width the same
+                  under 5 分 as under 2 時, and the four choices looked alike. */}
               <XAxis
                 dataKey="t"
+                type="number"
+                domain={[now - seconds, now]}
+                allowDataOverflow
+                ticks={ticks}
                 tickFormatter={clock}
                 stroke={LINE.soft}
                 tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10, fontFamily: MONO }}

@@ -5,7 +5,9 @@ package gpuhistory
 
 import (
 	"context"
+	"encoding/json"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -36,8 +38,94 @@ type History struct {
 	points   map[int][]api.GpuHistoryPoint
 	latest   map[int]api.GpuSample
 
+	// file keeps the points across restarts: saved every saveEvery and on
+	// Stop, read back on Start. Empty keeps them in memory only.
+	file string
+
 	cancel context.CancelFunc
 	done   chan struct{}
+}
+
+// saveEvery is how often the points are written to file. A crash loses at
+// most this much; a restart, which stops cleanly, loses nothing.
+const saveEvery = time.Minute
+
+// SetFile names where the points are kept across restarts. Every deploy
+// restarts the console, and with the points in memory only, each emptied
+// the GPU chart: its 2-hour view showed the few minutes since, the same as
+// its 5-minute one.
+func (h *History) SetFile(path string) { h.file = path }
+
+// saved is the file's shape: points per card index.
+type saved struct {
+	Points map[string][]api.GpuHistoryPoint `json:"points"`
+}
+
+// load reads the file back, keeping only what is still inside the window.
+func (h *History) load() {
+	if h.file == "" {
+		return
+	}
+	raw, err := os.ReadFile(h.file)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("could not read GPU history: %v", err)
+		}
+		return
+	}
+	var in saved
+	if err := json.Unmarshal(raw, &in); err != nil {
+		log.Printf("could not read GPU history: %v", err)
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cutoff := float64(time.Now().UnixNano())/1e9 - float64(h.capacity)*SampleInterval.Seconds()
+	kept := 0
+	for key, pts := range in.Points {
+		index, err := strconv.Atoi(key)
+		if err != nil {
+			continue
+		}
+		var recent []api.GpuHistoryPoint
+		for _, p := range pts {
+			if p.T >= cutoff {
+				recent = append(recent, p)
+			}
+		}
+		if len(recent) > h.capacity {
+			recent = recent[len(recent)-h.capacity:]
+		}
+		if len(recent) > 0 {
+			h.points[index] = recent
+			kept += len(recent)
+		}
+	}
+	log.Printf("GPU history: %d points read back", kept)
+}
+
+// save writes the points to file, through a temporary one so a crash
+// mid-write leaves the last good copy.
+func (h *History) save() {
+	if h.file == "" {
+		return
+	}
+	h.mu.Lock()
+	out := saved{Points: map[string][]api.GpuHistoryPoint{}}
+	for index, pts := range h.points {
+		out.Points[strconv.Itoa(index)] = append([]api.GpuHistoryPoint(nil), pts...)
+	}
+	h.mu.Unlock()
+	raw, err := json.Marshal(out)
+	if err == nil {
+		tmp := h.file + ".tmp"
+		if err = os.WriteFile(tmp, raw, 0o644); err == nil {
+			err = os.Rename(tmp, h.file)
+		}
+	}
+	if err != nil {
+		log.Printf("could not save GPU history: %v", err)
+	}
 }
 
 func New(source Source) *History {
@@ -138,6 +226,7 @@ func (h *History) Start(ctx context.Context) {
 	if h.cancel != nil {
 		return
 	}
+	h.load()
 	ctx, h.cancel = context.WithCancel(ctx)
 	h.done = make(chan struct{})
 	go h.poll(ctx)
@@ -151,13 +240,19 @@ func (h *History) Stop() {
 	h.cancel()
 	<-h.done
 	h.cancel = nil
+	h.save()
 }
 
 func (h *History) poll(ctx context.Context) {
 	defer close(h.done)
 	var known []int
 	var discoveredAt time.Time
+	savedAt := time.Now()
 	for {
+		if time.Since(savedAt) >= saveEvery {
+			h.save()
+			savedAt = time.Now()
+		}
 		if len(known) == 0 || time.Since(discoveredAt) >= discoverEvery {
 			known = h.source.Indices(ctx)
 			// Discovery can fail while stats still answer; an empty dashboard
