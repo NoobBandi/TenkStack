@@ -330,7 +330,8 @@ this was first built on.
 | Variable | Default | What it is |
 |---|---|---|
 | `CONSOLE_AI_DIR` | `~/ai` (installer: `~/tenkstack`) | Everything below is derived from this |
-| `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | Session key and SQLite; the only thing the console writes |
+| `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | Session key and the database (`postgres/`, `backups/`); the only thing the console writes |
+| `CONSOLE_DATABASE_URL` | unset | Another PostgreSQL to use instead of the console's own, which is then not set up |
 | `CONSOLE_MODELS_DIR` | `$CONSOLE_AI_DIR/models` | The primary model location: GGUF and safetensors weights |
 | `CONSOLE_LLAMA_SWAP_DIR` | `$CONSOLE_AI_DIR/llama-swap` | |
 | `CONSOLE_LLAMA_SWAP_CONFIG` | `$CONSOLE_LLAMA_SWAP_DIR/config.yaml` | |
@@ -375,8 +376,24 @@ place. One such tree, the machine this was built on, is versioned separately
 as [TenkStack-Host](https://github.com/NoobBandi/TenkStack-Host) — useful as a
 worked example of what a tuned config looks like, not as something to copy.
 
-The session signing key and the SQLite database holding password hashes and
-API keys are excluded by `.gitignore` and must never be committed.
+The session signing key and the database holding password hashes and API keys
+are excluded by `.gitignore` and must never be committed.
+
+### The database
+
+Accounts, API keys, conversations and settings are in PostgreSQL, which the
+console runs for itself: on its first start it writes
+`tenkstack-postgres.service`, a user unit running the official `postgres`
+image as the console's own user with its files in `$CONSOLE_STATE_DIR/postgres`.
+The container has no network and the server no TCP listener; the only way in
+is a unix socket in a directory only that user can enter, so there is no
+password to keep. An install from before this imports its SQLite file on that
+first start and keeps it beside the database as `console.sqlite.migrated-*`.
+
+```bash
+tenkstack backup              # → $CONSOLE_STATE_DIR/backups/console-<time>.dump
+docker exec -i tenkstack-postgres pg_restore -U tenkstack -d tenkstack --clean --if-exists < FILE
+```
 
 ## License
 

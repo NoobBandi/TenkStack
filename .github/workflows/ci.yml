@@ -27,6 +27,25 @@ permissions:
 jobs:
   go:
     runs-on: ubuntu-latest
+    # The console's database, for the store tests: each test makes a schema
+    # of its own in it (internal/store/storetest). The same major version as
+    # pgserver.Image.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: tenkstack
+          POSTGRES_PASSWORD: tenkstack
+          POSTGRES_DB: tenkstack
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tenkstack"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      CONSOLE_TEST_DATABASE_URL: postgres://tenkstack:tenkstack@127.0.0.1:5432/tenkstack?sslmode=disable
     steps:
       - uses: actions/checkout@v7
       # setup-go downloads and unpacks Go in two seconds, then spends about

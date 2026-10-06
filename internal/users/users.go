@@ -1,5 +1,5 @@
-// Package users stores accounts and API keys. Hashes and key formats match the
-// Python backend so one database serves both during the port.
+// Package users stores accounts and API keys. Hashes and key formats are the
+// ones the Python backend wrote, so its accounts still log in.
 package users
 
 import (
@@ -10,9 +10,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/scrypt"
 
 	"github.com/NoobBandi/TenkStack/internal/api"
@@ -30,29 +30,6 @@ type Store struct {
 }
 
 func New(db *sql.DB) *Store { return &Store{db: db} }
-
-func (s *Store) Init() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS users (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			username TEXT NOT NULL UNIQUE,
-			display_name TEXT NOT NULL DEFAULT '',
-			password_hash TEXT NOT NULL,
-			salt TEXT NOT NULL,
-			role TEXT NOT NULL DEFAULT 'member',
-			created_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS api_keys (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			name TEXT NOT NULL,
-			prefix TEXT NOT NULL,
-			key_hash TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			last_used_at INTEGER
-		);`)
-	return err
-}
 
 func hashPassword(password string, salt []byte) (string, error) {
 	key, err := scrypt.Key([]byte(password), salt, scryptN, scryptR, scryptP, 32)
@@ -80,16 +57,18 @@ func (s *Store) Create(username, password, displayName, role string) (api.User, 
 		return api.User{}, err
 	}
 	now := time.Now().Unix()
-	res, err := s.db.Exec(
-		"INSERT INTO users (username, display_name, password_hash, salt, role, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-		username, displayName, hash, hex.EncodeToString(salt), role, now)
+	var id int64
+	err = s.db.QueryRow(
+		"INSERT INTO users (username, display_name, password_hash, salt, role, created_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+		username, displayName, hash, hex.EncodeToString(salt), role, now).Scan(&id)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" /* unique_violation */ {
+			// The text the SQLite store gave, which the UI shows as is.
 			return api.User{}, errors.New("UNIQUE constraint failed: users.username")
 		}
 		return api.User{}, err
 	}
-	id, _ := res.LastInsertId()
 	return api.User{ID: id, Username: username, DisplayName: displayName, Role: role, CreatedAt: now}, nil
 }
 
@@ -98,7 +77,7 @@ func (s *Store) VerifyPassword(username, password string) (*api.LoginUser, error
 	var u api.LoginUser
 	var hash, saltHex string
 	err := s.db.QueryRow(
-		"SELECT id, username, display_name, role, password_hash, salt FROM users WHERE username = ?", username,
+		"SELECT id, username, display_name, role, password_hash, salt FROM users WHERE username = $1", username,
 	).Scan(&u.ID, &u.Username, &u.DisplayName, &u.Role, &hash, &saltHex)
 	if err == sql.ErrNoRows {
 		// Same cost as a real check, so timing does not enumerate usernames.
@@ -149,7 +128,7 @@ func (s *Store) Any() (bool, error) {
 }
 
 func (s *Store) Delete(id int64) (bool, error) {
-	return affected(s.db.Exec("DELETE FROM users WHERE id = ?", id))
+	return affected(s.db.Exec("DELETE FROM users WHERE id = $1", id))
 }
 
 func (s *Store) SetPassword(id int64, password string) (bool, error) {
@@ -158,7 +137,7 @@ func (s *Store) SetPassword(id int64, password string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return affected(s.db.Exec("UPDATE users SET password_hash = ?, salt = ? WHERE id = ?",
+	return affected(s.db.Exec("UPDATE users SET password_hash = $1, salt = $2 WHERE id = $3",
 		hash, hex.EncodeToString(salt), id))
 }
 
@@ -167,13 +146,13 @@ func (s *Store) CreateAPIKey(userID int64, name string) (api.NewAPIKey, error) {
 	prefix := secret[:len(KeyPrefix)+6]
 	sum := sha256.Sum256([]byte(secret))
 	now := time.Now().Unix()
-	res, err := s.db.Exec(
-		"INSERT INTO api_keys (user_id, name, prefix, key_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-		userID, name, prefix, hex.EncodeToString(sum[:]), now)
+	var id int64
+	err := s.db.QueryRow(
+		"INSERT INTO api_keys (user_id, name, prefix, key_hash, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+		userID, name, prefix, hex.EncodeToString(sum[:]), now).Scan(&id)
 	if err != nil {
 		return api.NewAPIKey{}, err
 	}
-	id, _ := res.LastInsertId()
 	return api.NewAPIKey{ID: id, Name: name, Prefix: prefix, CreatedAt: now, Secret: secret}, nil
 }
 
@@ -199,7 +178,7 @@ func (s *Store) ListAPIKeys() ([]api.APIKey, error) {
 // Role is a user's role as it is now, and ok false for a user that no
 // longer exists: a session outlives neither a deletion nor a demotion.
 func (s *Store) Role(id int64) (role string, ok bool, err error) {
-	err = s.db.QueryRow("SELECT role FROM users WHERE id = ?", id).Scan(&role)
+	err = s.db.QueryRow("SELECT role FROM users WHERE id = $1", id).Scan(&role)
 	if err == sql.ErrNoRows {
 		return "", false, nil
 	}
@@ -208,7 +187,7 @@ func (s *Store) Role(id int64) (role string, ok bool, err error) {
 
 // APIKeyOwner is the user a key belongs to, and ok false for no such key.
 func (s *Store) APIKeyOwner(id int64) (userID int64, ok bool, err error) {
-	err = s.db.QueryRow("SELECT user_id FROM api_keys WHERE id = ?", id).Scan(&userID)
+	err = s.db.QueryRow("SELECT user_id FROM api_keys WHERE id = $1", id).Scan(&userID)
 	if err == sql.ErrNoRows {
 		return 0, false, nil
 	}
@@ -216,7 +195,7 @@ func (s *Store) APIKeyOwner(id int64) (userID int64, ok bool, err error) {
 }
 
 func (s *Store) DeleteAPIKey(id int64) (bool, error) {
-	return affected(s.db.Exec("DELETE FROM api_keys WHERE id = ?", id))
+	return affected(s.db.Exec("DELETE FROM api_keys WHERE id = $1", id))
 }
 
 // VerifyAPIKey returns nil, nil for an unknown key.
@@ -226,7 +205,7 @@ func (s *Store) VerifyAPIKey(secret string) (*api.Identity, error) {
 	id := api.Identity{Via: "api-key"}
 	err := s.db.QueryRow(`
 		SELECT k.id, u.id, u.username, u.role FROM api_keys k
-		JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?`, hex.EncodeToString(sum[:]),
+		JOIN users u ON u.id = k.user_id WHERE k.key_hash = $1`, hex.EncodeToString(sum[:]),
 	).Scan(&keyID, &id.UserID, &id.Username, &id.Role)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -234,7 +213,7 @@ func (s *Store) VerifyAPIKey(secret string) (*api.Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = s.db.Exec("UPDATE api_keys SET last_used_at = ? WHERE id = ?", time.Now().Unix(), keyID)
+	_, err = s.db.Exec("UPDATE api_keys SET last_used_at = $1 WHERE id = $2", time.Now().Unix(), keyID)
 	return &id, err
 }
 

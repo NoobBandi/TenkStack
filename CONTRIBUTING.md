@@ -24,6 +24,12 @@ scripts/build.sh                 # embeds web/dist, writes ./tenkstack
 CONSOLE_WEB_DIST=web/dist go run ./cmd/tenkstack
 ```
 
+The console sets up its own PostgreSQL on first start (a Docker container
+under a systemd user unit; see the README's *The database*). On a machine
+where an installed console already runs, give a checkout a database of its own
+with `CONSOLE_DATABASE_URL`, or with a different `CONSOLE_AI_DIR` it refuses to
+start rather than take over the installed one's unit.
+
 `--help` lists the flags. Every path the backend reads is an environment
 variable with a default; the table in the README's *Where things live* lists
 them. A bare checkout assumes `~/ai` as the root. Point `CONSOLE_AI_DIR`
@@ -48,11 +54,14 @@ internal/gpuhistory containerhistory journal   the pollers behind /api/stream
 internal/llamaswap/    config.yaml round-trip, model entries, the client
 internal/backends vendors containers comfy channels   the runtime layer -- see AGENTS.md
 internal/catalog gguf files search visioncache images  the rest
-internal/store paths ports   the leaves everything may import
+internal/store paths ports   the leaves everything may import; store holds
+                       the schema (migrations/) and the one-time SQLite import
+internal/pgserver/     the console's own PostgreSQL: its unit, its socket, backups
 internal/webdist/      the built frontend, embedded by scripts/build.sh
 internal/boundary/     the import-direction test
 scripts/build.sh       one static binary, version from VERSION
 scripts/smoke.sh       starts a built binary and checks it, as CI does
+scripts/test.sh        go test with a throwaway PostgreSQL (scripts/lib-pg.sh)
 web/src/
   pages/           one file per page in the sidebar
   components/      shared pieces; ClientSnippets.tsx writes the client configs
@@ -105,7 +114,7 @@ measurement. Do not add comments that restate the line below them.
 ## Checks
 
 ```bash
-go vet ./... && go test ./...
+go vet ./... && scripts/test.sh   # go test, with a throwaway PostgreSQL in Docker
 
 cd web
 pnpm build         # check-frames, then tsc -b, then vite build
@@ -175,8 +184,8 @@ it takes should fit the second runtime rather than be guessed from the first.
 - Say what you ran and on what: the card, the driver version, the model and
   quantisation, and the numbers. A change that touches a vendor path you
   cannot test should say so rather than imply otherwise.
-- Do not commit anything from under the install root: `session.key` and the
-  SQLite database are already ignored, and `config.yaml` is one machine's.
+- Do not commit anything from under the install root: `session.key` and
+  database dumps are already ignored, and `config.yaml` is one machine's.
 
 Contributions are accepted under the repository's
 [Apache License 2.0](LICENSE). Its section 5 covers this: anything you submit

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +42,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/internal/network"
 	"github.com/NoobBandi/TenkStack/internal/paths"
+	"github.com/NoobBandi/TenkStack/internal/pgserver"
 	"github.com/NoobBandi/TenkStack/internal/ports"
 	"github.com/NoobBandi/TenkStack/internal/quant"
 	"github.com/NoobBandi/TenkStack/internal/release"
@@ -65,6 +69,8 @@ func main() {
 			os.Exit(setup.MainSetup(os.Args[2:]))
 		case "provision":
 			os.Exit(setup.MainProvision(os.Args[2:]))
+		case "backup":
+			os.Exit(backup(os.Args[2:]))
 		}
 	}
 	listen := flag.String("listen", envOr("CONSOLE_LISTEN", "127.0.0.1:8071"), "address to serve on")
@@ -80,20 +86,11 @@ func main() {
 	home, _ := os.UserHomeDir()
 	portTable := ports.FromEnv()
 
-	db, err := store.Open(layout.DB)
-	if err != nil {
-		log.Fatalf("open %s: %v", layout.DB, err)
-	}
+	db := openDatabase(layout)
 	defer db.Close()
 
 	userStore := users.New(db)
-	if err := userStore.Init(); err != nil {
-		log.Fatalf("init users: %v", err)
-	}
 	prefs := settings.New(db)
-	if err := prefs.Init(); err != nil {
-		log.Fatalf("init settings: %v", err)
-	}
 	authn := auth.New(layout.SessionKey, userStore)
 	if !authn.Enforced() {
 		log.Print("no accounts exist yet, so authentication is OFF. It switches on by itself as soon as the first user is created.")
@@ -115,13 +112,7 @@ func main() {
 
 	blobStore := blobs.New(filepath.Join(layout.StateDir, "blobs"))
 	chatStore := chats.New(db, blobStore)
-	if err := chatStore.Init(); err != nil {
-		log.Fatalf("init chats: %v", err)
-	}
 	vision := visioncache.New(db, specExtra{models}, layout.LlamaSwapConfig, llamaSwapBase)
-	if err := vision.Init(); err != nil {
-		log.Fatalf("init vision cache: %v", err)
-	}
 	logs := journal.New()
 	logs.SetCapacity(int(prefs.Get("log_lines")))
 	docker := containers.New()
@@ -300,4 +291,76 @@ func catalogWithToken(c *catalog.Catalog, t *hftoken.Store) *catalog.Catalog {
 func remoteWithToken(r *gguf.Remote, t *hftoken.Store) *gguf.Remote {
 	r.Token = t.Get
 	return r
+}
+
+// openDatabase connects to the console's database, setting up its own
+// PostgreSQL first unless CONSOLE_DATABASE_URL names another, then brings
+// the schema up to date and imports what an older version kept in SQLite.
+func openDatabase(layout paths.Layout) *sql.DB {
+	ctx := context.Background()
+	dsn := os.Getenv("CONSOLE_DATABASE_URL")
+	if dsn == "" {
+		server := pgserver.Server{Dir: layout.Postgres}
+		if err := server.Ensure(ctx); err != nil {
+			log.Fatalf("database: %v", err)
+		}
+		dsn = server.DSN()
+	}
+	// Five minutes: the first start pulls the image and initialises the
+	// cluster before anything answers.
+	db, err := store.Open(ctx, dsn, 5*time.Minute)
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	if err := store.Migrate(ctx, db); err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	counts, err := store.ImportSQLite(ctx, db, layout.SQLite)
+	if err != nil {
+		// Not fatal: the console runs on what the database has, and the
+		// file is still there to import by hand.
+		log.Printf("database: %v", err)
+	} else if counts != nil {
+		log.Printf("database: imported %s from %s, which is kept beside it as .migrated-*", formatCounts(counts), layout.SQLite)
+	}
+	return db
+}
+
+func formatCounts(counts map[string]int) string {
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, len(names))
+	for i, name := range names {
+		parts[i] = fmt.Sprintf("%d %s", counts[name], name)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// backup is `tenkstack backup [FILE]`: a dump of the console's database,
+// by default into <state>/backups with the time in its name.
+func backup(args []string) int {
+	if os.Getenv("CONSOLE_DATABASE_URL") != "" {
+		fmt.Fprintln(os.Stderr, "CONSOLE_DATABASE_URL names a database this console does not run; back it up where it lives")
+		return 1
+	}
+	path := ""
+	if len(args) > 0 {
+		path = args[0]
+	} else {
+		dir := filepath.Join(paths.FromEnv().StateDir, "backups")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		path = filepath.Join(dir, "console-"+time.Now().Format("20060102-150405")+".dump")
+	}
+	if err := pgserver.Backup(context.Background(), path); err != nil {
+		fmt.Fprintln(os.Stderr, "backup:", err)
+		return 1
+	}
+	fmt.Println(path)
+	return 0
 }

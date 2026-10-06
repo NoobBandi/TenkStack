@@ -17,12 +17,14 @@ const module = "github.com/NoobBandi/TenkStack/internal/"
 
 var allowed = map[string][]string{
 	// Leaves: shared by everything, importing nothing.
-	"api":     {},
-	"paths":   {},
-	"ports":   {},
-	"store":   {},
-	"vendors": {},
-	"webdist": {},
+	"api":   {},
+	"paths": {},
+	"ports": {},
+	"store": {},
+	// Runs the console's PostgreSQL; called once, from main.
+	"pgserver": {},
+	"vendors":  {},
+	"webdist":  {},
 	// How model locations and the files in them are named.
 	"locations": {},
 	// What a Hugging Face model's config.json says about it.
@@ -35,7 +37,7 @@ var allowed = map[string][]string{
 
 	// Domain packages: only the leaves, never each other.
 	"auth":             {"api"},
-	"users":            {"api"},
+	"users":            {"api", "store"},
 	"settings":         {"api"},
 	"system":           {"api"},
 	"gpu":              {"api"},
@@ -50,9 +52,9 @@ var allowed = map[string][]string{
 	"gguf":             {},
 	"channels":         {"api"},
 	"blobs":            {},
-	"chats":            {"api"},
+	"chats":            {"api", "store"},
 	"images":           {},
-	"visioncache":      {},
+	"visioncache":      {"store"},
 	"search":           {"api"},
 	"catalog":          {"api", "locations", "hfmodel"},
 	"files":            {"api"},
@@ -67,7 +69,7 @@ var allowed = map[string][]string{
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "locations", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant"},
+		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store"},
 	"boundary": {},
 }
 

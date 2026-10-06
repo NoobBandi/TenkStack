@@ -13,8 +13,11 @@ type Layout struct {
 	AIDir      string
 	StateDir   string
 	SessionKey string
-	DB         string
-	ModelsDir  string
+	// Postgres holds the console's database (pgserver); SQLite is where
+	// versions before it kept their data, read once to import it.
+	Postgres  string
+	SQLite    string
+	ModelsDir string
 
 	LlamaSwapDir      string
 	LlamaSwapConfig   string
@@ -36,7 +39,8 @@ func FromEnv() Layout {
 		AIDir:      ai,
 		StateDir:   state,
 		SessionKey: filepath.Join(state, "session.key"),
-		DB:         filepath.Join(state, "console.sqlite"),
+		Postgres:   filepath.Join(state, "postgres"),
+		SQLite:     filepath.Join(state, "console.sqlite"),
 		ModelsDir:  env("CONSOLE_MODELS_DIR", filepath.Join(ai, "models")),
 
 		LlamaSwapDir:      swap,

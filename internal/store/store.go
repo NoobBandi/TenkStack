@@ -1,29 +1,47 @@
-// Package store opens the console's SQLite database. One writer process, one
-// machine; WAL so readers and the writer stop excluding each other.
+// Package store opens the console's PostgreSQL database, brings its schema up
+// to date and, once, moves an older install's SQLite data into it.
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
+	"log"
+	"strings"
+	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-func Open(path string) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"+
-		"&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)", path)
-	db, err := sql.Open("sqlite", dsn)
+// Open connects and waits for the server to answer: on a fresh install the
+// database container is still pulling its image or initialising its data
+// directory when the console starts, which is a wait, not a failure.
+func Open(ctx context.Context, dsn string, wait time.Duration) (*sql.DB, error) {
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
+	deadline := time.Now().Add(wait)
+	for attempt := 0; ; attempt++ {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err = db.PingContext(pingCtx)
+		cancel()
+		if err == nil {
+			return db, nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			db.Close()
+			return nil, fmt.Errorf("database not reachable after %s: %w", wait, err)
+		}
+		if attempt%6 == 0 {
+			log.Printf("waiting for the database: %v", err)
+		}
+		time.Sleep(2 * time.Second)
 	}
-	return db, nil
+}
+
+// Text makes a string storable: PostgreSQL refuses NUL bytes and invalid
+// UTF-8 in text columns, which SQLite took, and model output can carry both.
+func Text(s string) string {
+	return strings.ReplaceAll(strings.ToValidUTF8(s, "�"), "\x00", "")
 }

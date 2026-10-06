@@ -66,6 +66,8 @@ WANT_SEARXNG=""
 # two paths at a prompt is worse than typing them on the command line.
 WANT_TLS=""
 SEARXNG_PORT="${CONSOLE_SEARXNG_PORT:-8090}"
+# The console's database (internal/pgserver.Image; the same major version).
+POSTGRES_IMAGE=docker.io/library/postgres:18-alpine
 ASSUME_YES=false
 DRY_RUN=false
 # The terminal UI (`tenkstack setup`) asks the questions when it can: a
@@ -1002,6 +1004,12 @@ enable_units() {
 
 start_and_verify() {
   if $NEEDS_REBOOT; then skip "$(L "需要重開機，服務等開機後自己啟動" "a reboot is needed; the services start after it")"; return; fi
+  # The console sets up its own PostgreSQL on its first start (a container
+  # under tenkstack-postgres.service, internal/pgserver). Pulling the image
+  # here makes a failed pull this script's error, not a console that never
+  # answers, and keeps the wait below about the console itself.
+  run docker pull -q "$POSTGRES_IMAGE"
+  ok "$(L "資料庫映像" "database image") $POSTGRES_IMAGE"
   # shellcheck disable=SC2046
   run systemctl --user start $(units)
 
@@ -1020,10 +1028,12 @@ start_and_verify() {
     done
     ok "$(L "SearXNG 回應了（拉映像花了 ${n}s）" "SearXNG answered (pulling the image took ${n}s)")"
   fi
+  # Two minutes: its first start also initialises the database and imports
+  # what an older version kept in SQLite.
   local n=0
   until curl -sfo /dev/null "http://127.0.0.1:$CONSOLE_PORT/api/health"; do
     n=$((n + 1))
-    if [[ $n -gt 30 ]]; then
+    if [[ $n -gt 120 ]]; then
       die "$(L "主控台起不來。" "The console did not start.")" "$(L "看 journalctl --user -u tenkstack-console -n 50 找原因。" "See journalctl --user -u tenkstack-console -n 50 for why.")"
     fi
     sleep 1
@@ -1299,7 +1309,7 @@ installed_root() {
 # Units of this install: those whose file names its directory.
 own_units() {
   local dir="$HOME/.config/systemd/user" u
-  for u in tenkstack-console tenkstack-llama-swap tenkstack-searxng caddy; do
+  for u in tenkstack-console tenkstack-postgres tenkstack-llama-swap tenkstack-searxng caddy; do
     if [[ -f $dir/$u.service ]] && grep -qF "$ROOT/" "$dir/$u.service"; then echo "$u.service"; fi
   done
   return 0

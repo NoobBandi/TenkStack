@@ -10,6 +10,7 @@ internal/webdist/dist/*
 # anyone forge a login, and the database holds password hashes and API keys.
 *.sqlite
 *.sqlite-*
+*.dump
 session.key
 *.key
 *.crt

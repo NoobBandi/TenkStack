@@ -5,11 +5,13 @@ package chats
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/NoobBandi/TenkStack/internal/api"
+	"github.com/NoobBandi/TenkStack/internal/store"
 )
 
 const titleLength = 48
@@ -26,34 +28,6 @@ type Store struct {
 }
 
 func New(db *sql.DB, images Images) *Store { return &Store{db: db, images: images} }
-
-func (s *Store) Init() error {
-	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS conversations (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER,
-			title TEXT NOT NULL DEFAULT '',
-			model TEXT NOT NULL DEFAULT '',
-			params TEXT NOT NULL DEFAULT '{}',
-			pinned INTEGER NOT NULL DEFAULT 0,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL
-		);
-		CREATE TABLE IF NOT EXISTS messages (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-			seq INTEGER NOT NULL,
-			role TEXT NOT NULL,
-			content TEXT NOT NULL DEFAULT '',
-			reasoning TEXT,
-			images TEXT,
-			meta TEXT,
-			created_at INTEGER NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, seq);
-		CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(pinned DESC, updated_at DESC);`)
-	return err
-}
 
 func titleFrom(messages []map[string]any) string {
 	for _, m := range messages {
@@ -73,7 +47,8 @@ func titleFrom(messages []map[string]any) string {
 	return "新對話"
 }
 
-const rowColumns = `c.id, c.title, c.model, c.pinned, c.created_at, c.updated_at,
+// pinned is BOOLEAN in the table and 0/1 in the API, as the SQLite store gave it.
+const rowColumns = `c.id, c.title, c.model, c.pinned::int, c.created_at, c.updated_at,
 	(SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count`
 
 func scanRows(rows *sql.Rows) ([]api.ChatRow, error) {
@@ -93,11 +68,11 @@ func (s *Store) List(userID *int64, limit int) ([]api.ChatRow, error) {
 	query := "SELECT " + rowColumns + " FROM conversations c"
 	args := []any{}
 	if userID != nil {
-		query += " WHERE c.user_id = ?"
 		args = append(args, *userID)
+		query += fmt.Sprintf(" WHERE c.user_id = $%d", len(args))
 	}
-	query += " ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ?"
 	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY c.pinned DESC, c.updated_at DESC LIMIT $%d", len(args))
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -106,19 +81,20 @@ func (s *Store) List(userID *int64, limit int) ([]api.ChatRow, error) {
 }
 
 // Search matches titles and bodies, so a conversation can be found by what
-// was said in it.
+// was said in it. ILIKE, because SQLite's LIKE ignored case and searches
+// found what they found then; % and _ in the query stay wildcards, as before.
 func (s *Store) Search(q string, userID *int64, limit int) ([]api.ChatRow, error) {
-	like := "%" + q + "%"
-	query := "SELECT DISTINCT " + rowColumns + ` FROM conversations c
-		LEFT JOIN messages m ON m.conversation_id = c.id
-		WHERE (c.title LIKE ? OR m.content LIKE ?)`
-	args := []any{like, like}
+	like := "%" + store.Text(q) + "%"
+	query := "SELECT " + rowColumns + ` FROM conversations c
+		WHERE (c.title ILIKE $1 OR EXISTS (
+			SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.content ILIKE $1))`
+	args := []any{like}
 	if userID != nil {
-		query += " AND c.user_id = ?"
 		args = append(args, *userID)
+		query += fmt.Sprintf(" AND c.user_id = $%d", len(args))
 	}
-	query += " ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ?"
 	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY c.pinned DESC, c.updated_at DESC LIMIT $%d", len(args))
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
@@ -129,7 +105,7 @@ func (s *Store) Search(q string, userID *int64, limit int) ([]api.ChatRow, error
 func (s *Store) Get(id int64) (*api.Conversation, error) {
 	var c api.Conversation
 	var params string
-	err := s.db.QueryRow("SELECT id, user_id, title, model, params, pinned, created_at, updated_at FROM conversations WHERE id = ?", id).
+	err := s.db.QueryRow("SELECT id, user_id, title, model, params, pinned::int, created_at, updated_at FROM conversations WHERE id = $1", id).
 		Scan(&c.ID, &c.UserID, &c.Title, &c.Model, &params, &c.Pinned, &c.CreatedAt, &c.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -143,7 +119,7 @@ func (s *Store) Get(id int64) (*api.Conversation, error) {
 			c.Params = map[string]any{}
 		}
 	}
-	rows, err := s.db.Query("SELECT role, content, reasoning, images, meta FROM messages WHERE conversation_id = ? ORDER BY seq", id)
+	rows, err := s.db.Query("SELECT role, content, reasoning, images, meta FROM messages WHERE conversation_id = $1 ORDER BY seq", id)
 	if err != nil {
 		return nil, err
 	}
@@ -218,16 +194,14 @@ func (s *Store) Save(id *int64, messages []map[string]any, model string, params 
 		if title != nil && *title != "" {
 			t = *title
 		}
-		res, err := tx.Exec("INSERT INTO conversations (user_id, title, model, params, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-			userID, t, model, paramsJSON, now, now)
-		if err != nil {
+		if err := tx.QueryRow("INSERT INTO conversations (user_id, title, model, params, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+			userID, store.Text(t), model, store.Text(paramsJSON), now, now).Scan(&conversationID); err != nil {
 			return 0, err
 		}
-		conversationID, _ = res.LastInsertId()
 	} else {
 		conversationID = *id
 		var existing string
-		if err := tx.QueryRow("SELECT title FROM conversations WHERE id = ?", conversationID).Scan(&existing); err == sql.ErrNoRows {
+		if err := tx.QueryRow("SELECT title FROM conversations WHERE id = $1", conversationID).Scan(&existing); err == sql.ErrNoRows {
 			return 0, &ErrNoConversation{conversationID}
 		} else if err != nil {
 			return 0, err
@@ -240,11 +214,11 @@ func (s *Store) Save(id *int64, messages []map[string]any, model string, params 
 		} else if t == "" {
 			t = titleFrom(messages)
 		}
-		if _, err := tx.Exec("UPDATE conversations SET title = ?, model = ?, params = ?, updated_at = ? WHERE id = ?",
-			t, model, paramsJSON, now, conversationID); err != nil {
+		if _, err := tx.Exec("UPDATE conversations SET title = $1, model = $2, params = $3, updated_at = $4 WHERE id = $5",
+			store.Text(t), model, store.Text(paramsJSON), now, conversationID); err != nil {
 			return 0, err
 		}
-		if _, err := tx.Exec("DELETE FROM messages WHERE conversation_id = ?", conversationID); err != nil {
+		if _, err := tx.Exec("DELETE FROM messages WHERE conversation_id = $1", conversationID); err != nil {
 			return 0, err
 		}
 	}
@@ -265,7 +239,7 @@ func (s *Store) Save(id *int64, messages []map[string]any, model string, params 
 		}
 		var reasoning any
 		if r, _ := m["reasoning"].(string); r != "" {
-			reasoning = r
+			reasoning = store.Text(r)
 		}
 		// Written to disk first and stored as a reference: a file with no row
 		// is collected by the sweep, a row with no file is a broken image.
@@ -287,8 +261,8 @@ func (s *Store) Save(id *int64, messages []map[string]any, model string, params 
 			}
 		}
 		metaJSON, _ := jsonNoEscape(meta)
-		if _, err := tx.Exec("INSERT INTO messages (conversation_id, seq, role, content, reasoning, images, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			conversationID, seq, role, content, reasoning, images, metaJSON, now); err != nil {
+		if _, err := tx.Exec("INSERT INTO messages (conversation_id, seq, role, content, reasoning, images, meta, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+			conversationID, seq, role, store.Text(content), reasoning, images, store.Text(metaJSON), now); err != nil {
 			return 0, err
 		}
 	}
@@ -309,22 +283,18 @@ func (s *Store) Update(id int64, title *string, pinned *bool) (bool, error) {
 	var sets []string
 	var args []any
 	if title != nil {
-		sets = append(sets, "title = ?")
-		args = append(args, *title)
+		args = append(args, store.Text(*title))
+		sets = append(sets, fmt.Sprintf("title = $%d", len(args)))
 	}
 	if pinned != nil {
-		p := 0
-		if *pinned {
-			p = 1
-		}
-		sets = append(sets, "pinned = ?")
-		args = append(args, p)
+		args = append(args, *pinned)
+		sets = append(sets, fmt.Sprintf("pinned = $%d", len(args)))
 	}
 	if len(sets) == 0 {
 		return false, nil
 	}
 	args = append(args, id)
-	res, err := s.db.Exec("UPDATE conversations SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...)
+	res, err := s.db.Exec(fmt.Sprintf("UPDATE conversations SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args)), args...)
 	if err != nil {
 		return false, err
 	}
@@ -333,7 +303,7 @@ func (s *Store) Update(id int64, title *string, pinned *bool) (bool, error) {
 }
 
 func (s *Store) Delete(id int64) (bool, error) {
-	res, err := s.db.Exec("DELETE FROM conversations WHERE id = ?", id)
+	res, err := s.db.Exec("DELETE FROM conversations WHERE id = $1", id)
 	if err != nil {
 		return false, err
 	}

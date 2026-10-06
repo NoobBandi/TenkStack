@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/NoobBandi/TenkStack/internal/store"
 )
 
 const prompt = "請詳細描述這張圖，讓沒看過它的人能據此回答關於它的問題。" +
@@ -52,17 +54,6 @@ func New(db *sql.DB, specs Specs, configPath, llamaSwapBase string) *Cache {
 		pending: map[string]bool{}, drafters: map[string]bool{}}
 }
 
-func (c *Cache) Init() error {
-	_, err := c.db.Exec(`CREATE TABLE IF NOT EXISTS vision_descriptions (
-		digest      TEXT PRIMARY KEY,
-		model       TEXT NOT NULL,
-		description TEXT NOT NULL,
-		bytes       INTEGER NOT NULL,
-		created_at  REAL NOT NULL
-	)`)
-	return err
-}
-
 // DigestOf is a stable name for one image: over the payload, so the same
 // picture with a different mime prefix is the same picture.
 func DigestOf(dataURL string) string {
@@ -76,15 +67,17 @@ func DigestOf(dataURL string) string {
 
 func (c *Cache) lookup(digest string) (string, bool) {
 	var text string
-	if err := c.db.QueryRow("SELECT description FROM vision_descriptions WHERE digest = ?", digest).Scan(&text); err != nil {
+	if err := c.db.QueryRow("SELECT description FROM vision_descriptions WHERE digest = $1", digest).Scan(&text); err != nil {
 		return "", false
 	}
 	return text, true
 }
 
 func (c *Cache) store(digest, model, description string, size int) {
-	c.db.Exec("INSERT OR REPLACE INTO vision_descriptions (digest, model, description, bytes, created_at) VALUES (?, ?, ?, ?, ?)",
-		digest, model, description, size, float64(time.Now().UnixNano())/1e9)
+	c.db.Exec(`INSERT INTO vision_descriptions (digest, model, description, bytes, created_at) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (digest) DO UPDATE SET model = excluded.model, description = excluded.description,
+		bytes = excluded.bytes, created_at = excluded.created_at`,
+		digest, model, store.Text(description), size, float64(time.Now().UnixNano())/1e9)
 }
 
 // HasFragileDrafter says whether a launch line names a drafter images break.

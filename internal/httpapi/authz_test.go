@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,23 +11,15 @@ import (
 
 	"github.com/NoobBandi/TenkStack/internal/api"
 	"github.com/NoobBandi/TenkStack/internal/auth"
+	"github.com/NoobBandi/TenkStack/internal/store/storetest"
 	"github.com/NoobBandi/TenkStack/internal/users"
-
-	_ "modernc.org/sqlite"
 )
 
 // Who may do what, asked of the real routes: an administrator's session, a
 // member's, a deleted member's, and API keys.
 func TestAuthorization(t *testing.T) {
 	dir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "console.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	accounts := users.New(db)
-	if err := accounts.Init(); err != nil {
-		t.Fatal(err)
-	}
+	accounts := users.New(storetest.New(t))
 	admin, _ := accounts.Create("owner", "secret-1", "", "admin")
 	member, _ := accounts.Create("dad", "secret-2", "", "member")
 	authn := auth.New(filepath.Join(dir, "session.key"), accounts)

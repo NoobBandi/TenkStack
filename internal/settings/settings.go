@@ -82,14 +82,6 @@ type Store struct {
 
 func New(db *sql.DB) *Store { return &Store{db: db} }
 
-func (s *Store) Init() error {
-	_, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS settings (
-		name  TEXT PRIMARY KEY,
-		value INTEGER NOT NULL
-	)`)
-	return err
-}
-
 func (s *Store) load() map[string]int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -171,9 +163,9 @@ func (s *Store) Save(values map[string]any) (map[string]int64, error) {
 	}
 	for name, n := range clean {
 		if n == byName[name].Default {
-			_, err = tx.Exec("DELETE FROM settings WHERE name = ?", name)
+			_, err = tx.Exec("DELETE FROM settings WHERE name = $1", name)
 		} else {
-			_, err = tx.Exec("INSERT INTO settings (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value", name, n)
+			_, err = tx.Exec("INSERT INTO settings (name, value) VALUES ($1, $2) ON CONFLICT (name) DO UPDATE SET value = excluded.value", name, n)
 		}
 		if err != nil {
 			tx.Rollback()

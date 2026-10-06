@@ -5,8 +5,8 @@
 #
 #   scripts/smoke.sh ./tenkstack [0.7.0]
 #
-# It starts the binary in an empty home, so nothing on the machine it runs
-# on is read or changed.
+# It starts the binary in an empty home with a throwaway database, so nothing
+# on the machine it runs on is read or changed.
 set -euo pipefail
 
 bin=$(readlink -f "$1")
@@ -19,11 +19,20 @@ grep -qa "TENKSTACK_SETUP_PROTOCOL=1" "$bin" || fail "no setup protocol marker; 
 
 dir=$(mktemp -d)
 pid=""
-cleanup() { if [[ -n $pid ]]; then kill "$pid" 2>/dev/null || true; fi; rm -rf "$dir"; }
+source "$(dirname "$0")/lib-pg.sh"
+cleanup() { if [[ -n $pid ]]; then kill "$pid" 2>/dev/null || true; fi; pg_discard; rm -rf "$dir"; }
 trap cleanup EXIT
+# The console needs a database. CONSOLE_DATABASE_URL (CI's service) or a
+# throwaway one; never the console's own setup, which writes a systemd unit.
+db=${CONSOLE_DATABASE_URL:-}
+if [[ -z $db ]]; then
+  pg_throwaway "$dir/pg" || fail "could not start a throwaway PostgreSQL"
+  db=$PG_DSN
+fi
 port=${SMOKE_PORT:-18071}
 url="http://127.0.0.1:$port"
-env -i HOME="$dir" PATH=/usr/bin:/bin CONSOLE_AI_DIR="$dir/ai" "$bin" -listen "127.0.0.1:$port" >"$dir/log" 2>&1 &
+env -i HOME="$dir" PATH=/usr/bin:/bin CONSOLE_AI_DIR="$dir/ai" CONSOLE_DATABASE_URL="$db" \
+  "$bin" -listen "127.0.0.1:$port" >"$dir/log" 2>&1 &
 pid=$!
 
 page=""
