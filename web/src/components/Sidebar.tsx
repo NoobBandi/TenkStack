@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Avatar, Badge, Dropdown, Layout, Menu, Tooltip, Typography } from 'antd';
 import {
   ApiOutlined, AppstoreOutlined, CloudDownloadOutlined,
-  DashboardOutlined, DeploymentUnitOutlined, FileTextOutlined, FolderOpenOutlined, InfoCircleOutlined,
+  DashboardOutlined, DeploymentUnitOutlined, FieldTimeOutlined, FileTextOutlined, FolderOpenOutlined,
+  InfoCircleOutlined,
   MessageOutlined, PictureOutlined, PoweroffOutlined,
   SettingOutlined, TeamOutlined, ThunderboltOutlined, UserOutlined, WarningFilled,
 } from '@ant-design/icons';
@@ -13,6 +14,7 @@ import {
 import { ACCENT, LINE, MONO, SURFACE } from '../theme';
 import { deviceTag } from '../hardware';
 import { useMedia } from '../media';
+import { useIsOwner } from '../identity';
 
 const { Sider } = Layout;
 const { Text } = Typography;
@@ -68,6 +70,8 @@ export const NAV_GROUPS = [
       { key: '/models', icon: <AppstoreOutlined />, label: '模型' },
       { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
       { key: '/engines', icon: <DeploymentUnitOutlined />, label: '推論引擎' },
+      // Only the administrator can run one or read the records (D29).
+      { key: '/bench', icon: <FieldTimeOutlined />, label: '跑分', adminOnly: true },
       { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
       { key: '/connections', icon: <ApiOutlined />, label: '連線' },
       { key: '/logs', icon: <FileTextOutlined />, label: '日誌' },
@@ -202,6 +206,7 @@ export default function Sidebar({
   }, []);
 
   const location = useLocation();
+  const owner = useIsOwner();
   const loaded = models.filter((m) => m.running);
 
   return (
@@ -279,7 +284,7 @@ export default function Sidebar({
                 {group.label.toUpperCase()}
               </span>
             ),
-            children: group.items.map((item) => {
+            children: group.items.filter((item) => owner || !item.adminOnly).map((item) => {
               // A release newer than this one is marked on 關於 itself, where
               // it is updated, as well as beside the version at the foot.
               const mark = item.key === '/about' && newer;

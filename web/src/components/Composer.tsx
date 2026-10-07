@@ -48,6 +48,9 @@ interface Props {
   onStop: () => void;
   streaming: boolean;
   disabled?: boolean;
+  /** Said in the empty field instead of the usual hint, when it says why the
+   *  field is disabled. */
+  placeholder?: string;
   /** Undefined while the model list is still loading. */
   capabilities?: ModelCapabilities;
   images: string[];
@@ -69,7 +72,7 @@ interface Props {
 }
 
 export default function Composer({
-  value, onChange, onSend, onStop, streaming, disabled,
+  value, onChange, onSend, onStop, streaming, disabled, placeholder,
   capabilities, images, onImagesChange,
   models, model, onModelChange, onClear, canClear,
   onToggleSettings, settingsOpen, agent, onAgentChange, onToggleHistory, historyOpen,
@@ -178,7 +181,7 @@ export default function Composer({
           onPasteFiles={(files) => void attach(files)}
           onInFenceChange={setInCode}
           disabled={disabled}
-          placeholder="輸入訊息…  ``` 開啟程式碼區塊，Enter 送出，Shift+Enter 換行"
+          placeholder={placeholder ?? '輸入訊息…  ``` 開啟程式碼區塊，Enter 送出，Shift+Enter 換行'}
         />
 
         {/* Left of the divide is what this message will be -- what is attached

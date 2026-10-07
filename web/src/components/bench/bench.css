@@ -1,0 +1,73 @@
+/*
+ * Motion for the 跑分 page: a run picked for comparison opens into place and
+ * one dropped folds away, and every bar slides to its new length when the
+ * scale changes, so adding B moves A rather than redrawing the page.
+ */
+
+/* A per-run row: opens from nothing on mount, folds to nothing on leave.
+   The grid row is what animates; the child clips while it does. */
+.bn-row {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+.bn-row > * {
+  min-height: 0;
+  min-width: 0;
+}
+.bn-row.bn-enter {
+  animation: bn-open 0.36s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.bn-row.bn-enter > *,
+.bn-row.bn-leave > * {
+  overflow: hidden;
+}
+.bn-row.bn-leave {
+  animation: bn-close 0.26s cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+@keyframes bn-open {
+  from { grid-template-rows: 0fr; opacity: 0; }
+  to { grid-template-rows: 1fr; opacity: 1; }
+}
+@keyframes bn-close {
+  from { grid-template-rows: 1fr; opacity: 1; }
+  to { grid-template-rows: 0fr; opacity: 0; }
+}
+
+/* A bar: grows from its baseline when it first appears, then slides to a
+   new length when the column's scale changes. */
+.bn-bar {
+  transform-origin: left center;
+  transition: width 0.45s cubic-bezier(0.2, 0.7, 0.2, 1), left 0.45s cubic-bezier(0.2, 0.7, 0.2, 1);
+  animation: bn-grow 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+@keyframes bn-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+/* The slot a run's letter sits in: it widens when a second run arrives
+   instead of shoving the row over in one frame. */
+.bn-mark-slot {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  transition: width 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), opacity 0.3s;
+}
+
+/* Rows of the performance table answer to the pointer as a whole. */
+.bn-perf-row:hover > div {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bn-row.bn-enter,
+  .bn-row.bn-leave,
+  .bn-bar {
+    animation: none;
+  }
+  .bn-bar,
+  .bn-mark-slot {
+    transition: none;
+  }
+}

@@ -2231,3 +2231,179 @@ export const buildQuantTool = (vendor: string) => send<QuantTool>('/quant/tool',
 export const startQuant = (source: string, scheme: string, speed: string, card: number) =>
   send<QuantJob>('/quant', 'POST', { source, scheme, speed, card });
 export const cancelQuant = (id: string) => send<{ ok: boolean }>(`/quant/${id}/cancel`, 'POST', {});
+
+// ---------------------------------------------------------------------------
+// Benchmark (跑分)
+//
+// Mirrors internal/api/bench.go and the bench types in internal/schema. While
+// a run is draining or running, /v1 answers 503 for everyone, so the status
+// endpoint is open to every signed-in user (the banner reads it); the rest is
+// for the administrator.
+// ---------------------------------------------------------------------------
+
+export type BenchTier = 'quick' | 'full';
+export type BenchState = 'idle' | 'draining' | 'running' | 'done' | 'failed' | 'cancelled';
+
+/** What the confirmation shows before a run starts. */
+export interface BenchPlan {
+  model: string;
+  name: string;
+  engine: string;
+  tier: BenchTier;
+  /** Case ids that will run; depths past the model's context are left out. */
+  cases: string[];
+  /** Case ids left out, as "id: reason". */
+  skipped: string[];
+  /** Models llama-swap will unload to load this one. */
+  unloads: string[];
+  /** Already running: no cold start. */
+  loaded: boolean;
+  /** Tokens one request may use, which decides the depths run; 0 unknown. */
+  context: number;
+  /** The running engine reported `context`, rather than the launch command. */
+  context_served: boolean;
+  estimated_s: number;
+  /** Outside requests running now. */
+  in_flight: number;
+  /** A ComfyUI job is queued or running on these cards. */
+  comfy_busy: boolean;
+}
+
+export interface BenchCaseResult {
+  case_id: string;
+  ttft_ms: number;
+  prompt_tps: number;
+  /** Per stream; the mean across streams when there are several. */
+  gen_tps: number;
+  /** Several streams summed. */
+  total_gen_tps?: number;
+  /** Speculative decoding acceptance, 0-1, when the engine reports it. */
+  accept_rate?: number;
+  gen_tps_stdev: number;
+  samples: number;
+  /** Mean tokens actually generated. */
+  output_tokens: number;
+  ignore_eos: boolean;
+}
+
+export interface BenchProgress {
+  state: BenchState;
+  /** Set once the run is saved. */
+  run_id?: number;
+  model?: string;
+  tier?: BenchTier;
+  started_at?: number;
+  /** The case running now. */
+  case?: string;
+  done: number;
+  total: number;
+  /** Outside requests still running, while draining. */
+  in_flight: number;
+  /** When /v1 is expected back, unix seconds. */
+  resume_at?: number;
+  /** What it is doing, in Chinese. */
+  message?: string;
+  error?: string;
+  elapsed_s?: number;
+  results: BenchCaseResult[] | null;
+  /** Cases left out so far, as "id: reason". */
+  skipped?: string[];
+  /** The drain has waited past its limit; it cancels itself after a grace
+   *  unless forced or cancelled. */
+  drain_timed_out?: boolean;
+}
+
+export interface BenchRunRow {
+  id: number;
+  model: string;
+  name: string;
+  engine: string;
+  tier: BenchTier;
+  started_at: number;
+  duration_s: number;
+  /** Single stream at 1k depth: the headline numbers. */
+  gen_tps_1k: number | null;
+  ttft_ms_1k: number | null;
+  /** Equal hashes: the same parameters. */
+  tuning_hash: string;
+}
+
+export interface BenchEngineRef { key: string; version: string; image?: string }
+
+export interface BenchModelRef {
+  format: string;
+  repo?: string;
+  revision?: string;
+  file?: string;
+  sha256?: string;
+  quant: string;
+}
+
+/** The normalised parameters. Kept loose: the parameter diff flattens it to
+ *  dotted paths rather than reading fields by name, so a field the backend
+ *  adds shows up without a change here. */
+export interface BenchTuning {
+  context_length: number;
+  [key: string]: unknown;
+}
+
+export interface BenchSubmission {
+  schema: string;
+  client: { name: string; version: string };
+  suite: { id: string; version: string };
+  hardware: {
+    gpu: { vendor: string; model: string; vram_mib: number; count: number; pcie?: string };
+    cpu: { model: string };
+    ram_mib: number;
+  };
+  engine: BenchEngineRef;
+  model: BenchModelRef;
+  tuning: BenchTuning;
+  /** Names only, never values. */
+  unrecognized_flags: string[] | null;
+  results: BenchCaseResult[] | null;
+  resources: { vram_peak_mib: number[] | null; ram_peak_mib: number };
+  run: {
+    started_at: string;
+    duration_s: number;
+    tier: BenchTier;
+    cold_start_s?: number;
+    external_paused: boolean;
+    clean: boolean;
+  };
+  reproduces?: string;
+}
+
+/** A saved run in full. `command` is the launch command as it was; it never
+ *  leaves the machine (the export drops it). */
+export interface BenchRun extends BenchRunRow {
+  command: string;
+  submission: BenchSubmission;
+}
+
+export const benchPlan = (model: string, tier: BenchTier) =>
+  get<BenchPlan>(`/bench/plan?model=${encodeURIComponent(model)}&tier=${tier}`);
+export const startBench = (model: string, tier: BenchTier, force = false) =>
+  send<BenchProgress>('/bench/run', 'POST', { model, tier, ...(force ? { force } : {}) });
+export const benchStatus = () => get<BenchProgress>('/bench/status');
+export const cancelBench = () => send<BenchProgress>('/bench/cancel', 'POST');
+export const benchRuns = () => get<BenchRunRow[]>('/bench/runs');
+export const benchRun = (id: number) => get<BenchRun>(`/bench/runs/${id}`);
+export const benchExportUrl = (id: number) => `${BASE}/bench/runs/${id}/export`;
+/** A link rather than a fetch: the server sends it as an attachment, so the
+ *  browser's own download takes the file name the server gives it. */
+export function exportBenchRun(id: number): void {
+  const link = document.createElement('a');
+  link.href = benchExportUrl(id);
+  link.download = '';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+/** Tolerates an empty body: the contract names no response for a delete, and
+ *  a 204 has nothing for `res.json()` to read. */
+export async function deleteBenchRun(id: number): Promise<void> {
+  const path = `/bench/runs/${id}`;
+  const res = await fetch(`${BASE}${path}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await failure(res, path));
+}

@@ -17,6 +17,7 @@ import { useStream } from '../stream';
 import { foldExchanges, useChat, type Turn } from '../chat';
 import { LINE, MONO } from '../theme';
 import { useNarrow } from '../components/Sidebar';
+import { benchActive, pauseMessage, useBenchStatus } from '../benchState';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -107,6 +108,10 @@ function TurnStats({ turn }: { turn: Turn }) {
 function ChatInner() {
   const { message: toast } = AntApp.useApp();
   const { models } = useStream();
+  // While a benchmark holds /v1 every request from here would come back 503;
+  // the input says so instead of letting a message be typed and refused.
+  const { status: bench } = useBenchStatus();
+  const paused = benchActive(bench);
   const {
     model, setModel, seedParams, turns, draft, setDraft, images, setImages,
     params, setParams, streaming, agent, setAgent, step,
@@ -378,7 +383,7 @@ function ChatInner() {
                 <Empty description="開始一段對話" image={Empty.PRESENTED_IMAGE_SIMPLE} />
                 <Space wrap size={8} style={{ justifyContent: 'center', width: '100%', marginTop: 16 }}>
                   {SUGGESTIONS.map((s) => (
-                    <Button key={s} size="small" onClick={() => send(s)} disabled={!model}
+                    <Button key={s} size="small" onClick={() => send(s)} disabled={!model || paused}
                             style={{ maxWidth: '100%', height: 'auto', whiteSpace: 'normal' }}>
                       {s}
                     </Button>
@@ -596,7 +601,8 @@ function ChatInner() {
             onSend={() => send()}
             onStop={stop}
             streaming={streaming}
-            disabled={!model}
+            disabled={!model || paused}
+            placeholder={paused ? pauseMessage(bench) : undefined}
             capabilities={active?.capabilities}
             images={images}
             onImagesChange={setImages}

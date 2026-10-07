@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   App as AntApp, Button, ConfigProvider, Drawer, Layout, Space, Spin, Tooltip, Typography,
 } from 'antd';
-import { MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined } from '@ant-design/icons';
+import {
+  FieldTimeOutlined, MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined,
+} from '@ant-design/icons';
 import zhTW from 'antd/locale/zh_TW';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import Sidebar, {
   NAV_GROUPS, SIDEBAR_COLLAPSED, SIDEBAR_WIDTH, SIDER_MOTION, useNarrow,
 } from './components/Sidebar';
@@ -21,14 +23,17 @@ import Gpu from './pages/Gpu';
 import Connections from './pages/Connections';
 import Logs from './pages/Logs';
 import About from './pages/About';
+import Bench from './pages/Bench';
 import Login from './pages/Login';
 import { StreamProvider, useStream } from './stream';
-import { IdentityProvider } from './identity';
+import { IdentityProvider, useIsOwner } from './identity';
+import BenchStatusProvider from './components/BenchStatusProvider';
+import { benchActive, clockHM, pauseMessage, useBenchStatus } from './benchState';
 import { ChatProvider } from './chat';
 import { PythonRuntimeProvider } from './components/pythonRuntime';
 import { fetchAuth, fetchSettings, logout, type AuthState } from './api';
 import { setMaxSteps } from './sandboxTool';
-import { darkTheme, LINE, MONO } from './theme';
+import { ACCENT, darkTheme, LINE, MONO } from './theme';
 
 const { Header, Content } = Layout;
 const { Title } = Typography;
@@ -48,6 +53,7 @@ const ROUTES = [
   { path: '/gpu', element: <Gpu /> },
   { path: '/connections', element: <Connections /> },
   { path: '/logs', element: <Logs /> },
+  { path: '/bench', element: <Bench /> },
   { path: '/settings', element: <Settings /> },
   { path: '/about', element: <About /> },
 ];
@@ -55,6 +61,36 @@ const ROUTES = [
 const TITLES: Record<string, string> = Object.fromEntries(
   NAV_GROUPS.flatMap((g) => g.items.map((i) => [i.key, i.label])),
 );
+
+/**
+ * The benchmark's pause, said to everyone signed in.
+ *
+ * In the header rather than above the page: the chat, files and logs pages
+ * size themselves to the window below the header, and a strip pushed in
+ * above them would put their bottom edge -- the chat's input -- off screen.
+ * Shaped like the sidebar's 新版 mark: a 1px amber line, amber text, inert
+ * for a member; the administrator's opens the run's progress.
+ */
+function BenchBanner({ narrow }: { narrow: boolean }) {
+  const { status } = useBenchStatus();
+  const owner = useIsOwner();
+  if (!benchActive(status)) return null;
+  const text = narrow
+    ? `跑分中，API 暫停${status?.resume_at ? `至 ${clockHM(status.resume_at)}` : ''}`
+    : pauseMessage(status);
+  const pill = (
+    <span role="status" title={pauseMessage(status)} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0, maxWidth: '100%',
+      height: 26, padding: '0 10px', borderRadius: 4,
+      border: `1px solid ${ACCENT.warn}`, color: ACCENT.warn, background: `${ACCENT.warn}14`,
+      fontSize: 12, lineHeight: 1, whiteSpace: 'nowrap', overflow: 'hidden',
+    }}>
+      <FieldTimeOutlined style={{ flex: 'none' }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
+    </span>
+  );
+  return owner ? <Link to="/bench" style={{ minWidth: 0, display: 'flex' }}>{pill}</Link> : pill;
+}
 
 function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) {
   const location = useLocation();
@@ -131,6 +167,7 @@ function Shell({ auth, onSignOut }: { auth: AuthState; onSignOut: () => void }) 
                   {TITLES[location.pathname] ?? 'TenkStack'}
                 </Title>
               </Space>
+              <BenchBanner narrow={narrow} />
             </Header>
 
             <Content style={{ padding: narrow ? 12 : 24, minWidth: 0 }}>
@@ -202,7 +239,10 @@ export default function App() {
         <PythonRuntimeProvider>
         <ChatProvider>
           <IdentityProvider value={auth}>
-            <Shell auth={auth} onSignOut={() => logout().then(refreshAuth)} />
+            {/* Inside the auth gate: the status is for signed-in users. */}
+            <BenchStatusProvider>
+              <Shell auth={auth} onSignOut={() => logout().then(refreshAuth)} />
+            </BenchStatusProvider>
           </IdentityProvider>
         </ChatProvider>
         </PythonRuntimeProvider>
