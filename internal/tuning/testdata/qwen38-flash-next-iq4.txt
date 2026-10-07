@@ -1,0 +1,86 @@
+The qwen38-flash-next-iq4 entry of ~/ai/llama-swap/config.yaml.bak-before-vllm030 (since removed; kept for --n-cpu-moe, --tensor-split, --reasoning and --threads).
+-- engine --
+llamacpp
+-- env --
+ONEAPI_DEVICE_SELECTOR=level_zero:0,1
+LLAMA_NAME=llama-intel-qwen38-flash-next-iq4
+-- cmd --
+${llama-intel}
+--model ${models-dir}/unsloth/Qwen3.8-Flash-Next-GGUF/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf
+--host 127.0.0.1 --port ${PORT}
+--n-gpu-layers 99
+--ctx-size 131072
+--jinja
+--mmproj ${models-dir}/unsloth/Qwen3.8-Flash-Next-GGUF/mmproj-BF16.gguf
+--temperature 1
+--top-k 20
+--top-p 0.95
+--min-p 0
+--repeat-penalty 1
+--presence-penalty 1
+--n-cpu-moe 6
+--no-host
+--split-mode layer
+--tensor-split 6,5
+--parallel 2
+--kv-unified
+--kv-unified-per-slot 131072
+--cache-ram 40960
+--reasoning off
+--spec-type ngram-mod
+--spec-ngram-mod-n-match 24
+--spec-ngram-mod-n-min 48
+--spec-ngram-mod-n-max 64
+--ubatch-size 1024
+--flash-attn on
+--cache-type-k q8_0
+--cache-type-v q8_0
+-- tuning --
+{
+  "context_length": 131072,
+  "kv_cache": {
+    "type_k": "q8_0",
+    "type_v": "q8_0",
+    "unified": true,
+    "per_slot_context": 131072,
+    "host_cache_mib": 40960
+  },
+  "speculative": {
+    "methods": [
+      "ngram"
+    ],
+    "ngram": {
+      "n_match": 24,
+      "n_min": 48,
+      "n_max": 64,
+      "mode": "mod"
+    }
+  },
+  "max_concurrency": 2,
+  "batch": {
+    "ubatch_size": 1024
+  },
+  "multi_gpu": {
+    "split_mode": "layer",
+    "tensor_split": [
+      6,
+      5
+    ]
+  },
+  "flash_attention": true,
+  "gpu_layers": 99,
+  "cpu_moe_layers": 6,
+  "vision": true,
+  "reasoning": {
+    "enabled": false
+  },
+  "sampling": {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0,
+    "repeat_penalty": 1,
+    "presence_penalty": 1
+  }
+}
+-- unrecognized --

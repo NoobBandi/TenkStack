@@ -16,11 +16,13 @@ import (
 const module = "github.com/NoobBandi/TenkStack/internal/"
 
 var allowed = map[string][]string{
-	// Leaves: shared by everything, importing nothing.
-	"api":   {},
-	"paths": {},
-	"ports": {},
-	"store": {},
+	// Leaves: shared by everything, importing nothing -- except that api
+	// carries the workshop's wire types (schema) in the benchmark responses.
+	"api":    {"schema"},
+	"schema": {},
+	"paths":  {},
+	"ports":  {},
+	"store":  {},
 	// Runs the console's PostgreSQL; called once, from main.
 	"pgserver": {},
 	"vendors":  {},
@@ -63,13 +65,19 @@ var allowed = map[string][]string{
 	"versions":         {"api"},
 	"release":          {"api"},
 	"quant":            {"api", "vendors", "providers"},
+	// A launch command read into the workshop's parameters (schema.Tuning).
+	"tuning": {"schema"},
+	// The machine, a model's files and its engine as the workshop names them.
+	"profile": {"api", "schema", "locations", "hfmodel"},
+	// The benchmark: runs the suite, keeps the results, pauses /v1 meanwhile.
+	"bench": {"api", "schema", "store"},
 	// The installer's screens and its provisioning; it talks to a running
 	// console over HTTP, never through the console's own packages.
 	"setup": {"providers"},
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "locations", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store"},
+		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store", "schema", "bench", "profile", "tuning"},
 	"boundary": {},
 }
 

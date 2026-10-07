@@ -275,10 +275,16 @@ func (s *Server) readModelSpec(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) unloadOne(w http.ResponseWriter, r *http.Request) {
+	if s.benchHolds(w) {
+		return
+	}
 	writeJSON(w, http.StatusOK, api.OK{OK: s.LlamaSwap.UnloadModel(r.Context(), r.PathValue("id"))})
 }
 
 func (s *Server) unloadAll(w http.ResponseWriter, r *http.Request) {
+	if s.benchHolds(w) {
+		return
+	}
 	writeJSON(w, http.StatusOK, api.OK{OK: s.LlamaSwap.UnloadAll(r.Context())})
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/activity"
 	"github.com/NoobBandi/TenkStack/internal/auth"
 	"github.com/NoobBandi/TenkStack/internal/backends"
+	"github.com/NoobBandi/TenkStack/internal/bench"
 	"github.com/NoobBandi/TenkStack/internal/blobs"
 	"github.com/NoobBandi/TenkStack/internal/catalog"
 	"github.com/NoobBandi/TenkStack/internal/channels"
@@ -51,6 +52,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/setup"
 	"github.com/NoobBandi/TenkStack/internal/store"
 	"github.com/NoobBandi/TenkStack/internal/system"
+	"github.com/NoobBandi/TenkStack/internal/tuning"
 	"github.com/NoobBandi/TenkStack/internal/users"
 	"github.com/NoobBandi/TenkStack/internal/vendors"
 	"github.com/NoobBandi/TenkStack/internal/visioncache"
@@ -185,6 +187,14 @@ func main() {
 		Started:    time.Now(),
 		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},
 	}
+
+	// The benchmark describes models and samples resources through the
+	// server, so it is made once the server exists.
+	host := httpapi.BenchHost{S: srv}
+	// The workshop computes the same hash (its spec, §6), so a run's hash
+	// here and its recipe there can be compared by eye.
+	bench.TuningHash = tuning.Hash
+	srv.Bench = bench.NewManager(llamaSwapBase, httpapi.BenchDescriber{S: srv}, bench.NewRuns(db), host, host, version)
 
 	httpServer := &http.Server{
 		Addr:              *listen,

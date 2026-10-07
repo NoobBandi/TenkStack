@@ -67,6 +67,37 @@ func (c *Client) Props(ctx context.Context, proxy string) map[string]any {
 	return props
 }
 
+// ServedContext is how many tokens one request may use on a running model,
+// as its engine reports it: /props' default_generation_settings.n_ctx --
+// llama-server's per-slot context, which Strata's server answers too -- or
+// else max_model_len from /v1/models, which vLLM and SGLang give. 0 when
+// neither says. The engine's own figure beats reading the launch command:
+// a wrapper script names no context at all, and llama-server's -c is split
+// across its slots.
+func (c *Client) ServedContext(ctx context.Context, proxy string) int {
+	var props struct {
+		Settings struct {
+			NCtx float64 `json:"n_ctx"`
+		} `json:"default_generation_settings"`
+	}
+	if c.getJSON(ctx, proxy, "/props", 5*time.Second, &props) == nil && props.Settings.NCtx > 0 {
+		return int(props.Settings.NCtx)
+	}
+	var models struct {
+		Data []struct {
+			MaxModelLen float64 `json:"max_model_len"`
+		} `json:"data"`
+	}
+	if c.getJSON(ctx, proxy, "/v1/models", 5*time.Second, &models) == nil {
+		for _, m := range models.Data {
+			if m.MaxModelLen > 0 {
+				return int(m.MaxModelLen)
+			}
+		}
+	}
+	return 0
+}
+
 // Slots is how full each slot of a running model is. Only the counters are
 // carried out: /slots also returns each slot's prompt text, which is
 // somebody's whole conversation. Nil when the endpoint is unavailable.

@@ -21,12 +21,9 @@ const helpTimeout = 20 * time.Second
 
 var (
 	groupLine = regexp.MustCompile(`^-{3,}\s*(.+?)\s*-{3,}$`)
-	flagName  = regexp.MustCompile(`-{1,2}[A-Za-z0-9][\w.-]*`)
-	// A flag takes a value when its head ends in a placeholder: N, FNAME,
-	// <0|1>, MODE.
-	takesValue = regexp.MustCompile(`(?:[A-Z][\w-]*|<[^>]+>|\[[^\]]+\])\s*$`)
-	gap        = regexp.MustCompile(`\S(\s{2,})\S`)
-	envNote    = regexp.MustCompile(`\s*\(env: [A-Z_0-9]+\)`)
+	flagName  = regexp.MustCompile(`^-{1,2}[A-Za-z0-9][\w.-]*$`)
+	gap       = regexp.MustCompile(`\S(\s{2,})\S`)
+	envNote   = regexp.MustCompile(`\s*\(env: ([A-Z_0-9]+)\)`)
 	// A flag whose whole job is to print something and stop.
 	action = regexp.MustCompile(`(?i)^(show|print|list|display)\b`)
 )
@@ -55,16 +52,60 @@ func helpColumn(lines []string) int {
 	return best
 }
 
+// split cuts an entry's first line at the description column. Two spaces
+// before the column, not one: argparse puts a long head on a line of its
+// own, and "  --quantization-config QUANTIZATION_CONFIG" has a single space
+// at column 24 that cut its placeholder off as if it were the description.
 func split(line string, column int) (string, string) {
-	if len(line) > column && line[column-1] == ' ' {
+	if column >= 2 && len(line) > column && line[column-1] == ' ' && line[column-2] == ' ' {
 		return line[:column], strings.TrimSpace(line[column:])
 	}
 	return line, ""
 }
 
+// Spec is one flag with what its help says beyond what the flag picker
+// shows: the environment variable llama.cpp also reads it from, which the
+// launch-command reader needs because a model entry's env can set a flag
+// as well as its cmd.
+type Spec struct {
+	api.Flag
+	Env string
+}
+
+// head reads the names and the placeholder off the start of one entry.
+//
+// Every token that starts with a dash is a spelling, and anything else is
+// the value's placeholder. Matching names anywhere in the head instead read
+// a choice list as aliases -- "--spec-type none,draft-simple,draft-mtp"
+// gave --spec-type the aliases -simple and -mtp -- and recognising a
+// placeholder only by its shape missed the ones that are not a capitalised
+// word: {none,layer,row,tensor}, N0,N1,N2,... and a bare choice list. A
+// spelling after a placeholder still counts when the placeholder ends in a
+// comma, because argparse repeats it per spelling ("--quantization
+// QUANTIZATION, -q QUANTIZATION"); otherwise the head has run into prose,
+// as in vLLM's "--tool-call-parser {...} or name registered in
+// --tool-parser-plugin".
+func head(text string) (names []string, takesValue bool) {
+	more := true
+	for _, field := range strings.Fields(text) {
+		name := strings.TrimSuffix(field, ",")
+		switch {
+		case flagName.MatchString(name) && more:
+			names = append(names, name)
+		case len(names) > 0:
+			takesValue = true
+			more = strings.HasSuffix(field, ",")
+		}
+	}
+	return names, takesValue
+}
+
 // Parse turns --help output into flags, joining wrapped descriptions.
-func Parse(text string) []api.Flag {
-	var out []api.Flag
+func Parse(text string) []api.Flag { return flagsOf(ParseSpecs(text)) }
+
+// ParseSpecs is Parse keeping each flag's environment variable.
+func ParseSpecs(text string) []Spec {
+	var out []Spec
 	group := ""
 	current := -1
 	lines := strings.Split(text, "\n")
@@ -83,22 +124,26 @@ func Parse(text string) []api.Flag {
 		startsFlag := strings.HasPrefix(line, "-") ||
 			(strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") && strings.HasPrefix(trimmed, "-"))
 		if startsFlag {
-			head, tail := split(line, column)
-			names := flagName.FindAllString(head, -1)
+			lead, tail := split(line, column)
+			names, takesValue := head(lead)
 			if len(names) == 0 {
 				current = -1
 				continue
 			}
-			out = append(out, api.Flag{
-				Names: names, Group: group, Help: strings.TrimSpace(tail),
-				TakesValue: takesValue.MatchString(strings.TrimRight(head, " \t")),
-			})
+			out = append(out, Spec{Flag: api.Flag{
+				Names: names, Group: group, Help: strings.TrimSpace(tail), TakesValue: takesValue,
+			}})
 			current = len(out) - 1
 		} else if current >= 0 {
 			out[current].Help = strings.TrimSpace(out[current].Help + " " + trimmed)
 		}
 	}
+	// The note is kept as Env and taken out of the help, where the picker
+	// would show it as part of the description.
 	for i := range out {
+		if m := envNote.FindStringSubmatch(out[i].Help); m != nil {
+			out[i].Env = m[1]
+		}
 		out[i].Help = strings.TrimSpace(envNote.ReplaceAllString(out[i].Help, ""))
 	}
 	return out
@@ -137,7 +182,7 @@ type key struct {
 // rebuilt llama-server is a different set of flags under the same name.
 type Cache struct {
 	mu    sync.Mutex
-	items map[key][]api.Flag
+	items map[key][]Spec
 	// Quantisation methods per image id, from the image itself, with the
 	// ids being asked now and when an attempt last failed.
 	quant  map[string][]string
@@ -147,7 +192,7 @@ type Cache struct {
 
 func NewCache() *Cache {
 	return &Cache{
-		items: map[key][]api.Flag{}, quant: map[string][]string{},
+		items: map[key][]Spec{}, quant: map[string][]string{},
 		asking: map[string]bool{}, failed: map[string]time.Time{},
 	}
 }
@@ -215,6 +260,12 @@ func (c *Cache) askQuantizations(image, imageID string) {
 // llama-swap uses, because a SYCL build needs oneAPI's runtime on its
 // library path and asking the binary directly gets a linker error.
 func (c *Cache) LlamaServer(ctx context.Context, launchers []string, fallback string) []api.Flag {
+	return flagsOf(c.LlamaServerSpecs(ctx, launchers, fallback))
+}
+
+// LlamaServerSpecs is LlamaServer with each flag's environment variable,
+// for reading a model entry's launch command.
+func (c *Cache) LlamaServerSpecs(ctx context.Context, launchers []string, fallback string) []Spec {
 	binary := ""
 	for _, l := range launchers {
 		if st, err := os.Stat(l); err == nil && st.Mode().IsRegular() {
@@ -228,11 +279,11 @@ func (c *Cache) LlamaServer(ctx context.Context, launchers []string, fallback st
 		}
 	}
 	if binary == "" {
-		return []api.Flag{}
+		return []Spec{}
 	}
 	st, err := os.Stat(binary)
 	if err != nil {
-		return []api.Flag{}
+		return []Spec{}
 	}
 	k := key{binary, st.ModTime().UnixNano()}
 	c.mu.Lock()
@@ -241,13 +292,21 @@ func (c *Cache) LlamaServer(ctx context.Context, launchers []string, fallback st
 	if ok {
 		return cached
 	}
-	flags := Parse(run(ctx, binary, "--help"))
-	if len(flags) > 0 {
+	specs := ParseSpecs(run(ctx, binary, "--help"))
+	if len(specs) > 0 {
 		c.mu.Lock()
-		c.items[k] = flags
+		c.items[k] = specs
 		c.mu.Unlock()
 	}
-	return flags
+	return specs
+}
+
+func flagsOf(specs []Spec) []api.Flag {
+	out := make([]api.Flag, len(specs))
+	for i, s := range specs {
+		out[i] = s.Flag
+	}
+	return out
 }
 
 // Comfy asks the ComfyUI inside one container, keyed on its image id so a
@@ -258,13 +317,13 @@ func (c *Cache) Comfy(ctx context.Context, container, imageID string) []api.Flag
 	cached, ok := c.items[k]
 	c.mu.Unlock()
 	if ok {
-		return cached
+		return flagsOf(cached)
 	}
-	flags := Parse(run(ctx, "docker", "exec", container, "sh", "-lc", "cd /root/ComfyUI && python main.py --help"))
-	if len(flags) > 0 {
+	specs := ParseSpecs(run(ctx, "docker", "exec", container, "sh", "-lc", "cd /root/ComfyUI && python main.py --help"))
+	if len(specs) > 0 {
 		c.mu.Lock()
-		c.items[k] = flags
+		c.items[k] = specs
 		c.mu.Unlock()
 	}
-	return flags
+	return flagsOf(specs)
 }

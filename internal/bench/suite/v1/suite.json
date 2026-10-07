@@ -1,0 +1,24 @@
+{
+  "id": "tenkstack-bench",
+  "version": "1",
+  "output_tokens": 256,
+  "ignore_eos": true,
+  "min_output_ratio": 0.8,
+  "thinking": false,
+  "unique_prefix": true,
+  "sampling": {"temperature": 0, "seed": 0},
+  "warmup": 1,
+  "cases": [
+    {"id": "depth-1k", "depth_tokens": 1024, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["quick", "full"]},
+    {"id": "depth-8k", "depth_tokens": 7680, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["full"]},
+    {"id": "depth-32k", "depth_tokens": 32256, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["full"]},
+    {"id": "depth-64k", "depth_tokens": 65024, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 1, "tiers": ["full"]},
+    {"id": "depth-128k", "depth_tokens": 130560, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 1, "tiers": ["full"]},
+    {"id": "conc-1", "depth_tokens": 1024, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["quick", "full"]},
+    {"id": "conc-2", "depth_tokens": 1024, "concurrency": 2, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["full"]},
+    {"id": "conc-4", "depth_tokens": 1024, "concurrency": 4, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["quick", "full"]},
+    {"id": "content-zh", "depth_tokens": 1024, "concurrency": 1, "content": "zh", "prompt_ref": "zh", "repeats": 3, "tiers": ["quick", "full"]},
+    {"id": "content-en", "depth_tokens": 1024, "concurrency": 1, "content": "en", "prompt_ref": "en", "repeats": 3, "tiers": ["quick", "full"]},
+    {"id": "content-code", "depth_tokens": 1024, "concurrency": 1, "content": "code", "prompt_ref": "code", "repeats": 3, "tiers": ["quick", "full"]}
+  ]
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/api"
 	"github.com/NoobBandi/TenkStack/internal/auth"
 	"github.com/NoobBandi/TenkStack/internal/backends"
+	"github.com/NoobBandi/TenkStack/internal/bench"
 	"github.com/NoobBandi/TenkStack/internal/blobs"
 	"github.com/NoobBandi/TenkStack/internal/catalog"
 	"github.com/NoobBandi/TenkStack/internal/channels"
@@ -75,6 +76,9 @@ type Server struct {
 	HFToken    *hftoken.Store
 	Files      *files.Files
 	Release    *release.Client
+	// Bench runs the benchmark and holds /v1 while it does; nil leaves
+	// /v1 always open and the benchmark's endpoints unavailable.
+	Bench *bench.Manager
 	// One eviction at a time: two requests arriving together would both
 	// decide to clear the card and both wait for it.
 	vramMu sync.Mutex
@@ -190,6 +194,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/search/available", s.webAvailable)
 	mux.HandleFunc("GET /api/search/service", s.readSearchService)
 	mux.HandleFunc("POST /api/search/restart", s.restartSearch)
+	mux.HandleFunc("GET /api/bench/plan", s.readBenchPlan)
+	mux.HandleFunc("POST /api/bench/run", s.startBench)
+	mux.HandleFunc("GET /api/bench/status", s.readBenchStatus)
+	mux.HandleFunc("POST /api/bench/cancel", s.cancelBench)
+	mux.HandleFunc("GET /api/bench/runs", s.listBenchRuns)
+	mux.HandleFunc("GET /api/bench/runs/{id}", s.readBenchRun)
+	mux.HandleFunc("GET /api/bench/runs/{id}/export", s.exportBenchRun)
+	mux.HandleFunc("DELETE /api/bench/runs/{id}", s.deleteBenchRun)
 	mux.HandleFunc("GET /v1/{path...}", s.proxyV1)
 	mux.HandleFunc("POST /v1/{path...}", s.proxyV1)
 	mux.HandleFunc("OPTIONS /v1/{path...}", s.proxyV1)

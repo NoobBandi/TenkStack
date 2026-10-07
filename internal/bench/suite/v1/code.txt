@@ -1,0 +1,10 @@
+Write a complete Python 3 module, at least 250 lines long, that implements a small in-memory key-value store.
+
+It must include:
+1. A Store class with get, set, delete and keys methods, per-key expiry times in seconds, and least-recently-used eviction once a maximum number of entries is reached.
+2. A snapshot method that writes the store to a JSON file and a load method that reads it back, skipping expired entries.
+3. A command-line interface built with argparse that runs a small interactive loop (set, get, del, keys, save, load, quit).
+4. Type hints and a docstring on every class and function, and comments explaining the trickier parts.
+5. A unittest test case class at the end covering expiry, eviction order and the snapshot round trip.
+
+Output only the code in a single fenced block, complete from the first import to the last test.

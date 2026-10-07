@@ -1,0 +1,39 @@
+The qwen38-27b-abliterated-q6 entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+-- engine --
+llamacpp
+-- env --
+LLAMA_NAME=llama-intel-qwen38-27b-abliterated-q6
+ONEAPI_DEVICE_SELECTOR=level_zero:0
+-- cmd --
+${llama-intel}
+--model ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-UD-Q6_K_XL.gguf
+--host 127.0.0.1 --port ${PORT}
+--n-gpu-layers 99
+--load-mode none
+--ctx-size 131072
+--jinja
+--chat-template-file ${qwen38-template}
+--mmproj ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/mmproj-model-bf16.gguf
+--parallel 2
+--cache-ram 24576
+--temperature 1.0
+--top_p 0.95
+--top_k 20
+--min_p 0.0
+--presence_penalty 0.0
+--repeat-penalty 1.0
+--ubatch-size 1024
+--cache-type-k q8_0
+--cache-type-v q8_0
+-- tuning --
+{
+  "context_length": 131072,
+  "kv_cache": {"type_k": "q8_0", "type_v": "q8_0", "host_cache_mib": 24576},
+  "max_concurrency": 2,
+  "batch": {"ubatch_size": 1024},
+  "gpu_layers": 99,
+  "vision": true,
+  "sampling": {"temperature": 1, "top_p": 0.95, "top_k": 20, "min_p": 0, "repeat_penalty": 1, "presence_penalty": 0}
+}
+-- unrecognized --
+--chat-template-file

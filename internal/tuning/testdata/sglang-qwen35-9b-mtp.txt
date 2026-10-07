@@ -1,0 +1,32 @@
+The same with the nightly's MTP and online FP8, the way the engine
+record's notes measured it; written by hand.
+-- engine --
+sglang
+-- env --
+ONEAPI_DEVICE_SELECTOR=level_zero:1
+-- cmd --
+${sglang-intel}
+--model-path ${models-dir}/Qwen/Qwen3.5-9B
+--served-model-name qwen35-9b-sg
+--host 127.0.0.1 --port ${PORT}
+--context-length 65536
+--mem-fraction-static 0.85
+--quantization fp8
+--max-running-requests 4
+--speculative-algorithm NEXTN
+--speculative-num-steps 3
+--speculative-eagle-topk 1
+--speculative-num-draft-tokens 4
+--kv-cache-dtype fp8_e4m3
+-- tuning --
+{
+  "context_length": 65536,
+  "kv_cache": {"type_k": "fp8", "type_v": "fp8"},
+  "speculative": {"methods": ["mtp"], "num_tokens": 3},
+  "max_concurrency": 4,
+  "online_quantization": "fp8",
+  "gpu_memory_utilization": 0.85
+}
+-- unrecognized --
+--speculative-eagle-topk
+--speculative-num-draft-tokens

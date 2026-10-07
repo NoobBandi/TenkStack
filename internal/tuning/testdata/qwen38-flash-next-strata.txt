@@ -1,0 +1,9 @@
+The qwen38-flash-next-strata entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+-- engine --
+strata
+-- env --
+-- cmd --
+/home/tenk/ai/strata-sycl/llama-swap-serve.sh ${PORT}
+-- tuning --
+{"context_length": 0}
+-- unrecognized --

@@ -1,0 +1,35 @@
+An SGLang entry as the console writes one (llamaswap.BuildServerCmd with
+the sglang record's flags), carrying the record's recommended flags for
+Qwen3.5 on Intel. No such entry is configured on this machine yet.
+-- engine --
+sglang
+-- env --
+ONEAPI_DEVICE_SELECTOR=level_zero:0,1
+SGLANG_NAME=sglang-intel-qwen35-9b-sg
+-- cmd --
+${sglang-intel}
+--model-path ${models-dir}/Qwen/Qwen3.5-9B
+--served-model-name qwen35-9b-sg
+--host 127.0.0.1 --port ${PORT}
+--context-length 32768
+--tp-size 2
+--mem-fraction-static 0.8
+--disable-radix-cache
+--reasoning-parser qwen3
+--tool-call-parser qwen3_coder
+-- tuning --
+{
+  "context_length": 32768,
+  "gpu_memory_utilization": 0.8,
+  "reasoning": {
+    "enabled": true,
+    "parser": "qwen3"
+  },
+  "tools": {
+    "enabled": true,
+    "parser": "qwen3_coder"
+  },
+  "prefix_cache": false
+}
+-- unrecognized --
+

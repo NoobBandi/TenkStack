@@ -1,0 +1,36 @@
+The Qwen3.6-35B-A3B-FP8 entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+-- engine --
+vllm
+-- env --
+ONEAPI_DEVICE_SELECTOR=level_zero:0,1
+VLLM_NAME=vllm-intel-Qwen3.6-35B-A3B-FP8
+-- cmd --
+${vllm-intel}
+--model ${models-dir}/Qwen/Qwen3.6-35B-A3B-FP8
+--served-model-name Qwen3.6-35B-A3B-FP8
+--host 127.0.0.1 --port ${PORT}
+--max-model-len 262144
+--tensor-parallel-size 2
+--gpu-memory-utilization 0.9
+--compilation-config
+'{"cudagraph_mode":"FULL_DECODE_ONLY","splitting_ops":["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::linear_attention","vllm::plamo2_mamba_mixer","vllm::qwen_gdn_attention_core","vllm::gdn_attention_core_xpu","vllm::olmo_hybrid_gdn_full_forward","vllm::kda_attention","vllm::sparse_attn_indexer","vllm::rocm_aiter_sparse_attn_indexer","vllm::deepseek_v4_attention","vllm::hpc_rope_norm_forward","vllm::unified_kv_cache_update","vllm::unified_mla_kv_cache_update","vllm::all_reduce"],"cudagraph_capture_sizes":[4,8,16,32]}'
+--speculative-config '{"method":"mtp","num_speculative_tokens":4}'
+--max-num-seqs 8
+--max-num-batched-tokens 8192
+--distributed-executor-backend mp
+--default-chat-template-kwargs
+'{"enable_thinking": false}'
+--tool-call-parser qwen3_coder
+--reasoning-parser qwen3
+--enable-auto-tool-choice
+-- tuning --
+{
+  "context_length": 262144,
+  "speculative": {"methods": ["mtp"], "num_tokens": 4},
+  "max_concurrency": 8,
+  "batch": {"max_batched_tokens": 8192},
+  "gpu_memory_utilization": 0.9,
+  "reasoning": {"enabled": false, "parser": "qwen3"},
+  "tools": {"enabled": true, "parser": "qwen3_coder"}
+}
+-- unrecognized --

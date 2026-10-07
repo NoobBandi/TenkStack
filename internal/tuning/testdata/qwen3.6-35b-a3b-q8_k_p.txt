@@ -1,0 +1,77 @@
+The qwen3.6-35b-a3b-q8_k_p entry of ~/ai/llama-swap/config.yaml.bak-before-vllm030 (since removed; kept for --n-cpu-moe, --tensor-split, --reasoning and --threads).
+-- engine --
+llamacpp
+-- env --
+ONEAPI_DEVICE_SELECTOR=level_zero:0,1
+LLAMA_NAME=llama-intel-qwen3.6-35b-a3b-q8_k_p
+-- cmd --
+${llama-intel}
+--model ${models-dir}/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q8_K_P.gguf
+--host 127.0.0.1 --port ${PORT}
+--n-gpu-layers 99
+--load-mode none
+--ctx-size 262144
+--jinja
+--mmproj ${models-dir}/HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/mmproj-Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-f16.gguf
+--temperature 0.3
+--top-k 20
+--top-p 0.8
+--min-p 0
+--repeat-penalty 1
+--presence-penalty 1.5
+--split-mode layer
+--tensor-split 1,1
+--parallel 2
+--flash-attn on
+--cache-type-k q8_0
+--cache-type-v q8_0
+--threads 8
+--ubatch-size 1024
+--batch-size 2048
+--cache-ram 24576
+--reasoning off
+--spec-type ngram-mod
+-- tuning --
+{
+  "context_length": 262144,
+  "kv_cache": {
+    "type_k": "q8_0",
+    "type_v": "q8_0",
+    "host_cache_mib": 24576
+  },
+  "speculative": {
+    "methods": [
+      "ngram"
+    ],
+    "ngram": {
+      "mode": "mod"
+    }
+  },
+  "max_concurrency": 2,
+  "batch": {
+    "batch_size": 2048,
+    "ubatch_size": 1024
+  },
+  "multi_gpu": {
+    "split_mode": "layer",
+    "tensor_split": [
+      1,
+      1
+    ]
+  },
+  "flash_attention": true,
+  "gpu_layers": 99,
+  "vision": true,
+  "reasoning": {
+    "enabled": false
+  },
+  "sampling": {
+    "temperature": 0.3,
+    "top_p": 0.8,
+    "top_k": 20,
+    "min_p": 0,
+    "repeat_penalty": 1,
+    "presence_penalty": 1.5
+  }
+}
+-- unrecognized --

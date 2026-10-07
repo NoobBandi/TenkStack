@@ -23,8 +23,9 @@ func TestMigrateIsRepeatable(t *testing.T) {
 	if err := db.QueryRow("SELECT count(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Fatalf("schema_migrations has %d rows, want 1", n)
+	files, _ := filepath.Glob("migrations/*.sql")
+	if n != len(files) {
+		t.Fatalf("schema_migrations has %d rows, want one per migration (%d)", n, len(files))
 	}
 }
 

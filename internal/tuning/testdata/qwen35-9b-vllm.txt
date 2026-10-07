@@ -1,0 +1,32 @@
+The qwen35-9b-vllm entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+-- engine --
+vllm
+-- env --
+ONEAPI_DEVICE_SELECTOR=level_zero:1
+VLLM_NAME=vllm-intel-qwen35-9b-vllm
+-- cmd --
+${vllm-intel}
+--model ${models-dir}/Qwen/Qwen3.5-9B
+--served-model-name qwen35-9b-vllm
+--host 127.0.0.1 --port ${PORT}
+--max-model-len 262144
+--gpu-memory-utilization 0.85
+--quantization fp8
+--max-num-seqs 4
+--speculative-config '{"method":"mtp","num_speculative_tokens":3}'
+--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","splitting_ops":["vllm::unified_attention_with_output","vllm::unified_mla_attention_with_output","vllm::mamba_mixer2","vllm::mamba_mixer","vllm::short_conv","vllm::linear_attention","vllm::plamo2_mamba_mixer","vllm::qwen_gdn_attention_core","vllm::gdn_attention_core_xpu","vllm::olmo_hybrid_gdn_full_forward","vllm::kda_attention","vllm::sparse_attn_indexer","vllm::rocm_aiter_sparse_attn_indexer","vllm::deepseek_v4_attention","vllm::hpc_rope_norm_forward","vllm::unified_kv_cache_update","vllm::unified_mla_kv_cache_update","vllm::all_reduce"]}'
+--reasoning-parser qwen3
+--default-chat-template-kwargs '{"enable_thinking": false}'
+--enable-auto-tool-choice
+--tool-call-parser qwen3_coder
+-- tuning --
+{
+  "context_length": 262144,
+  "speculative": {"methods": ["mtp"], "num_tokens": 3},
+  "max_concurrency": 4,
+  "online_quantization": "fp8",
+  "gpu_memory_utilization": 0.85,
+  "reasoning": {"enabled": false, "parser": "qwen3"},
+  "tools": {"enabled": true, "parser": "qwen3_coder"}
+}
+-- unrecognized --

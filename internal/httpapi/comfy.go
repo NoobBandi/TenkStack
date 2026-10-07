@@ -667,6 +667,9 @@ func (s *Server) runtimeAction(w http.ResponseWriter, r *http.Request) {
 // loadModel forces a model resident by sending it a trivial request, after
 // clearing ComfyUI off the card if it is in the way.
 func (s *Server) loadModel(w http.ResponseWriter, r *http.Request) {
+	if s.benchHolds(w) {
+		return
+	}
 	modelID := r.PathValue("id")
 	if status, detail := s.makeRoom(r.Context(), modelID); status != 0 {
 		fail(w, status, detail)

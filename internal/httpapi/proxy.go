@@ -102,6 +102,15 @@ var droppedHeaders = map[string]bool{"host": true, "authorization": true, "x-api
 // proxyV1 forwards /v1/* to llama-swap behind the console's authentication,
 // streaming the response so a completion arrives token by token.
 func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
+	// While a benchmark runs, outside requests wait (D27); those let in
+	// are counted until their response has streamed, which is what a run
+	// drains before it starts.
+	leave, resumeAt, admitted := s.benchGate().Enter()
+	if !admitted {
+		pausedV1(w, resumeAt)
+		return
+	}
+	defer leave()
 	path := r.PathValue("path")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

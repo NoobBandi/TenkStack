@@ -121,10 +121,24 @@ func TestAuthorization(t *testing.T) {
 		{"DELETE", "/api/settings/huggingface"},
 		{"GET", "/api/search/service"},
 		{"POST", "/api/search/restart"},
+		// A benchmark unloads other people's models and pauses /v1 (D29).
+		{"GET", "/api/bench/plan?model=m&tier=quick"},
+		{"POST", "/api/bench/run"},
+		{"POST", "/api/bench/cancel"},
+		{"GET", "/api/bench/runs"},
+		{"GET", "/api/bench/runs/1"},
+		{"GET", "/api/bench/runs/1/export"},
+		{"DELETE", "/api/bench/runs/1"},
 	} {
 		code, _ := call(asMember, c.method, c.path, map[string]any{})
 		expect("member "+c.method+" "+c.path, code, 403)
 	}
+
+	// Everyone signed in reads the benchmark's state, for the banner.
+	code, _ = call(asMember, "GET", "/api/bench/status", nil)
+	expect("member reads the benchmark status", code, 200)
+	code, _ = call(as{}, "GET", "/api/bench/status", nil)
+	expect("nobody reads the benchmark status", code, 401)
 
 	// A key opens the model API only, whoever it belongs to.
 	code, _ = call(as{bearer: adminKey.Secret}, "GET", "/api/api-keys", nil)

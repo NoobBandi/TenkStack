@@ -1,6 +1,9 @@
 package llamaswap
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/NoobBandi/TenkStack/internal/api"
@@ -44,5 +47,43 @@ func TestExtractThroughput(t *testing.T) {
 	tp := ExtractThroughput(ev)
 	if tp == nil || tp.EvalMs != 5000 || tp.Tokens != 150 || tp.TokensPerSecond != 30 {
 		t.Errorf("throughput = %+v", tp)
+	}
+}
+
+func TestServedContext(t *testing.T) {
+	serve := func(routes map[string]string) string {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, ok := routes[r.URL.Path]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(body))
+		}))
+		t.Cleanup(srv.Close)
+		return srv.URL
+	}
+	c := NewClient("")
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		routes map[string]string
+		want   int
+	}{
+		// llama-server and Strata: the per-slot context in /props.
+		{"props", map[string]string{"/props": `{"default_generation_settings":{"n_ctx":262144}}`}, 262144},
+		// vLLM: no /props, max_model_len in /v1/models.
+		{"vllm", map[string]string{"/v1/models": `{"data":[{"id":"m","max_model_len":131072}]}`}, 131072},
+		// /props without a context falls through to /v1/models.
+		{"props empty", map[string]string{
+			"/props":     `{"build_info":"b1"}`,
+			"/v1/models": `{"data":[{"id":"m","max_model_len":65536}]}`,
+		}, 65536},
+		{"neither", map[string]string{"/v1/models": `{"data":[{"id":"m"}]}`}, 0},
+	}
+	for _, tc := range cases {
+		if got := c.ServedContext(ctx, serve(tc.routes)); got != tc.want {
+			t.Errorf("%s: ServedContext = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }
