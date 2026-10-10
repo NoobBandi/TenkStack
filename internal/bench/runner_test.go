@@ -91,11 +91,18 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.inFlight++
 	f.maxIn = max(f.maxIn, f.inFlight)
 	f.mu.Unlock()
-	defer func() {
-		f.mu.Lock()
-		f.inFlight--
-		f.mu.Unlock()
-	}()
+	// Out of the count before [DONE] goes out, not when the handler
+	// returns: the client starts its next request on [DONE], and counting
+	// this one until its handler unwound saw five at once now and then.
+	var once sync.Once
+	leave := func() {
+		once.Do(func() {
+			f.mu.Lock()
+			f.inFlight--
+			f.mu.Unlock()
+		})
+	}
+	defer leave()
 	n := maxTokens
 	if body["ignore_eos"] != true && f.natural > 0 {
 		n = min(n, f.natural)
@@ -125,6 +132,7 @@ func (f *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.drafted += 100
 	f.mu.Unlock()
 	b, _ := json.Marshal(last)
+	leave()
 	fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", b)
 	flusher.Flush()
 }
