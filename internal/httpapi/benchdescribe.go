@@ -32,43 +32,66 @@ type BenchDescriber struct{ S *Server }
 
 // Describe fills ModelID, Name, Command, Hardware, Model and Engine. Tuning
 // and Unrecognized are left for the parameter parser.
-func (d BenchDescriber) Describe(ctx context.Context, modelID string) (bench.Description, error) {
-	s := d.S
+// launch is a model's entry in llama-swap's config as the profile reads
+// it: the command and environment, and which engine runs it.
+type launch struct {
+	name, cmd string
+	env       map[string]string
+	macros    map[string]string
+	args      []string
+	launcher  profile.Launcher
+	prov      *providers.Provider
+	key       string // the engine, as profile names it
+	vendor    string
+}
+
+func (s *Server) launchOf(modelID string) (launch, error) {
 	c, err := s.Config.Load()
 	if err != nil {
-		return bench.Description{}, err
+		return launch{}, err
 	}
 	var entry *llamaswap.Mapping
 	if models := c.Root().Map("models"); models != nil {
 		entry = models.Map(modelID)
 	}
 	if entry == nil {
-		return bench.Description{}, fmt.Errorf("找不到模型 %s", modelID)
+		return launch{}, fmt.Errorf("找不到模型 %s", modelID)
 	}
-	cmd := llamaswap.Scalar(entry.Get("cmd"))
-	env := llamaswap.EnvMap(entry.Get("env"))
-	name := llamaswap.Scalar(entry.Get("name"))
-	if name == "" {
-		name = modelID
+	l := launch{
+		name:   llamaswap.Scalar(entry.Get("name")),
+		cmd:    llamaswap.Scalar(entry.Get("cmd")),
+		env:    llamaswap.EnvMap(entry.Get("env")),
+		macros: llamaswap.Macros(c),
 	}
-	macros := llamaswap.Macros(c)
-	args := profile.Split(cmd)
-	launcher := profile.LauncherOf(args, macros)
-
-	var prov *providers.Provider
-	registered, vendor := "", ""
-	if launcher.Macro != "" {
-		if p, v, ok := providers.Resolve(launcher.Macro); ok {
-			prov, registered, vendor = &p, p.Key, v
+	if l.name == "" {
+		l.name = modelID
+	}
+	l.args = profile.Split(l.cmd)
+	l.launcher = profile.LauncherOf(l.args, l.macros)
+	registered := ""
+	if l.launcher.Macro != "" {
+		if p, v, ok := providers.Resolve(l.launcher.Macro); ok {
+			l.prov, registered, l.vendor = &p, p.Key, v
 		}
 	}
-	key := profile.EngineKey(launcher, registered)
-	if prov == nil {
+	l.key = profile.EngineKey(l.launcher, registered)
+	if l.prov == nil {
 		// Unclaimed launchers of a registered engine still have its site
 		// and variable prefix.
-		prov = providers.Get(key)
+		l.prov = providers.Get(l.key)
 	}
-	vendor = profile.VendorOf(launcher, vendor)
+	l.vendor = profile.VendorOf(l.launcher, l.vendor)
+	return l, nil
+}
+
+func (d BenchDescriber) Describe(ctx context.Context, modelID string) (bench.Description, error) {
+	s := d.S
+	l, err := s.launchOf(modelID)
+	if err != nil {
+		return bench.Description{}, err
+	}
+	name, cmd, env, macros, args, launcher, prov, key, vendor :=
+		l.name, l.cmd, l.env, l.macros, l.args, l.launcher, l.prov, l.key, l.vendor
 
 	used := profile.CardsUsed(d.cards(ctx), env, args, key, vendor)
 	cpu, ram := "", int64(0)

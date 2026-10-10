@@ -227,9 +227,7 @@ func (p *Probe) Instance(ctx context.Context, port int) *api.ComfyInstance {
 			}
 		}
 	}
-	if len(devices) > 0 {
-		record.Device, _ = devices[0].(map[string]any)
-	}
+	record.Device = heldDevice(devices)
 	if q, _ := queue["queue_running"].([]any); q != nil {
 		record.QueueRunning = len(q)
 	}
@@ -774,4 +772,37 @@ func (p *Probe) AwaitIdle(ctx context.Context, port int) bool {
 		}
 	}
 	return true
+}
+
+// heldDevice is the device an instance is shown on, with torch_vram_total
+// replaced by what the process holds across every device it sees.
+//
+// A container given both cards lists both, and a workflow split over two
+// (DisTorch) or placed on the second leaves the first at 0. Reading the
+// first alone, the console saw 0 GiB beside 9.4 GiB of qwen-image on
+// xpu:1, so it never cleared ComfyUI for a model and never let it go when
+// idle. The device holding the most is the one named.
+func heldDevice(devices []any) map[string]any {
+	var best map[string]any
+	var bestHeld, sum float64
+	for _, d := range devices {
+		m, _ := d.(map[string]any)
+		if m == nil {
+			continue
+		}
+		h, _ := m["torch_vram_total"].(float64)
+		sum += h
+		if best == nil || h > bestHeld {
+			best, bestHeld = m, h
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	out := make(map[string]any, len(best))
+	for k, v := range best {
+		out[k] = v
+	}
+	out["torch_vram_total"] = sum
+	return out
 }

@@ -324,10 +324,11 @@ func (h BenchHost) Names(ctx context.Context) map[string]string {
 	return out
 }
 
-// benchCards is the cards a model's entry selects, by the same reading as
+// modelCards is the cards a model's entry selects -- the benchmark watches
+// them, makeRoom clears ComfyUI off them -- by the same reading as
 // the occupants view: its selector variable against each usable card's,
 // and every card when it names none.
-func (s *Server) benchCards(ctx context.Context, modelID string) []api.GpuDevice {
+func (s *Server) modelCards(ctx context.Context, modelID string) []api.GpuDevice {
 	if s.Gpu == nil {
 		return nil
 	}
@@ -382,7 +383,7 @@ func (h BenchHost) ComfyBusy(ctx context.Context, modelID string) bool {
 	if len(busy) == 0 {
 		return false
 	}
-	cards := s.benchCards(ctx, modelID)
+	cards := s.modelCards(ctx, modelID)
 	if len(cards) == 0 || s.Docker == nil {
 		return true
 	}
@@ -434,7 +435,7 @@ const rssEvery = 2 * time.Second
 func (h BenchHost) Watch(ctx context.Context, modelID string) func() schema.Resources {
 	s := h.S
 	from := time.Now()
-	cards := s.benchCards(ctx, modelID)
+	cards := s.modelCards(ctx, modelID)
 	container := s.benchContainer(modelID)
 
 	var mu sync.Mutex

@@ -15,7 +15,9 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/backends"
 	"github.com/NoobBandi/TenkStack/internal/comfy"
 	"github.com/NoobBandi/TenkStack/internal/containers"
+	"github.com/NoobBandi/TenkStack/internal/profile"
 	"github.com/NoobBandi/TenkStack/internal/providers"
+	"github.com/NoobBandi/TenkStack/internal/tuning"
 	"github.com/NoobBandi/TenkStack/internal/vendors"
 )
 
@@ -790,35 +792,34 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 		return 0, ""
 	}
 	devices := s.Gpu.ListDevices(ctx)
-	target := s.targetCard(ctx, modelID, devices)
 	byPort := s.Docker.PortCards(ctx, cardsOf(devices))
+	// Every card the model loads onto: a model split over two cards is
+	// stopped by ComfyUI on either.
+	cards := s.modelCards(ctx, modelID)
+	if len(cards) == 0 {
+		if t := s.targetCard(ctx, modelID, devices); t != nil {
+			cards = []api.GpuDevice{*t}
+		}
+	}
+	short := s.shortCards(ctx, modelID, cards)
+	onShort := func(inst api.ComfyInstance) bool {
+		if len(cards) == 0 {
+			return true
+		}
+		for i := range short {
+			if sharesCard(inst, &short[i], byPort) {
+				return true
+			}
+		}
+		return false
+	}
 	var held []comfy.Held
 	for _, h := range anywhere {
-		if sharesCard(h.Instance, target, byPort) {
+		if onShort(h.Instance) {
 			held = append(held, h)
 		}
 	}
 	if len(held) == 0 {
-		return 0, ""
-	}
-	var total, used float64
-	if target != nil {
-		if sample := s.Gpu.Sample(ctx, target.Index); sample != nil {
-			if sample.MemoryTotalMiB != nil {
-				total = *sample.MemoryTotalMiB * (1 << 20)
-			}
-			if sample.MemoryUsedMiB != nil {
-				used = *sample.MemoryUsedMiB * (1 << 20)
-			}
-		}
-	}
-	need := float64(s.Settings.Get("vram_margin_gib")) * (1 << 30)
-	if files, ok := s.Models.FilesForModel(modelID); ok {
-		for _, f := range files {
-			need += float64(f.SizeBytes)
-		}
-	}
-	if total > 0 && total-used >= need {
 		return 0, ""
 	}
 	var busy []string
@@ -841,6 +842,13 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 	// ComfyUI keeps some of it for good (custom nodes' tensors, the torch
 	// context), so the wait ends once the total stops falling rather than
 	// only below the idle threshold, which it may never reach.
+	// ComfyUI lets go some seconds after /free answers -- 9.4 GiB stood for
+	// over 5 s and was gone by 13 -- so a total that has not moved yet is
+	// not "all it will release": the steady count starts once it falls.
+	start := 0.0
+	for _, h := range held {
+		start += h.Bytes
+	}
 	last, steady := -1.0, 0
 	for i := 0; i < 60; i++ {
 		select {
@@ -850,7 +858,7 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 		}
 		still := 0.0
 		for _, h := range s.ComfyProbe.HeldVRAM(ctx, idle) {
-			if sharesCard(h.Instance, target, byPort) {
+			if onShort(h.Instance) {
 				still += h.Bytes
 			}
 		}
@@ -858,7 +866,7 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 			log.Print("ComfyUI released the card")
 			return 0, ""
 		}
-		if last >= 0 && still >= last {
+		if still < start*0.95 && last >= 0 && still >= last {
 			steady++
 		} else {
 			steady = 0
@@ -871,6 +879,73 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 	}
 	log.Printf("ComfyUI still holds VRAM after 30s; loading %s anyway", modelID)
 	return 0, ""
+}
+
+// shortCards is the cards that lack the room a model needs to start.
+//
+// llama.cpp allocates what it loads, so a card needs the model's files (its
+// share of them, split over several cards) plus the margin setting. vLLM
+// and SGLang instead claim a fixed share of every card at start -- vLLM's
+// --gpu-memory-utilization, 0.9 when unset; SGLang's --mem-fraction-static
+// -- and refuse to start when that much is not free, however small the
+// model. Sizing those by their files let a 19 GB model "fit" beside 9 GiB of
+// ComfyUI, and vLLM then stopped asking for 25.8 GiB of the 20 free.
+//
+// A command that names no weights and no share -- a wrapper script that
+// starts its own engine -- says nothing about its size, and is taken to
+// want the card: one such engine, filling 22.7 GiB of cache per card,
+// crashed on every request beside 9.4 GiB of idle ComfyUI.
+func (s *Server) shortCards(ctx gocontext.Context, modelID string, cards []api.GpuDevice) []api.GpuDevice {
+	margin := float64(s.Settings.Get("vram_margin_gib")) * (1 << 30)
+	var files float64
+	named := false
+	if fs, ok := s.Models.FilesForModel(modelID); ok {
+		named = len(fs) > 0
+		for _, f := range fs {
+			files += float64(f.SizeBytes)
+		}
+	}
+	share := s.reservedShare(modelID)
+	if share == 0 && !named {
+		return cards
+	}
+	var out []api.GpuDevice
+	for _, c := range cards {
+		sample := s.Gpu.Sample(ctx, c.Index)
+		if sample == nil || sample.MemoryTotalMiB == nil || sample.MemoryUsedMiB == nil {
+			out = append(out, c) // unknown: clearing it is the safe side
+			continue
+		}
+		total := *sample.MemoryTotalMiB * (1 << 20)
+		free := total - *sample.MemoryUsedMiB*(1<<20)
+		need := margin + files/float64(len(cards))
+		if share > 0 {
+			// Half a GiB over: the engine measures the card a little smaller
+			// than the driver reports it.
+			need = max(need, share*total+0.5*(1<<30))
+		}
+		if free < need {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// reservedShare is the fraction of each card an engine takes at start, 0
+// for one that allocates as it loads.
+func (s *Server) reservedShare(modelID string) float64 {
+	l, err := s.launchOf(modelID)
+	if err != nil {
+		return 0
+	}
+	t, _ := tuning.Parse(l.cmd, l.env, l.key)
+	if t.GPUMemoryUtilization != nil && *t.GPUMemoryUtilization > 0 {
+		return *t.GPUMemoryUtilization
+	}
+	if l.key == profile.VLLM {
+		return 0.9 // vLLM's default
+	}
+	return 0
 }
 
 // lastOfDefault says whether a launcher is the default engine's only one:
