@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -298,6 +299,60 @@ func (s *Server) comfyInterrupt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.OK{OK: done})
+}
+
+// WatchComfyIdle lets go of what ComfyUI holds once it has done nothing
+// for the comfyui_idle_free_s setting. ComfyUI never does this itself:
+// after a picture the models stay on the card, measured unchanged a full
+// minute later, until something asks for them back.
+//
+// Activity is a queued or running job, an instance too busy sampling to
+// answer, or its reservation changing between looks -- the last catches a
+// job that came and went inside one 5 s look.
+func (s *Server) WatchComfyIdle(ctx gocontext.Context) {
+	if s.ComfyProbe == nil || s.Settings == nil {
+		return
+	}
+	type seen struct {
+		at   time.Time
+		held float64
+	}
+	last := map[int]seen{}
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		after := time.Duration(s.Settings.Get("comfyui_idle_free_s")) * time.Second
+		if after <= 0 {
+			continue
+		}
+		idle := float64(s.Settings.Get("comfyui_idle_gib")) * (1 << 30)
+		now := time.Now()
+		for _, inst := range s.ComfyProbe.Instances(ctx) {
+			held, _ := inst.Device["torch_vram_total"].(float64)
+			prev, known := last[inst.Port]
+			busy := inst.Stale || inst.QueueRunning > 0 || inst.QueuePending > 0
+			changed := known && math.Abs(held-prev.held) > 64<<20
+			if !known || busy || changed {
+				last[inst.Port] = seen{now, held}
+				continue
+			}
+			if held < max(idle, 256<<20) || now.Sub(prev.at) < after {
+				continue
+			}
+			log.Printf("ComfyUI :%d idle for %s, freeing %.1f GiB", inst.Port, now.Sub(prev.at).Round(time.Second), held/(1<<30))
+			if err := s.ComfyProbe.Free(ctx, inst.Port); err != nil {
+				log.Printf("could not ask ComfyUI :%d to free: %v", inst.Port, err)
+			}
+			// The release lands seconds later; the next looks see it fall,
+			// which counts as a change and restarts the clock.
+			last[inst.Port] = seen{now, held}
+		}
+	}
 }
 
 // comfyConfig is what one instance's container is made of. Every card in

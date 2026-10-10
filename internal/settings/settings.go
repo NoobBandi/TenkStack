@@ -46,6 +46,10 @@ var Specs = []Spec{
 		Note:    "ComfyUI 用量低於這個值就算閒置，載入模型時不會停掉它",
 		Detail:  "閒置的 ComfyUI 本來就會留著幾百 MB。",
 		Default: 1, Minimum: 0, Maximum: 16, Unit: "GiB", Group: "vram"},
+	{Name: "comfyui_idle_free_s", Label: "ComfyUI 閒置自動釋放",
+		Note:    "ComfyUI 沒有工作超過這麼久，就卸掉它載入的模型，把顯示卡讓出來；0 表示不自動釋放",
+		Detail:  "ComfyUI 本身不會釋放：算完圖，模型就一直佔著顯示卡，等下一張圖用。釋放後下一張圖要重新載入模型，大模型會慢幾十秒。",
+		Default: 60, Minimum: 0, Maximum: 3600, Unit: "秒", Group: "vram"},
 	{Name: "vision_cache", Label: "舊圖片改用文字描述",
 		Note: "較早的圖片改送模型寫過的描述，加速才不會失效",
 		Detail: "帶圖的對話會讓加速用的草稿模型失效，本機實測生成從 34.7 掉到 12.6 tok/s（llama.cpp#27408）。" +

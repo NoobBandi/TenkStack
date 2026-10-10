@@ -713,8 +713,8 @@ export default function Settings() {
         <HuggingFaceRow />
         {rows('estimate_depth')}
       </Panel>
-      <Panel title="顯示卡" info="LLM 與 ComfyUI 共用顯示卡時，用來判斷載入模型前要不要先停掉 ComfyUI。">
-        {rows('vram_margin_gib', 'comfyui_idle_gib')}
+      <Panel title="顯存共用" info="語言模型和 ComfyUI 共用顯示卡：載入模型前要不要先清掉 ComfyUI，以及 ComfyUI 閒置多久就自動把顯存讓出來。">
+        {rows('vram_margin_gib', 'comfyui_idle_gib', 'comfyui_idle_free_s')}
       </Panel>
       <Panel title="紀錄保留" info="伺服器記住多少，給日誌頁與顯示卡頁往回看。">
         {rows('log_lines', 'gpu_history_hours')}
