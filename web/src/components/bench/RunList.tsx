@@ -1,0 +1,139 @@
+import {
+  Button, Checkbox, Empty, Modal, Popconfirm, Space, Spin, Tag, Tooltip, Typography,
+} from 'antd';
+import { DeleteOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
+import { exportBenchRun, type BenchRunRow } from '../../api';
+import { LINE, MONO } from '../../theme';
+import { RunMark } from './BenchResults';
+import { fmtMs, fmtTps, fmtWhen, tierLabel } from './labels';
+
+const { Text } = Typography;
+
+const num: React.CSSProperties = { fontFamily: MONO, fontVariantNumeric: 'tabular-nums' };
+
+/** What a page adds to each row beside the run's own facts: a tag after
+ *  the date, and buttons above export and delete. */
+export interface RowExtras {
+  badge?: (row: BenchRunRow) => React.ReactNode;
+  actions?: (row: BenchRunRow) => React.ReactNode;
+}
+
+/**
+ * One saved run: picked or not, the letter it wears while comparing, what
+ * ran and when, its two headline numbers, and export and delete.
+ */
+function RunItem({ row, checked, mark, comparing, disabled, onToggle, onDelete, extras }: {
+  row: BenchRunRow; checked: boolean; mark?: number; comparing: boolean; disabled: boolean;
+  onToggle: () => void; onDelete: () => void; extras: RowExtras;
+}) {
+  return (
+    <div
+      role="button" tabIndex={0}
+      onClick={() => { if (!disabled) onToggle(); }}
+      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled) { e.preventDefault(); onToggle(); } }}
+      style={{
+        display: 'flex', gap: 10, padding: '10px 12px', cursor: disabled ? 'not-allowed' : 'pointer',
+        borderTop: `1px solid ${LINE.faint}`,
+        background: checked ? 'rgba(255,255,255,0.06)' : undefined,
+        transition: 'background 0.2s, box-shadow 0.2s',
+        boxShadow: checked ? `inset 2px 0 0 ${LINE.strong}` : undefined,
+      }}
+    >
+      {/* The checkbox and a slot the letter always has room in, so picking a
+          second run does not shift the names. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, paddingTop: 2, flex: 'none' }}
+           onClick={(e) => e.stopPropagation()}>
+        <Checkbox checked={checked} disabled={disabled} onChange={onToggle} aria-label="選取" />
+        <span style={{ width: 18, display: 'inline-flex' }}>
+          {mark !== undefined && checked && comparing && <RunMark index={mark} />}
+        </span>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{row.name || row.model}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 3 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>{row.engine}</Text>
+          <Tag style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px', paddingInline: 5 }}>{tierLabel(row.tier)}</Tag>
+          <Text type="secondary" style={{ fontSize: 12, ...num }}>{fmtWhen(row.started_at)}</Text>
+          {extras.badge?.(row)}
+        </div>
+        <Text style={{ fontSize: 12, display: 'block', marginTop: 3, opacity: 0.8 }}>
+          Decode <span style={num}>{fmtTps(row.gen_tps_1k)}</span> tok/s
+          <span style={{ opacity: 0.5 }}> · </span>
+          TTFT <span style={num}>{fmtMs(row.ttft_ms_1k)}</span> ms
+        </Text>
+      </div>
+      <div style={{ display: 'flex', gap: 2, flex: 'none', alignItems: 'flex-start' }}
+           onClick={(e) => e.stopPropagation()}>
+        {extras.actions?.(row)}
+        <Tooltip title="匯出 JSON（不含本機路徑與啟動指令）">
+          <Button size="small" type="text" icon={<DownloadOutlined />}
+                  aria-label="匯出" onClick={() => exportBenchRun(row.id)} />
+        </Tooltip>
+        <Popconfirm
+          title="刪除這筆跑分紀錄？" description="刪除後無法復原。"
+          okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
+          onConfirm={onDelete}
+        >
+          <Tooltip title="刪除">
+            <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label="刪除" />
+          </Tooltip>
+        </Popconfirm>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 跑分紀錄 as a dialog: every saved run, newest first, ticked to read one or
+ * compare up to `max`. The selection applies as it is made, so the page
+ * behind it is already showing what is ticked when the dialog closes.
+ */
+export default function RunsDialog({ open, onClose, rows, loading, onReload, selected, marks, max, onToggle, onDelete, extras = {} }: {
+  open: boolean; onClose: () => void;
+  rows: BenchRunRow[] | null; loading: boolean; onReload: () => void;
+  selected: number[]; marks: Record<number, number>; max: number;
+  onToggle: (id: number) => void; onDelete: (id: number) => void;
+  extras?: RowExtras;
+}) {
+  const comparing = selected.length > 1;
+  return (
+    <Modal
+      open={open} onCancel={onClose} width={640}
+      title={(
+        <Space size={8}>
+          <span>跑分紀錄</span>
+          <Tooltip title="重新整理">
+            <Button size="small" type="text" icon={<ReloadOutlined />} loading={loading}
+                    aria-label="重新整理" onClick={onReload} />
+          </Tooltip>
+        </Space>
+      )}
+      footer={<Button type="primary" onClick={onClose}>完成</Button>}
+      styles={{ body: { padding: 0 } }}
+    >
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', padding: '4px 12px 8px' }}>
+        勾 1 筆看單筆，勾 2–{max} 筆並排比較
+        {selected.length > 0 && <>・已選 {selected.length} 筆</>}
+      </Text>
+      {rows === null ? (
+        <div style={{ padding: 24, textAlign: 'center' }}><Spin /></div>
+      ) : rows.length === 0 ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="還沒有跑分紀錄" style={{ padding: 24 }} />
+      ) : (
+        <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+          {rows.map((row) => (
+            <RunItem
+              key={row.id} row={row}
+              checked={selected.includes(row.id)}
+              mark={marks[row.id]} comparing={comparing}
+              disabled={selected.length >= max && !selected.includes(row.id)}
+              onToggle={() => onToggle(row.id)}
+              onDelete={() => onDelete(row.id)}
+              extras={extras}
+            />
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}

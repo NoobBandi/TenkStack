@@ -4,10 +4,8 @@ import type { TableColumnsType as ColumnsType } from 'antd';
 import type { BenchRun } from '../../api';
 import { useMedia } from '../../media';
 import { LINE, MONO } from '../../theme';
-import BenchPerformance from './BenchPerformance';
 import { ColTitle, InfoTip, RunMark } from './BenchResults';
 import { TERMS, fmtDuration, fmtWhen, flatten, tierLabel } from './labels';
-import type { RunView } from './metrics';
 
 const { Text } = Typography;
 
@@ -90,35 +88,29 @@ function SectionTitle({ children, extra }: { children: React.ReactNode; extra?: 
 }
 
 /**
- * Everything under the report card, open rather than folded: the full
- * figures as one table, then the parameters and how each run went side by
- * side. The launch command is not shown -- the parameters table is what it
- * says, readably -- and the terms are explained beside their headings.
+ * Parameters and how the run went, in one card: what was launched and what
+ * it cost the machine are read together -- a parameter changed between two
+ * runs and the VRAM it moved. One run side by side; compared, each part
+ * needs a column per run, so one above the other.
  */
-export default function BenchDetail({ runs, views, marks }: {
-  runs: BenchRun[]; views: RunView[]; marks: number[];
-}) {
+export default function BenchDetail({ runs, marks }: { runs: BenchRun[]; marks: number[] }) {
   const wide = useMedia('(min-width: 1100px)');
   const mark = (i: number) => marks[i] ?? i;
   if (!runs.length) return null;
   const single = runs.length === 1;
   return (
-    <>
-      <BenchPerformance runs={views} />
+    <Card size="small" title={<CardTitle en="Parameters & run" zh="參數與執行" />}>
       <div style={{
-        display: 'grid', gap: 16, alignItems: 'start',
-        // Side by side for one run; compared, each table needs a column per
-        // run, so they take the full width one above the other.
-        gridTemplateColumns: wide && single ? 'minmax(0, 1fr) minmax(320px, 0.6fr)' : 'minmax(0, 1fr)',
+        display: 'grid', gap: 24, alignItems: 'start',
+        gridTemplateColumns: wide && single ? 'minmax(300px, 0.55fr) minmax(0, 1fr)' : 'minmax(0, 1fr)',
       }}>
-        <Card size="small" title={<CardTitle en="Parameters" zh={single ? '參數' : '參數差異'} />}>
-          <ParameterDiff runs={runs} mark={mark} />
-        </Card>
-        <Card size="small" title={<CardTitle en="Run & resources" zh="執行與資源" />}>
+        <section>
+          <SectionTitle>執行與資源</SectionTitle>
           <RunFacts runs={runs} mark={mark} />
-        </Card>
+        </section>
+        <ParameterDiff runs={runs} mark={mark} />
       </div>
-    </>
+    </Card>
   );
 }
 
@@ -186,16 +178,14 @@ function ParameterDiff({ runs, mark }: { runs: BenchRun[]; mark: (i: number) => 
 
   return (
     <section>
-      {!single && (
-        <SectionTitle extra={(
-          <Space size={6}>
-            <Text type="secondary" style={{ fontSize: 12 }}>顯示全部</Text>
-            <Switch size="small" checked={showAll} onChange={setShowAll} />
-          </Space>
-        )}>
-          {null}
-        </SectionTitle>
-      )}
+      <SectionTitle extra={!single && (
+        <Space size={6}>
+          <Text type="secondary" style={{ fontSize: 12 }}>顯示全部</Text>
+          <Switch size="small" checked={showAll} onChange={setShowAll} />
+        </Space>
+      )}>
+        {single ? '參數' : '參數差異'}
+      </SectionTitle>
       {!single && differing.length === 0 ? (
         <Text type="secondary">
           {sameHash ? '參數完全相同。' : '整理過的參數沒有不同。'}

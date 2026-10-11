@@ -1,33 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Alert, App as AntApp, Button, Card, Checkbox, Empty, Popconfirm, Space, Spin, Tag, Tooltip, Typography,
-} from 'antd';
-import {
-  DeleteOutlined, DownloadOutlined, FieldTimeOutlined, LoadingOutlined, ReloadOutlined,
-} from '@ant-design/icons';
+import { Alert, App as AntApp, Button, Card, Empty, Space, Spin, Typography } from 'antd';
+import { FieldTimeOutlined, HistoryOutlined, LoadingOutlined } from '@ant-design/icons';
 import { useSearchParams } from 'react-router-dom';
 import {
-  benchRun, benchRuns, deleteBenchRun, exportBenchRun, type BenchRun, type BenchRunRow,
+  benchRun, benchRuns, deleteBenchRun, type BenchRun, type BenchRunRow,
 } from '../api';
 import { benchActive, useBenchStatus } from '../benchState';
 import { useIsOwner } from '../identity';
 import BenchProgressView from '../components/bench/BenchProgressView';
 import BenchDetail from '../components/bench/BenchDetail';
 import BenchDrawer from '../components/bench/BenchDrawer';
-import BenchReport from '../components/bench/BenchReport';
-import { RunMark } from '../components/bench/BenchResults';
-import { fmtMs, fmtTps, fmtWhen, tierLabel } from '../components/bench/labels';
+import BenchReport, { CopyReport, RunHeader } from '../components/bench/BenchReport';
+import RunsDialog from '../components/bench/RunList';
 import { runView, type RunView } from '../components/bench/metrics';
 import { usePresence } from '../components/bench/presence';
-import { useMedia } from '../media';
-import { LINE, MONO } from '../theme';
 
 const { Text, Paragraph } = Typography;
 
 /** Side by side stops being readable past three column groups. */
 const MAX_COMPARE = 3;
 
-const num: React.CSSProperties = { fontFamily: MONO, fontVariantNumeric: 'tabular-nums' };
 const viewKey = (v: RunView) => v.key;
 
 /**
@@ -55,74 +47,6 @@ function assignMarks(ids: number[], prev: Record<number, number>): Record<number
 function parseIds(param: string | null): number[] {
   if (!param) return [];
   return param.split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, MAX_COMPARE);
-}
-
-/**
- * One saved run in the list: picked or not, the letter it wears while
- * comparing, what ran and when, its two headline numbers, and export and
- * delete. Compact on purpose -- the report card beside it is where a run is read.
- */
-function RunItem({ row, checked, mark, comparing, disabled, onToggle, onDelete }: {
-  row: BenchRunRow; checked: boolean; mark?: number; comparing: boolean; disabled: boolean;
-  onToggle: () => void; onDelete: () => void;
-}) {
-  return (
-    <div
-      role="button" tabIndex={0}
-      onClick={() => { if (!disabled) onToggle(); }}
-      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled) { e.preventDefault(); onToggle(); } }}
-      style={{
-        display: 'flex', gap: 10, padding: '10px 12px', cursor: disabled ? 'not-allowed' : 'pointer',
-        borderTop: `1px solid ${LINE.faint}`,
-        background: checked ? 'rgba(255,255,255,0.06)' : undefined,
-        transition: 'background 0.2s, box-shadow 0.2s',
-        boxShadow: checked ? `inset 2px 0 0 ${LINE.strong}` : undefined,
-      }}
-    >
-      {/* The checkbox and a slot the letter always has room in, so picking a
-          second run does not shift the names. */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, paddingTop: 2, flex: 'none' }}
-           onClick={(e) => e.stopPropagation()}>
-        <Checkbox checked={checked} disabled={disabled} onChange={onToggle} aria-label="選取" />
-        <span style={{ width: 18, display: 'inline-flex' }}>
-          {mark !== undefined && checked && (
-            <span className="bn-mark-slot" style={{ width: 18, opacity: comparing ? 1 : 0 }}>
-              <RunMark index={mark} />
-            </span>
-          )}
-        </span>
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{row.name || row.model}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 3 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>{row.engine}</Text>
-          <Tag style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px', paddingInline: 5 }}>{tierLabel(row.tier)}</Tag>
-          <Text type="secondary" style={{ fontSize: 12, ...num }}>{fmtWhen(row.started_at)}</Text>
-        </div>
-        <Text style={{ fontSize: 12, display: 'block', marginTop: 3, opacity: 0.8 }}>
-          Decode <span style={num}>{fmtTps(row.gen_tps_1k)}</span> tok/s
-          <span style={{ opacity: 0.5 }}> · </span>
-          TTFT <span style={num}>{fmtMs(row.ttft_ms_1k)}</span> ms
-        </Text>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 'none' }}
-           onClick={(e) => e.stopPropagation()}>
-        <Tooltip title="匯出 JSON（不含本機路徑與啟動指令）" placement="left">
-          <Button size="small" type="text" icon={<DownloadOutlined />}
-                  aria-label="匯出" onClick={() => exportBenchRun(row.id)} />
-        </Tooltip>
-        <Popconfirm
-          title="刪除這筆跑分紀錄？" description="刪除後無法復原。"
-          okText="刪除" cancelText="取消" okButtonProps={{ danger: true }}
-          onConfirm={onDelete}
-        >
-          <Tooltip title="刪除" placement="left">
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label="刪除" />
-          </Tooltip>
-        </Popconfirm>
-      </div>
-    </div>
-  );
 }
 
 /** For someone who has never run one: what this is, and where to start. */
@@ -153,8 +77,8 @@ function Introduction({ onStart }: { onStart: () => void }) {
 
 export default function Bench() {
   const owner = useIsOwner();
-  const wide = useMedia('(min-width: 1100px)');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [listOpen, setListOpen] = useState(false);
   const { message } = AntApp.useApp();
   const { status } = useBenchStatus();
   const [rows, setRows] = useState<BenchRunRow[] | null>(null);
@@ -274,55 +198,28 @@ export default function Bench() {
   // Starting lives here, on the page whose records it adds to: the drawer
   // picks the model. While a run holds /v1 the same button opens its progress.
   const running = benchActive(status);
-  const startButton = (
-    <Button size="small" type="primary" onClick={() => setDrawerOpen(true)}
-            icon={running ? <LoadingOutlined /> : <FieldTimeOutlined />}>
-      {running ? '查看進度' : '開始跑分'}
-    </Button>
+  const actions = (
+    <Space size={8} wrap>
+      {drawn.length > 0 && <CopyReport runs={drawn} />}
+      <Button size="small" icon={<HistoryOutlined />} onClick={() => setListOpen(true)}>跑分紀錄</Button>
+      <Button size="small" type="primary" onClick={() => setDrawerOpen(true)}
+              icon={running ? <LoadingOutlined /> : <FieldTimeOutlined />}>
+        {running ? '查看進度' : '開始跑分'}
+      </Button>
+    </Space>
   );
 
-  const list = (
-    <Card
-      size="small"
-      title="跑分紀錄"
-      style={{ height: '100%' }}
-      styles={{ body: { padding: 0 } }}
-      extra={(
-        <Space size={4}>
-          <Tooltip title="重新整理">
-            <Button size="small" type="text" icon={<ReloadOutlined />} loading={loading}
-                    aria-label="重新整理" onClick={() => void load()} />
-          </Tooltip>
-          {startButton}
-        </Space>
-      )}
-    >
-      <Text type="secondary" style={{ fontSize: 12, display: 'block', padding: '8px 12px 4px' }}>
-        勾 1 筆看單筆，勾 2–3 筆並排比較
-      </Text>
-      {rows === null && !error ? (
-        <div style={{ padding: 24, textAlign: 'center' }}><Spin /></div>
-      ) : (
-        <div style={{ maxHeight: wide ? 720 : 420, overflowY: 'auto' }}>
-          {(rows ?? []).map((row) => (
-            <RunItem
-              key={row.id} row={row}
-              checked={selected.includes(row.id)}
-              mark={marks[row.id]} comparing={selected.length > 1}
-              disabled={selected.length >= MAX_COMPARE && !selected.includes(row.id)}
-              onToggle={() => toggle(row.id)}
-              onDelete={() => remove(row.id)}
-            />
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-
-  const report = drawn.length ? <BenchReport runs={drawn} /> : (
-    <Card size="small" title="成績單" style={{ height: '100%' }}>
-      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE}
-             description={selected.length ? '讀取中…' : '在左邊勾一筆紀錄'} />
+  // What is being read, and the two ways off this page's subject: the
+  // records in a dialog, a new run in the drawer. The whole width below is
+  // the result's.
+  const header = (
+    <Card size="small" styles={{ body: { display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' } }}>
+      <div style={{ flex: 1, minWidth: 240 }}>
+        {drawn.length ? <RunHeader runs={drawn} /> : rows === null && !error ? <Spin size="small" /> : (
+          <Text type="secondary">{selected.length ? '讀取中…' : '到「跑分紀錄」勾一筆來看'}</Text>
+        )}
+      </div>
+      {actions}
     </Card>
   );
 
@@ -338,21 +235,25 @@ export default function Bench() {
 
       {empty ? <Introduction onStart={() => setDrawerOpen(true)} /> : (
         <>
-          {/* List left, report card right, the folded extras under both --
-              the connections page's arrangement. Stacked below 1100 px,
-              where the report's two-by-two cards need the width. */}
-          <div style={{
-            display: 'grid', gap: 16, alignItems: 'stretch',
-            gridTemplateColumns: wide ? 'minmax(300px, 340px) minmax(0, 1fr)' : 'minmax(0, 1fr)',
-          }}>
-            {list}
-            {report}
-          </div>
+          {header}
           {detailError && <Alert type="error" showIcon message="讀不到這筆紀錄" description={detailError} />}
-          {shown.length > 0 && <BenchDetail runs={shown} views={drawn} marks={shown.map((r) => marks[r.id])} />}
+          {drawn.length > 0 ? <BenchReport runs={drawn} /> : rows !== null && (
+            <Card size="small">
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="還沒選要看的紀錄">
+                <Button onClick={() => setListOpen(true)}>打開跑分紀錄</Button>
+              </Empty>
+            </Card>
+          )}
+          {shown.length > 0 && <BenchDetail runs={shown} marks={shown.map((r) => marks[r.id])} />}
         </>
       )}
 
+      <RunsDialog
+        open={listOpen} onClose={() => setListOpen(false)}
+        rows={rows} loading={loading} onReload={() => void load()}
+        selected={selected} marks={marks} max={MAX_COMPARE}
+        onToggle={toggle} onDelete={(id) => void remove(id)}
+      />
       <BenchDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </div>
   );

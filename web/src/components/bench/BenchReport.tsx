@@ -1,18 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { App as AntApp, Button, Card, Tooltip, Typography } from 'antd';
+import type { BenchCaseResult } from '../../api';
 import { CopyOutlined } from '@ant-design/icons';
 import {
   CartesianGrid, LabelList, Line, LineChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis,
 } from 'recharts';
 import { LINE, MONO, SURFACE } from '../../theme';
 import { BarLine } from './Bars';
-import { Readout } from './BenchResults';
-import { RUN_MARKS, fmtTps } from './labels';
+import { ColTitle, Readout } from './BenchResults';
+import { CompareTable, FigureTable, type Measure, type RowMeasure, type TableLine } from './CompareTable';
+import { RUN_MARKS, TERMS, fmtPromptTps, fmtTps } from './labels';
 import { MarkSlot, Row } from './motion';
 import {
-  ANSWER_TOKENS, AXIS_TICK, CONTENT_TESTS, DEPTH_TESTS, answerSeconds, chatVerdict, contentRows,
+  ANSWER_TOKENS, AXIS_TICK, CONTENT_TESTS, DEPTH_TESTS, STREAM_TESTS, answerSeconds, chatVerdict, contentRows,
   contentVerdict, copyText, crowdVerdict, depthRows, find, fmtTimes, headerParts, headline,
-  longVerdict, markdown, niceAxis, scaleTop, streamRows, topStreams, type RunView,
+  longVerdict, markdown, niceAxis, scaleTop, streamRows, testName, topStreams, tpot,
+  type RunView, type StreamRow,
 } from './metrics';
 
 const { Text } = Typography;
@@ -30,8 +33,8 @@ const comparing = (runs: RunView[]) => activeRuns(runs).length > 1;
 
 const secs = (s: number) => (s < 10 ? s.toFixed(1) : Math.round(s).toLocaleString());
 
-/** The width something has, which is not the window's: beside the list the
- *  report is a third narrower than stacked under it. */
+/** The width something has, which is not the window's: a block puts its
+ *  chart beside its table only when it has the room. */
 function useWidth() {
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -46,8 +49,8 @@ function useWidth() {
 }
 
 /** Who ran what, on what: one line per run, its letter first when comparing.
- *  This is the legend for every card below. */
-function RunHeader({ runs }: { runs: RunView[] }) {
+ *  The page's header, and the legend for every block below it. */
+export function RunHeader({ runs }: { runs: RunView[] }) {
   const many = comparing(runs);
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -91,7 +94,9 @@ function Headlines({ runs, figures }: {
         <Row key={v.key} leaving={v.leaving}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '3px 0' }}>
             <MarkSlot mark={v.mark} show={many} />
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 12, flex: 1, minWidth: 0 }}>
+            {/* Fixed columns, packed left: spread over the block's full
+                width, two figures sat a screen apart. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 150px)', gap: 16, flex: 1, minWidth: 0 }}>
               {figures(v).map((f) => <Figure key={f.label} {...f} />)}
             </div>
           </div>
@@ -118,31 +123,6 @@ function Verdicts({ runs, say }: { runs: RunView[]; say: (v: RunView) => string 
       ))}
     </div>
   );
-}
-
-/** One scenario: what it is, the question it answers, the figures, the
- *  verdict, and one chart. Four of these, all the same size. */
-function Scenario({ title, question, children }: {
-  title: string; question: string; children: React.ReactNode;
-}) {
-  return (
-    <div style={{
-      border: `1px solid ${LINE.faint}`, borderRadius: 6, padding: '12px 14px',
-      display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0,
-    }}>
-      <div>
-        <Text strong style={{ fontSize: 14 }}>{title}</Text>
-        <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>{question}</Text>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-/** The chart slot, pushed to the bottom of its card so the four charts of a
- *  row line up whatever the verdicts above them run to. */
-function ChartSlot({ children }: { children: React.ReactNode }) {
-  return <div style={{ marginTop: 'auto', minWidth: 0 }}>{children}</div>;
 }
 
 const tooltipBox = (heading: string, rows: Parameters<typeof Readout>[0]['rows']) => (
@@ -222,22 +202,6 @@ function AnswerTimeline({ runs }: { runs: RunView[] }) {
         )}
       </div>
     </div>
-  );
-}
-
-function ChatCard({ runs }: { runs: RunView[] }) {
-  return (
-    <Scenario title="單人對話" question="一個人聊天時，回覆快不快？">
-      <Headlines runs={runs} figures={(v) => {
-        const h = headline(v.results);
-        return [
-          { value: h.ttft !== undefined ? secs(h.ttft / 1000) : '—', unit: '秒', label: 'TTFT 第一個字' },
-          { value: fmtTps(h.decode), unit: 'tok/s', label: 'Decode 生成' },
-        ];
-      }} />
-      <Verdicts runs={runs} say={(v) => chatVerdict(headline(v.results))} />
-      <ChartSlot><AnswerTimeline runs={runs} /></ChartSlot>
-    </Scenario>
   );
 }
 
@@ -330,44 +294,10 @@ function CrowdChart({ runs: all }: { runs: RunView[] }) {
   );
 }
 
-function CrowdCard({ runs }: { runs: RunView[] }) {
-  const any = runs.some((v) => topStreams(v.results));
-  return (
-    <Scenario title="多人同時" question="幾個人同時用，會不會互相拖慢？">
-      {!any ? <Empty text="這次沒有量多路。" /> : (
-        <>
-          <Headlines runs={runs} figures={(v) => {
-            const top = topStreams(v.results);
-            if (!top) return [{ value: '', unit: '', label: '沒有量多路' }];
-            return [
-              { value: fmtTps(top.total), unit: 'tok/s', label: `${top.streams} 路總吞吐` },
-              { value: fmtTps(top.decode), unit: 'tok/s', label: '每路 Decode' },
-              { value: fmtTimes(top.speedup), unit: '', label: 'Speedup' },
-            ];
-          }} />
-          <Verdicts runs={runs} say={(v) => crowdVerdict(v.results)} />
-          <ChartSlot><CrowdChart runs={runs} /></ChartSlot>
-        </>
-      )}
-    </Scenario>
-  );
-}
-
 // --- 長文 -------------------------------------------------------------------
 
-function Empty({ text }: { text: string }) {
-  return (
-    <div style={{
-      flex: 1, minHeight: CHART_H, display: 'flex', alignItems: 'center', justifyContent: 'center',
-      textAlign: 'center', padding: '0 16px',
-    }}>
-      <Text type="secondary" style={{ fontSize: 13, lineHeight: 1.7 }}>{text}</Text>
-    </div>
-  );
-}
-
 /** Decode against context depth, one line per run that measured more than
- *  one depth; the first-token wait at each depth is said in words under it
+ *  one depth; the first-token wait at each depth is in the table beside it
  *  rather than on a second axis. */
 function LongChart({ runs: all }: { runs: RunView[] }) {
   const runs = useMemo(() => activeRuns(all), [all]);
@@ -424,48 +354,15 @@ function LongChart({ runs: all }: { runs: RunView[] }) {
           ))}
         </LineChart>
       </ResponsiveContainer>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
-        {deep.map((v) => (
-          <Text key={v.key} type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-            {runs.length > 1 ? `${RUN_MARKS[v.mark]?.letter}  ` : ''}TTFT {depthRows(v.results)
-              .map((d) => `${d.short} ${secs(d.r.ttft_ms / 1000)} 秒`).join(' → ')}
-          </Text>
-        ))}
-      </div>
     </div>
-  );
-}
-
-const QUICK_ONLY = '快速檔只測 1k。用完整檔跑一次，才看得到上下文變長後慢多少。';
-
-function LongCard({ runs }: { runs: RunView[] }) {
-  const any = runs.some((v) => depthRows(v.results).length > 1);
-  return (
-    <Scenario title="長文" question="貼進很長的文件、或對話拉得很長時，會慢多少？">
-      {!any ? <Empty text={QUICK_ONLY} /> : (
-        <>
-          <Headlines runs={runs} figures={(v) => {
-            const rows = depthRows(v.results);
-            const deep = rows[rows.length - 1];
-            if (!deep || rows.length < 2) return [{ value: '', unit: '', label: '只測 1k' }];
-            return [
-              { value: fmtTps(deep.r.gen_tps), unit: 'tok/s', label: `${deep.short} Decode` },
-              { value: secs(deep.r.ttft_ms / 1000), unit: '秒', label: `${deep.short} TTFT` },
-            ];
-          }} />
-          <Verdicts runs={runs} say={(v) => longVerdict(v.results) ?? '快速檔只測 1k，沒有長文的數字。'} />
-          <ChartSlot><LongChart runs={runs} /></ChartSlot>
-        </>
-      )}
-    </Scenario>
   );
 }
 
 // --- 內容類型 ---------------------------------------------------------------
 
 /** Decode per content type as horizontal bars: a row per content, a bar
- *  per run inside it, every bar on one scale; the acceptance rate beside
- *  the content's name when the engine reports it. */
+ *  per run inside it, every bar on one scale. The acceptance rate is in the
+ *  table beside it. */
 function ContentChart({ runs }: { runs: RunView[] }) {
   const active = activeRuns(runs);
   const kinds = CONTENT_TESTS.filter((c) => active.some((v) => find(v.results, c.id)));
@@ -474,18 +371,9 @@ function ContentChart({ runs }: { runs: RunView[] }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {kinds.map((c) => {
-        const accepts = active.map((v) => find(v.results, c.id)?.accept_rate)
-          .filter((a): a is number => a != null);
         return (
-          <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 8, alignItems: 'center' }}>
-            <div style={{ lineHeight: 1.3 }}>
-              <Text style={{ fontSize: 12 }}>{c.label}</Text>
-              {accepts.length > 0 && (
-                <Text type="secondary" style={{ fontSize: 10, fontFamily: MONO, display: 'block', whiteSpace: 'nowrap' }}>
-                  接受 {accepts.map((a) => `${Math.round(a * 100)}%`).join('／')}
-                </Text>
-              )}
-            </div>
+          <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '56px minmax(0, 1fr)', gap: 8, alignItems: 'center' }}>
+            <Text style={{ fontSize: 12 }}>{c.label}</Text>
             <div>
               {runs.map((v) => {
                 const r = find(v.results, c.id);
@@ -507,66 +395,248 @@ function ContentChart({ runs }: { runs: RunView[] }) {
   );
 }
 
-function ContentCard({ runs }: { runs: RunView[] }) {
-  const any = runs.some((v) => contentRows(v.results).length > 0);
+// --- 四個區塊 ---------------------------------------------------------------
+
+/**
+ * One of the four blocks: the situation and the question it answers, the
+ * headline figures and a sentence per run, then its chart beside its own
+ * numbers -- the table that used to be one long one at the foot of the
+ * page, cut into the four places it is read.
+ */
+function Block({ title, question, empty, headlines, verdicts, chart, table, columns = 0 }: {
+  title: string; question: string; empty?: string;
+  headlines?: React.ReactNode; verdicts?: React.ReactNode; chart?: React.ReactNode; table?: React.ReactNode;
+  /** How many figure columns the table has; past six it takes the full
+   *  width under the chart rather than being cut off beside it. */
+  columns?: number;
+}) {
+  const [ref, width] = useWidth();
+  const side = width >= 860 && columns <= 6;
   return (
-    <Scenario title="內容類型" question="中文、英文、程式碼，哪一種生成最快？">
-      {!any ? <Empty text="這次沒有量內容類型。" /> : (
-        <>
-          <Headlines runs={runs} figures={(v) => {
-            const rows = contentRows(v.results);
-            if (!rows.length) return [{ value: '', unit: '', label: '沒有量' }];
-            const zh = rows.find((c) => c.id === 'content-zh');
-            const fastest = rows.reduce((a, b) => (b.r.gen_tps > a.r.gen_tps ? b : a));
-            return [
-              { value: fmtTps(zh?.r.gen_tps), unit: 'tok/s', label: '中文' },
-              { value: fmtTps(fastest.r.gen_tps), unit: 'tok/s', label: `最快：${fastest.label}` },
-            ];
-          }} />
-          <Verdicts runs={runs} say={(v) => contentVerdict(v.results)} />
-          <ChartSlot><ContentChart runs={runs} /></ChartSlot>
-        </>
+    <Card
+      size="small"
+      title={(
+        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+          <span>{title}</span>
+          <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>{question}</Text>
+        </span>
       )}
-    </Scenario>
+    >
+      <div ref={ref} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {empty ? <Text type="secondary" style={{ fontSize: 13, padding: '8px 0' }}>{empty}</Text> : (
+          <>
+            {headlines}
+            {verdicts}
+            <div style={{
+              display: 'grid', gap: 24, alignItems: 'start',
+              gridTemplateColumns: side ? 'minmax(0, 5fr) minmax(0, 6fr)' : 'minmax(0, 1fr)',
+            }}>
+              <div style={{ minWidth: 0 }}>{chart}</div>
+              <div style={{ minWidth: 0 }}>{table}</div>
+            </div>
+          </>
+        )}
+      </div>
+    </Card>
   );
 }
 
-/**
- * 成績單: one card per situation that matters -- one person chatting,
- * several at once, a long context, the kind of text -- each answering its
- * question with a figure, a sentence and one chart that actually varies.
- * The tables with every number are below, folded away.
- */
-export default function BenchReport({ runs, copyable = true }: { runs: RunView[]; copyable?: boolean }) {
+/** The one-stream 1k measurement, wherever the run reported it. */
+const base1k = (v: RunView) => find(v.results, 'depth-1k') ?? find(v.results, 'conc-1') ?? find(v.results, 'content-en');
+const sec2 = (v: number) => (v < 10 ? v.toFixed(2) : v.toFixed(1));
+
+function ChatBlock({ runs }: { runs: RunView[] }) {
+  const measures: RowMeasure<BenchCaseResult>[] = [
+    { key: 'ttft', label: <ColTitle en="TTFT" unit="秒" zh="首字延遲" tip={TERMS.ttft} />,
+      value: (r) => r.ttft_ms / 1000, text: sec2, better: 'lower' },
+    { key: 'pp', label: <ColTitle en="Prefill" unit="tok/s" zh="讀入提示" tip={TERMS.prefill} />,
+      value: (r) => r.prompt_tps, text: fmtPromptTps, better: 'higher' },
+    { key: 'tg', label: <ColTitle en="Decode" unit="tok/s" zh="生成速度" tip={TERMS.decode} />,
+      value: (r) => r.gen_tps, text: fmtTps, better: 'higher' },
+    { key: 'tpot', label: <ColTitle en="TPOT" unit="ms" zh="每個 token" tip="開始生成之後，平均每個 token 花幾毫秒，等於 1000 ÷ Decode。" />,
+      value: (r) => tpot(r), text: fmtTps, better: 'lower' },
+    { key: 'answer', label: <ColTitle en="Answer" unit="秒" zh={`一段 ${ANSWER_TOKENS} token 的回答`} />,
+      value: (r) => answerSeconds({ decode: r.gen_tps, ttft: r.ttft_ms })?.total, text: (v) => v.toFixed(1), better: 'lower' },
+  ];
+  return (
+    <Block
+      title="單人對話" question="一個人聊天時，回覆快不快？"
+      empty={runs.some((v) => base1k(v)) ? undefined : '這次沒有量 1k 單人。'}
+      headlines={<Headlines runs={runs} figures={(v) => {
+        const h = headline(v.results);
+        return [
+          { value: h.ttft !== undefined ? secs(h.ttft / 1000) : '—', unit: '秒', label: 'TTFT 第一個字' },
+          { value: fmtTps(h.decode), unit: 'tok/s', label: 'Decode 生成' },
+        ];
+      }} />}
+      verdicts={<Verdicts runs={runs} say={(v) => chatVerdict(headline(v.results))} />}
+      chart={<AnswerTimeline runs={runs} />}
+      table={<FigureTable runs={runs} measures={measures} pick={base1k} />}
+    />
+  );
+}
+
+const QUICK_ONLY = '快速檔只測 1k。用完整檔跑一次，才看得到上下文變長後慢多少。';
+
+function LongBlock({ runs }: { runs: RunView[] }) {
+  const any = runs.some((v) => depthRows(v.results).length > 1);
+  const lines: TableLine<BenchCaseResult>[] = DEPTH_TESTS
+    .filter((d) => runs.some((v) => find(v.results, d.id)))
+    .map((d) => ({
+      key: d.id,
+      label: (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.3 }}>
+          <span>{d.short}</span>
+          <Text type="secondary" style={{ fontSize: 10, fontFamily: MONO }}>{testName(d.pp)}</Text>
+        </span>
+      ),
+      pick: (v) => find(v.results, d.id),
+    }));
+  const measures: Measure<BenchCaseResult>[] = [
+    { key: 'ttft', title: <ColTitle en="TTFT" unit="秒" zh="首字延遲" tip={TERMS.ttft} />,
+      value: (r) => r.ttft_ms / 1000, text: sec2, better: 'lower' },
+    { key: 'pp', title: <ColTitle en="Prefill" unit="tok/s" zh="讀入提示" tip={TERMS.prefill} />,
+      value: (r) => r.prompt_tps, text: fmtPromptTps, better: 'higher' },
+    { key: 'tg', title: <ColTitle en="Decode" unit="tok/s" zh="生成速度" tip={TERMS.decode} />,
+      value: (r) => r.gen_tps, text: fmtTps, better: 'higher' },
+  ];
+  return (
+    <Block
+      title="長文" question="貼進很長的文件、或對話拉得很長時，會慢多少？"
+      empty={any ? undefined : QUICK_ONLY}
+      headlines={<Headlines runs={runs} figures={(v) => {
+        const rows = depthRows(v.results);
+        const deep = rows[rows.length - 1];
+        if (!deep || rows.length < 2) return [{ value: '', unit: '', label: '只測 1k' }];
+        return [
+          { value: fmtTps(deep.r.gen_tps), unit: 'tok/s', label: `${deep.short} Decode` },
+          { value: secs(deep.r.ttft_ms / 1000), unit: '秒', label: `${deep.short} TTFT` },
+        ];
+      }} />}
+      verdicts={<Verdicts runs={runs} say={(v) => longVerdict(v.results) ?? '快速檔只測 1k，沒有長文的數字。'} />}
+      chart={<LongChart runs={runs} />}
+      columns={measures.length * activeRuns(runs).length}
+      table={<CompareTable runs={runs} lines={lines} measures={measures}
+                           labelTitle={<ColTitle en="Context" zh="上下文" tip={TERMS.depth} />} />}
+    />
+  );
+}
+
+function CrowdBlock({ runs }: { runs: RunView[] }) {
+  const any = runs.some((v) => topStreams(v.results));
+  const lines: TableLine<StreamRow>[] = STREAM_TESTS
+    .filter((t) => runs.some((v) => find(v.results, t.id)))
+    .map((t) => ({
+      key: t.id,
+      label: t.streams === 1 ? '1 人' : `${t.streams} 人同時`,
+      pick: (v) => streamRows(v.results).find((s) => s.id === t.id),
+    }));
+  const measures: Measure<StreamRow>[] = [
+    { key: 'total', title: <ColTitle en="Total" unit="tok/s" zh="總吞吐" tip={TERMS.total} />,
+      value: (s) => s.total, text: fmtTps, better: 'higher' },
+    { key: 'each', title: <ColTitle en="Decode" unit="tok/s" zh="每人" tip={TERMS.decode} />,
+      value: (s) => s.decode, text: fmtTps, better: 'higher' },
+    { key: 'x', title: <ColTitle en="Speedup" zh="對單人" tip="總吞吐 ÷ 單人的 Decode；4 人時接近 4 表示多人共用不吃虧，接近 1 表示一次只服務一人。" />,
+      value: (s) => s.speedup, text: (v) => `×${v.toFixed(2)}`, better: 'higher' },
+    { key: 'ttft', title: <ColTitle en="TTFT" unit="秒" zh="平均首字" tip={TERMS.ttft} />,
+      value: (s) => s.r.ttft_ms / 1000, text: sec2, better: 'lower' },
+  ];
+  return (
+    <Block
+      title="多人同時" question="幾個人同時用，會不會互相拖慢？"
+      empty={any ? undefined : '這次沒有量多路。'}
+      headlines={<Headlines runs={runs} figures={(v) => {
+        const top = topStreams(v.results);
+        if (!top) return [{ value: '', unit: '', label: '沒有量多路' }];
+        return [
+          { value: fmtTps(top.total), unit: 'tok/s', label: `${top.streams} 人總吞吐` },
+          { value: fmtTps(top.decode), unit: 'tok/s', label: '每人 Decode' },
+          { value: fmtTimes(top.speedup), unit: '', label: 'Speedup' },
+        ];
+      }} />}
+      verdicts={<Verdicts runs={runs} say={(v) => crowdVerdict(v.results)} />}
+      chart={<CrowdChart runs={runs} />}
+      columns={measures.length * activeRuns(runs).length}
+      table={<CompareTable runs={runs} lines={lines} measures={measures}
+                           labelTitle={<ColTitle en="Users" zh="人數" tip={TERMS.streams} />} />}
+    />
+  );
+}
+
+/** A content row with its rate against Chinese, the slowest as a rule. */
+interface ContentLine { rate: number; accept?: number; vsZh?: number }
+
+function ContentBlock({ runs }: { runs: RunView[] }) {
+  const any = runs.some((v) => contentRows(v.results).length > 0);
+  const pick = (id: string) => (v: RunView): ContentLine | undefined => {
+    const rows = contentRows(v.results);
+    const c = rows.find((x) => x.id === id);
+    if (!c) return undefined;
+    const zh = rows.find((x) => x.id === 'content-zh');
+    return {
+      rate: c.r.gen_tps,
+      accept: c.r.accept_rate == null ? undefined : c.r.accept_rate * 100,
+      vsZh: zh && zh.r.gen_tps > 0 ? c.r.gen_tps / zh.r.gen_tps : undefined,
+    };
+  };
+  const lines: TableLine<ContentLine>[] = CONTENT_TESTS
+    .filter((c) => runs.some((v) => find(v.results, c.id)))
+    .map((c) => ({ key: c.id, label: c.label, pick: pick(c.id) }));
+  const hasAccept = runs.some((v) => (v.results ?? []).some((r) => r.accept_rate != null));
+  const measures: Measure<ContentLine>[] = [
+    { key: 'tg', title: <ColTitle en="Decode" unit="tok/s" zh="生成速度" tip={TERMS.decode} />,
+      value: (c) => c.rate, text: fmtTps, better: 'higher' },
+    { key: 'zh', title: <ColTitle en="vs 中文" zh="對中文" tip="這種內容的 Decode ÷ 中文的 Decode。" />,
+      value: (c) => c.vsZh, text: (v) => `×${v.toFixed(2)}`, better: 'higher' },
+    ...(hasAccept ? [{ key: 'acc', title: <ColTitle en="Accept" zh="推測接受率" tip={TERMS.accept} />,
+      value: (c: ContentLine) => c.accept, text: (v: number) => `${Math.round(v)}%`, better: 'higher' as const }] : []),
+  ];
+  return (
+    <Block
+      title="內容類型" question="中文、英文、程式碼，哪一種生成最快？"
+      empty={any ? undefined : '這次沒有量內容類型。'}
+      headlines={<Headlines runs={runs} figures={(v) => {
+        const rows = contentRows(v.results);
+        if (!rows.length) return [{ value: '', unit: '', label: '沒有量' }];
+        const zh = rows.find((c) => c.id === 'content-zh');
+        const fastest = rows.reduce((a, b) => (b.r.gen_tps > a.r.gen_tps ? b : a));
+        return [
+          { value: fmtTps(zh?.r.gen_tps), unit: 'tok/s', label: '中文' },
+          { value: fmtTps(fastest.r.gen_tps), unit: 'tok/s', label: `最快：${fastest.label}` },
+        ];
+      }} />}
+      verdicts={<Verdicts runs={runs} say={(v) => contentVerdict(v.results)} />}
+      chart={<ContentChart runs={runs} />}
+      columns={measures.length * activeRuns(runs).length}
+      table={<CompareTable runs={runs} lines={lines} measures={measures}
+                           labelTitle={<ColTitle en="Content" zh="內容" tip={TERMS.content} />} />}
+    />
+  );
+}
+
+/** 複製成文字: the verdicts and the tables as Markdown, for a chat or an issue. */
+export function CopyReport({ runs }: { runs: RunView[] }) {
   const { message } = AntApp.useApp();
-  const [ref, width] = useWidth();
-  const columns = width >= 660 ? 2 : 1;
   const copy = async () => {
     const text = markdown(activeRuns(runs), (m) => RUN_MARKS[m]?.letter ?? '?');
     if (await copyText(text)) message.success('已複製成 Markdown');
     else message.error('瀏覽器不讓複製，請改用匯出');
   };
+  return <Button size="small" icon={<CopyOutlined />} onClick={() => void copy()}>複製成文字</Button>;
+}
+
+/**
+ * The result in four blocks, one per situation that matters -- one person
+ * chatting, a long context, several at once, the kind of text -- each with
+ * its figures, a sentence of conclusion, a chart and its own numbers.
+ */
+export default function BenchReport({ runs }: { runs: RunView[] }) {
   return (
-    <Card
-      size="small"
-      title={comparing(runs) ? '成績單・比較' : '成績單'}
-      style={{ height: '100%' }}
-      extra={copyable && runs.length > 0 && (
-        <Button size="small" icon={<CopyOutlined />} onClick={() => void copy()}>複製成文字</Button>
-      )}
-    >
-      <div ref={ref} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <RunHeader runs={runs} />
-        <div style={{
-          display: 'grid', gap: 12, alignItems: 'stretch',
-          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-        }}>
-          <ChatCard runs={runs} />
-          <CrowdCard runs={runs} />
-          <LongCard runs={runs} />
-          <ContentCard runs={runs} />
-        </div>
-      </div>
-    </Card>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <ChatBlock runs={runs} />
+      <LongBlock runs={runs} />
+      <CrowdBlock runs={runs} />
+      <ContentBlock runs={runs} />
+    </div>
   );
 }
