@@ -182,6 +182,16 @@ func TestVLLMSpellings(t *testing.T) {
 	}
 }
 
+// vLLM 0.31 renamed online FP8 fp8_per_tensor; a command under either name
+// is the same tuning.
+func TestVLLMOnlineFP8Names(t *testing.T) {
+	old, _ := Parse(`vllm serve /models/x --quantization fp8`, nil, VLLM)
+	renamed, unrecognized := Parse(`vllm serve /models/x --quantization fp8_per_tensor`, nil, VLLM)
+	if renamed.OnlineQuantization == nil || Hash(old) != Hash(renamed) || len(unrecognized) != 0 {
+		t.Errorf("fp8 %s, fp8_per_tensor %s, unrecognized %q", pretty(old), pretty(renamed), unrecognized)
+	}
+}
+
 func TestVLLMUnplaced(t *testing.T) {
 	got, unrecognized := Parse(`vllm serve /models/x --no-enable-prefix-caching --quantization awq
 		--speculative-config '{"method":"ngram","prompt_lookup_max":4}' --enforce-eager --no-enforce-eager

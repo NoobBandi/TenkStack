@@ -103,10 +103,13 @@ func maxModelLen(b *builder, _, v string, has, _ bool) bool {
 // onlineQuantization takes the methods that quantise plain weights while
 // loading. Any other --quantization names the checkpoint's own format,
 // which is the model's identity (ModelRef.quant), not a tuning choice.
+// fp8_per_tensor is vLLM 0.31's name for what 0.30 called fp8; both are
+// "fp8" here, so a recipe reads the same on either side of the rename.
 func onlineQuantization(b *builder, _, v string, has, _ bool) bool {
-	if v = strings.ToLower(strings.TrimSpace(v)); !has || v != "fp8" {
+	if v = strings.ToLower(strings.TrimSpace(v)); !has || (v != "fp8" && v != "fp8_per_tensor") {
 		return false
 	}
+	v = "fp8"
 	b.t.OnlineQuantization = &v
 	return true
 }

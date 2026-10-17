@@ -112,9 +112,22 @@ func (s *Server) onlineQuantizations(ctx gocontext.Context, p providers.Provider
 			has[m] = true
 		}
 	}
-	for _, q := range p.Online {
-		if len(has) == 0 || has[q.Value] {
-			out = append(out, api.Quantization{Value: q.Value, Label: q.Label, Note: q.Note, Shrink: q.Shrink})
+	return offerOnline(p.Online, has)
+}
+
+// offerOnline is a record's online quantisations kept to what an image has
+// (has empty: it could not be asked, so all of them), each under the name
+// that image knows it by.
+func offerOnline(online []providers.Quant, has map[string]bool) []api.Quantization {
+	out := []api.Quantization{}
+	for _, q := range online {
+		value := q.Value
+		if len(has) > 0 && !has[value] && q.Older != "" && has[q.Older] {
+			// An image from before the rename: the same method, its old name.
+			value = q.Older
+		}
+		if len(has) == 0 || has[value] {
+			out = append(out, api.Quantization{Value: value, Label: q.Label, Note: q.Note, Shrink: q.Shrink})
 		}
 	}
 	return out

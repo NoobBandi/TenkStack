@@ -123,6 +123,9 @@ func (m *MultiCard) Runner() string {
 // loads them. Shrink is the weights' footprint against bf16.
 type Quant struct {
 	Value string `yaml:"value"`
+	// Older is the same method under the name images before a rename take,
+	// offered in Value's place by an image that does not have Value.
+	Older string `yaml:"older"`
 	Label string `yaml:"label"`
 	// Note is what it costs and saves, for the help under the field.
 	Note   string  `yaml:"note"`

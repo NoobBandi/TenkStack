@@ -64,8 +64,12 @@ builds:
     # into b2. This one has torch 2.13, kernels 0.1.14.1, oneAPI 2026 from pip,
     # and no /opt/intel/oneapi. Measured against b2 on two B70: Qwen3.8-27B
     # FP8 TP=2 MTP3 44/57/80 tok/s zh/en/code (b2 46/62/86), host RAM 11.8 GB
-    # (16), prefix caching on by default (off in b2).
-    image: vllm/vllm-openai-xpu:v0.30.0
+    # (16), prefix caching on by default (off in b2). v0.31.0 took over with
+    # the same results: Qwen3.5-9B, Qwen3.8-27B FP8 TP=2 and the Coder390
+    # DFlash2 entry start and decode as on v0.30.0 or faster. Its XPU graphs
+    # are on by default, and online FP8 is now fp8_per_tensor (`fp8` only
+    # loads stored FP8).
+    image: vllm/vllm-openai-xpu:v0.31.0
     label: 正式版
     note: vLLM 的正式發布版，這個專案在 Arc Pro B70 上驗證過
     alternatives:
@@ -75,12 +79,13 @@ builds:
     verified: true
     # OneCCL opens every render node by path, so by-path goes in read-only.
     # XPU graph replays a whole decode step instead of launching each kernel
-    # from Python: 14.6 -> 34.8 tok/s for a 27B on two B70s. It is off by
-    # default and has no effect with --enforce-eager. The Triton and Inductor
-    # caches default to /tmp, which dies with the container; kept in
-    # cache_dir they save ~70 s of every start.
+    # from Python: 14.6 -> 34.8 tok/s for a 27B on two B70s. On by default
+    # since v0.31.0, which removed the VLLM_XPU_ENABLE_XPU_GRAPH switch; no
+    # effect with --enforce-eager. The Triton and Inductor caches default to
+    # /tmp, which dies with the container; kept in cache_dir they save ~70 s
+    # of every start.
     flags: [--device, /dev/dri, -v, /dev/dri/by-path:/dev/dri/by-path:ro, --shm-size, 16g, -e, HF_HUB_OFFLINE=1,
-            -e, VLLM_XPU_ENABLE_XPU_GRAPH=1, -e, TRITON_CACHE_DIR=/root/.cache/vllm/triton,
+            -e, TRITON_CACHE_DIR=/root/.cache/vllm/triton,
             -e, TORCHINDUCTOR_CACHE_DIR=/root/.cache/vllm/inductor]
     cache_dir: /root/.cache/vllm
     # Stored precisions a model has loaded in on this image: bf16 (Qwen3.8-27B,
@@ -144,7 +149,9 @@ builds:
 # Int4 is worked out from the same split -- 10.6% stays bf16, the rest goes
 # to a quarter -- not measured.
 online_quantization:
-  - value: fp8
+  # vLLM 0.31 renamed it; `fp8` there only loads stored FP8 and refuses bf16.
+  - value: fp8_per_tensor
+    older: fp8
     label: FP8（線上量化）
     note: 顯存約減半，品質幾乎不變
     shrink: 0.55

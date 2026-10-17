@@ -16,7 +16,8 @@ What it changes, in the installed vLLM:
      ZE_AFFINITY_MASK naming its own card, taken from ONEAPI_DEVICE_SELECTOR,
      so Level Zero never opens the other one.
   2. v1/worker/xpu_worker.py: such a worker uses device 0, the only one it
-     sees, and is not held to seeing every card of the group.
+     sees, and is not held to seeing every card of the group (up to 0.30; 0.31
+     dropped that check, so there the edit has nothing to do).
   3. v1/worker/mamba_utils.py: two device addresses stored in an int64 array
      are reinterpreted like the others there, since a worker's addresses can
      sit above 2**63.
@@ -26,10 +27,12 @@ opens the other card's memory (https://github.com/intel/llm-scaler/issues/594).
 Two workers only: that is what was measured. With more, the patch changes
 nothing and says so. Written against intel/llm-scaler-vllm:0.26.0-b2 and
 applies unchanged to vllm/vllm-openai-xpu:v0.30.0 (host RAM 11.8 GB for the
-same FP8 27B); if an anchor is missing the script exits non-zero and the
+same FP8 27B), and to vllm/vllm-openai-xpu:v0.31.0 less the check it no
+longer has. If an anchor is missing the script exits non-zero and the
 container stops, since a half-applied patch hangs at start instead of
-failing. Run as a script, so it patches the installed vLLM even from the
-v0.30.0 image's workdir, /workspace/vllm, which holds a source tree.
+failing -- unless the edit is to a check upstream has since removed. Run as
+a script, so it patches the installed vLLM even from the v0.30.0 image's
+workdir, /workspace/vllm, which holds a source tree.
 
 After the approach in github.com/SergiioB/intel-arc-pro-b70-inference-cookbook
 (MIT).
@@ -78,6 +81,8 @@ EDITS = [
         "v1/worker/xpu_worker.py",
         "            assert parallel_config.local_world_size <= visible_device_count, (\n",
         "            assert _tk_own_card or parallel_config.local_world_size <= visible_device_count, (\n",
+        # Optional: 0.31 no longer asserts a worker sees the whole group.
+        "parallel_config.local_world_size <= visible_device_count",
     ),
     (
         "v1/worker/mamba_utils.py",
@@ -91,11 +96,15 @@ EDITS = [
 
 def main() -> int:
     texts: dict[str, str] = {}
-    for rel, anchor, replacement in EDITS:
+    for rel, anchor, replacement, *gone in EDITS:
         text = texts.get(rel)
         if text is None:
             text = (ROOT / rel).read_text()
         if replacement in text:
+            texts[rel] = text
+            continue
+        if gone and gone[0] not in text:
+            # What the edit changes is no longer there at all: nothing to do.
             texts[rel] = text
             continue
         if text.count(anchor) != 1:
