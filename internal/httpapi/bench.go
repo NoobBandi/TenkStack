@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,11 +106,25 @@ func (s *Server) readBenchPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tier := r.URL.Query().Get("tier")
-	if tier == "" {
-		tier = api.BenchQuick
+	q := r.URL.Query()
+	ch := bench.Choice{Tier: q.Get("tier")}
+	if ch.Tier == "" {
+		ch.Tier = api.BenchQuick
 	}
-	plan, err := s.Bench.Plan(r.Context(), model, tier)
+	for _, id := range strings.Split(q.Get("cases"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ch.Cases = append(ch.Cases, id)
+		}
+	}
+	if v := q.Get("repeats"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			fail(w, http.StatusUnprocessableEntity, "repeats 要是數字")
+			return
+		}
+		ch.Repeats = n
+	}
+	plan, err := s.Bench.Plan(r.Context(), model, ch)
 	if err != nil {
 		benchError(w, err)
 		return

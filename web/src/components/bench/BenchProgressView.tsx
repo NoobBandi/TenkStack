@@ -50,7 +50,7 @@ export default function BenchProgressView({ status, showModel }: {
     if (!status.model || !status.tier) return;
     setForcing(true);
     try {
-      await startBench(status.model, status.tier, true);
+      await startBench(status.model, { tier: status.tier, cases: status.cases, repeats: status.repeats }, true);
       await refresh();
     } catch (e) {
       message.error(`無法強制開始：${(e as Error).message}`);

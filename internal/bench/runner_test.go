@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -156,7 +157,7 @@ func TestRunQuick(t *testing.T) {
 	f := &fakeEngine{prefill: 2 * time.Millisecond, timings: true}
 	r, _ := newFake(t, f)
 	var steps []Step
-	out, err := r.Run(context.Background(), describe("llamacpp", 0), api.BenchQuick, func(s Step) { steps = append(steps, s) })
+	out, err := r.Run(context.Background(), describe("llamacpp", 0), Choice{Tier: api.BenchQuick}, func(s Step) { steps = append(steps, s) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +233,7 @@ func TestRunQuick(t *testing.T) {
 func TestNoIgnoreEOSAndShortOutput(t *testing.T) {
 	f := &fakeEngine{natural: 120, loaded: true}
 	r, _ := newFake(t, f)
-	out, err := r.Run(context.Background(), describe("strata", 0), api.BenchQuick, nil)
+	out, err := r.Run(context.Background(), describe("strata", 0), Choice{Tier: api.BenchQuick}, nil)
 	if err == nil || len(out.Results) != 0 {
 		t.Fatalf("short replies only: %v, %+v", err, out.Results)
 	}
@@ -250,7 +251,7 @@ func TestNoIgnoreEOSAndShortOutput(t *testing.T) {
 
 	f2 := &fakeEngine{natural: 230, loaded: true}
 	r2, _ := newFake(t, f2)
-	out, err = r2.Run(context.Background(), describe("strata", 0), api.BenchQuick, nil)
+	out, err = r2.Run(context.Background(), describe("strata", 0), Choice{Tier: api.BenchQuick}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +264,7 @@ func TestNoIgnoreEOSAndShortOutput(t *testing.T) {
 func TestRefusedFieldIsDropped(t *testing.T) {
 	f := &fakeEngine{refuse: "reasoning_effort", loaded: true}
 	r, _ := newFake(t, f)
-	if _, err := r.Run(context.Background(), describe("vllm", 0), api.BenchQuick, nil); err != nil {
+	if _, err := r.Run(context.Background(), describe("vllm", 0), Choice{Tier: api.BenchQuick}, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, b := range f.bodies {
@@ -278,7 +279,7 @@ func TestRefusedFieldIsDropped(t *testing.T) {
 func TestAcceptRateFromMetrics(t *testing.T) {
 	f := &fakeEngine{metrics: true, loaded: true}
 	r, _ := newFake(t, f)
-	out, err := r.Run(context.Background(), describe("vllm", 0), api.BenchQuick, nil)
+	out, err := r.Run(context.Background(), describe("vllm", 0), Choice{Tier: api.BenchQuick}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +288,7 @@ func TestAcceptRateFromMetrics(t *testing.T) {
 	}
 	f2 := &fakeEngine{loaded: true}
 	r2, _ := newFake(t, f2)
-	out, _ = r2.Run(context.Background(), describe("vllm", 0), api.BenchQuick, nil)
+	out, _ = r2.Run(context.Background(), describe("vllm", 0), Choice{Tier: api.BenchQuick}, nil)
 	if out.Results[0].AcceptRate != nil {
 		t.Errorf("no metrics, no accept rate")
 	}
@@ -296,7 +297,7 @@ func TestAcceptRateFromMetrics(t *testing.T) {
 func TestFullRepeatsAndContextSkip(t *testing.T) {
 	f := &fakeEngine{loaded: true}
 	r, _ := newFake(t, f)
-	out, err := r.Run(context.Background(), describe("llamacpp", 16384), api.BenchFull, nil)
+	out, err := r.Run(context.Background(), describe("llamacpp", 16384), Choice{Tier: api.BenchFull}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +335,7 @@ func TestCancelStopsTheRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(200*time.Millisecond, cancel)
 	start := time.Now()
-	_, err := r.Run(ctx, describe("llamacpp", 0), api.BenchQuick, nil)
+	_, err := r.Run(ctx, describe("llamacpp", 0), Choice{Tier: api.BenchQuick}, nil)
 	if err != context.Canceled {
 		t.Errorf("err %v", err)
 	}
@@ -348,32 +349,76 @@ func TestSelectAndEstimate(t *testing.T) {
 	if len(s.Prompts) != 5 || s.OutputTokens != 256 || s.MinOutputRatio != 0.8 || s.Thinking || !s.UniquePrefix {
 		t.Fatalf("suite: %+v", s)
 	}
-	quick, _ := Select(s, api.BenchQuick, 0)
-	full, _ := Select(s, api.BenchFull, 0)
+	quick, _ := Select(s, Choice{Tier: api.BenchQuick}, 0)
+	full, _ := Select(s, Choice{Tier: api.BenchFull}, 0)
 	if len(quick) != 6 || len(full) != 11 {
 		t.Errorf("quick %d, full %d", len(quick), len(full))
 	}
 	per := 8192
 	sliced := Description{Tuning: schema.Tuning{ContextLength: 65536, KVCache: &schema.KVCache{PerSlotContext: &per}}}
-	if _, skipped := Select(s, api.BenchFull, sliced.ContextLimit()); len(skipped) != 3 {
+	if _, skipped := Select(s, Choice{Tier: api.BenchFull}, sliced.ContextLimit()); len(skipped) != 3 {
 		t.Errorf("per-slot context decides: %v", skipped)
 	}
 	// What the engine reports beats the command: a 64K launch line on an
 	// engine serving 128K per request runs everything.
 	served := Description{Tuning: schema.Tuning{ContextLength: 65536}, ServedContext: 131072}
-	if _, skipped := Select(s, api.BenchFull, served.ContextLimit()); len(skipped) != 0 {
+	if _, skipped := Select(s, Choice{Tier: api.BenchFull}, served.ContextLimit()); len(skipped) != 0 {
 		t.Errorf("served 128k: skipped %v", skipped)
 	}
 	// Opened at exactly 64K, the 64k case fits and only 128k is left out.
-	if _, skipped := Select(s, api.BenchFull, Description{ServedContext: 65536}.ContextLimit()); len(skipped) != 1 {
+	if _, skipped := Select(s, Choice{Tier: api.BenchFull}, Description{ServedContext: 65536}.ContextLimit()); len(skipped) != 1 {
 		t.Errorf("served 64K: skipped %v, want depth-128k only", skipped)
 	}
-	if _, skipped := Select(s, api.BenchFull, Description{ServedContext: 131072}.ContextLimit()); len(skipped) != 0 {
+	if _, skipped := Select(s, Choice{Tier: api.BenchFull}, Description{ServedContext: 131072}.ContextLimit()); len(skipped) != 0 {
 		t.Errorf("served 128K: skipped %v, want none", skipped)
 	}
-	q, fl := Estimate(s, api.BenchQuick, quick, true), Estimate(s, api.BenchFull, full, true)
-	if q < 30 || q > 180 || fl < 4*60 || fl > 20*60 || Estimate(s, api.BenchQuick, quick, false) <= q {
+	q, fl := Estimate(s, Choice{Tier: api.BenchQuick}, quick, true), Estimate(s, Choice{Tier: api.BenchFull}, full, true)
+	if q < 30 || q > 180 || fl < 4*60 || fl > 20*60 || Estimate(s, Choice{Tier: api.BenchQuick}, quick, false) <= q {
 		t.Errorf("estimates: quick %d, full %d", q, fl)
+	}
+}
+
+// A custom run measures what was picked plus the one-person 1k every
+// comparison is against, once each or as the full tier repeats them.
+func TestCustomChoice(t *testing.T) {
+	s := SuiteV1()
+	ids := func(cases []schema.BenchCase) []string {
+		var out []string
+		for _, c := range cases {
+			out = append(out, c.ID)
+		}
+		return out
+	}
+	ch := Choice{Tier: api.BenchCustom, Cases: []string{"depth-32k", "conc-2", "content-zh"}, Repeats: 1}
+	if err := ch.Check(s); err != nil {
+		t.Fatal(err)
+	}
+	cases, _ := Select(s, ch, 0)
+	if got := ids(cases); !slices.Equal(got, []string{"depth-1k", "depth-32k", "conc-1", "conc-2", "content-zh", "content-en"}) {
+		t.Errorf("cases %v", got)
+	}
+	if repeatsFor(cases[1], ch) != 1 || repeatsFor(cases[1], Choice{Tier: api.BenchCustom}) != 3 {
+		t.Error("repeats: 1 is once, 0 is as the suite says")
+	}
+	// Nothing picked still measures the base, under its three names.
+	if base, _ := Select(s, Choice{Tier: api.BenchCustom}, 0); !slices.Equal(ids(base), []string{"depth-1k", "conc-1", "content-en"}) {
+		t.Errorf("base only: %v", ids(base))
+	}
+	for _, bad := range []Choice{
+		{Tier: "fast"},
+		{Tier: api.BenchCustom, Cases: []string{"depth-2k"}},
+		{Tier: api.BenchCustom, Repeats: 5},
+	} {
+		if bad.Check(s) == nil {
+			t.Errorf("%+v passed", bad)
+		}
+	}
+	if !ch.Same(Choice{Tier: api.BenchCustom, Cases: []string{"content-zh", "conc-2", "depth-32k"}, Repeats: 1}) ||
+		ch.Same(Choice{Tier: api.BenchCustom, Cases: ch.Cases}) || !(Choice{Tier: api.BenchQuick}).Same(Choice{Tier: api.BenchQuick}) {
+		t.Error("Same")
+	}
+	if Estimate(s, ch, cases, true) >= Estimate(s, Choice{Tier: api.BenchCustom, Cases: ch.Cases}, cases, true) {
+		t.Error("once each is quicker than three times")
 	}
 }
 
@@ -403,7 +448,7 @@ func TestPromSum(t *testing.T) {
 func TestSerialEngineTotal(t *testing.T) {
 	f := &fakeEngine{loaded: true, serial: true, perToken: 200 * time.Microsecond}
 	r, _ := newFake(t, f)
-	out, err := r.Run(context.Background(), describe("strata", 0), api.BenchQuick, func(Step) {})
+	out, err := r.Run(context.Background(), describe("strata", 0), Choice{Tier: api.BenchQuick}, func(Step) {})
 	if err != nil {
 		t.Fatal(err)
 	}

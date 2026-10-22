@@ -3,6 +3,7 @@ package bench
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -91,12 +92,68 @@ func contextLimit(t schema.Tuning) int {
 	return t.ContextLength
 }
 
-// Select is the cases of a tier, and those left out as "id: reason". A
+// Choice is what a run measures: a tier's cases, or for api.BenchCustom
+// the ones a person picked, each once or as often as the full tier.
+type Choice struct {
+	Tier    string
+	Cases   []string // api.BenchCustom: the case ids picked
+	Repeats int      // api.BenchCustom: 1 measures each once, 0 as the suite says
+}
+
+// baseCases are in every custom run whether picked or not: one person,
+// 1k, English, the report's headline and what every comparison in it -- a
+// depth's slowdown, a crowd's speedup, a content's rate -- is against.
+// They are one condition under each block's name, measured once, so the
+// blocks a run adds to each have their first row.
+var baseCases = []string{"depth-1k", "conc-1", "content-en"}
+
+// Check says what is wrong with a choice for this suite, nil when nothing.
+func (ch Choice) Check(s schema.BenchSuite) error {
+	switch ch.Tier {
+	case api.BenchQuick, api.BenchFull:
+		return nil
+	case api.BenchCustom:
+	default:
+		return errors.New("tier 只能是 quick、full 或 custom")
+	}
+	if ch.Repeats != 0 && ch.Repeats != 1 {
+		return errors.New("repeats 只能是 0（照完整檔）或 1")
+	}
+	for _, id := range ch.Cases {
+		if !slices.ContainsFunc(s.Cases, func(c schema.BenchCase) bool { return c.ID == id }) {
+			return fmt.Errorf("沒有 %s 這個測試項目", id)
+		}
+	}
+	return nil
+}
+
+// Same says whether two choices measure the same thing.
+func (ch Choice) Same(o Choice) bool {
+	if ch.Tier != o.Tier {
+		return false
+	}
+	if ch.Tier != api.BenchCustom {
+		return true
+	}
+	a, b := slices.Clone(ch.Cases), slices.Clone(o.Cases)
+	slices.Sort(a)
+	slices.Sort(b)
+	return ch.Repeats == o.Repeats && slices.Equal(slices.Compact(a), slices.Compact(b))
+}
+
+func (ch Choice) has(c schema.BenchCase) bool {
+	if ch.Tier == api.BenchCustom {
+		return slices.Contains(baseCases, c.ID) || slices.Contains(ch.Cases, c.ID)
+	}
+	return slices.Contains(c.Tiers, ch.Tier)
+}
+
+// Select is the cases of a choice, and those left out as "id: reason". A
 // case deeper than limit, the tokens one request may use, is left out; 0
 // is unknown and leaves none out.
-func Select(s schema.BenchSuite, tier string, limit int) (cases []schema.BenchCase, skipped []string) {
+func Select(s schema.BenchSuite, ch Choice, limit int) (cases []schema.BenchCase, skipped []string) {
 	for _, c := range s.Cases {
-		if !slices.Contains(c.Tiers, tier) {
+		if !ch.has(c) {
 			continue
 		}
 		if limit > 0 && c.DepthTokens+s.OutputTokens+contextHeadroom > limit {
@@ -108,9 +165,10 @@ func Select(s schema.BenchSuite, tier string, limit int) (cases []schema.BenchCa
 	return cases, skipped
 }
 
-// repeatsFor: a quick run measures each case once (D32).
-func repeatsFor(c schema.BenchCase, tier string) int {
-	if tier == api.BenchQuick || c.Repeats < 1 {
+// repeatsFor: a quick run measures each case once (D32), and so does a
+// custom one asked to.
+func repeatsFor(c schema.BenchCase, ch Choice) int {
+	if ch.Tier == api.BenchQuick || (ch.Tier == api.BenchCustom && ch.Repeats == 1) || c.Repeats < 1 {
 		return 1
 	}
 	return c.Repeats
@@ -124,6 +182,6 @@ type condition struct {
 	content, prompt             string
 }
 
-func conditionOf(c schema.BenchCase, tier string) condition {
-	return condition{c.DepthTokens, max(c.Concurrency, 1), repeatsFor(c, tier), c.Content, c.PromptRef}
+func conditionOf(c schema.BenchCase, ch Choice) condition {
+	return condition{c.DepthTokens, max(c.Concurrency, 1), repeatsFor(c, ch), c.Content, c.PromptRef}
 }

@@ -6,7 +6,7 @@ import "github.com/NoobBandi/TenkStack/internal/schema"
 // against one llama-swap model on this machine, with outside requests on
 // /v1 paused for its duration. Endpoints:
 //
-//	GET    /api/bench/plan?model=ID&tier=quick|full  BenchPlan            admin
+//	GET    /api/bench/plan?model=ID&tier=quick|full|custom[&cases=a,b&repeats=1]  BenchPlan  admin
 //	POST   /api/bench/run         BenchRunRequest -> BenchProgress (202)  admin
 //	GET    /api/bench/status      BenchProgress                           any signed-in user (the banner)
 //	POST   /api/bench/cancel      BenchProgress                           admin
@@ -21,6 +21,8 @@ import "github.com/NoobBandi/TenkStack/internal/schema"
 const (
 	BenchQuick = "quick"
 	BenchFull  = "full"
+	// BenchCustom is the cases a person picked, rather than a tier's.
+	BenchCustom = "custom"
 )
 
 // Bench states. Draining: outside requests are refused and the run waits
@@ -36,7 +38,12 @@ const (
 
 type BenchRunRequest struct {
 	Model string `json:"model"` // a llama-swap model id
-	Tier  string `json:"tier"`  // BenchQuick | BenchFull
+	Tier  string `json:"tier"`  // BenchQuick | BenchFull | BenchCustom
+	// Cases and Repeats are BenchCustom's: the case ids picked (the
+	// one-person 1k is always measured, every comparison is against it),
+	// and 1 to measure each once or 0 as often as the full tier does.
+	Cases   []string `json:"cases,omitempty"`
+	Repeats int      `json:"repeats,omitempty"`
 	// Force starts without waiting for requests still in flight. Sent
 	// again for the model and tier already draining, it ends that drain
 	// and starts the run (202, not 409). Without it a drain past its limit
@@ -66,19 +73,23 @@ type BenchPlan struct {
 }
 
 type BenchProgress struct {
-	State     string  `json:"state"`
-	RunID     *int64  `json:"run_id,omitempty"` // set once the run is saved
-	Model     string  `json:"model,omitempty"`
-	Tier      string  `json:"tier,omitempty"`
-	StartedAt int64   `json:"started_at,omitempty"`
-	Case      string  `json:"case,omitempty"` // the case running now
-	Done      int     `json:"done"`           // cases finished
-	Total     int     `json:"total"`
-	InFlight  int     `json:"in_flight"`           // while draining
-	ResumeAt  int64   `json:"resume_at,omitempty"` // when /v1 is expected back (unix seconds)
-	Message   string  `json:"message,omitempty"`   // what it is doing, in Chinese, for the UI
-	Error     string  `json:"error,omitempty"`     // failed
-	ElapsedS  float64 `json:"elapsed_s,omitempty"`
+	State string `json:"state"`
+	RunID *int64 `json:"run_id,omitempty"` // set once the run is saved
+	Model string `json:"model,omitempty"`
+	Tier  string `json:"tier,omitempty"`
+	// Cases and Repeats are a custom run's, as it was asked for, so the
+	// page can send the same request again to force its start.
+	Cases     []string `json:"cases,omitempty"`
+	Repeats   int      `json:"repeats,omitempty"`
+	StartedAt int64    `json:"started_at,omitempty"`
+	Case      string   `json:"case,omitempty"` // the case running now
+	Done      int      `json:"done"`           // cases finished
+	Total     int      `json:"total"`
+	InFlight  int      `json:"in_flight"`           // while draining
+	ResumeAt  int64    `json:"resume_at,omitempty"` // when /v1 is expected back (unix seconds)
+	Message   string   `json:"message,omitempty"`   // what it is doing, in Chinese, for the UI
+	Error     string   `json:"error,omitempty"`     // failed
+	ElapsedS  float64  `json:"elapsed_s,omitempty"`
 	// Results so far, so the drawer can fill its table while it runs.
 	Results []schema.CaseResult `json:"results"`
 	// Skipped is the cases left out so far, as "id: reason": deeper than

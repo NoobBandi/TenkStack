@@ -82,13 +82,13 @@ type run struct {
 	rate    map[string]float64 // filler language -> tokens per rune of filler
 }
 
-// Run warms the model up and measures every case of the tier. It stops
+// Run warms the model up and measures every case of the choice. It stops
 // at the first error that is not one case's own.
-func (r *Runner) Run(ctx context.Context, desc Description, tier string, report func(Step)) (Outcome, error) {
+func (r *Runner) Run(ctx context.Context, desc Description, ch Choice, report func(Step)) (Outcome, error) {
 	if report == nil {
 		report = func(Step) {}
 	}
-	cases, skipped := Select(r.Suite, tier, desc.ContextLimit())
+	cases, skipped := Select(r.Suite, ch, desc.ContextLimit())
 	out := Outcome{Results: []schema.CaseResult{}, Skipped: skipped}
 	if len(cases) == 0 {
 		return out, errors.New("這個檔次沒有能跑的項目（上下文長度不夠）")
@@ -133,11 +133,11 @@ func (r *Runner) Run(ctx context.Context, desc Description, tier string, report 
 	measured := map[condition]schema.CaseResult{}
 	for i, c := range cases {
 		step(Step{Case: c.ID, Done: i, Message: fmt.Sprintf("正在測 %s（%d/%d）", c.ID, i+1, len(cases))})
-		cond := conditionOf(c, tier)
+		cond := conditionOf(c, ch)
 		res, ok := measured[cond]
 		if !ok {
 			var err error
-			res, err = ru.measure(ctx, c, tier, func(msg string) {
+			res, err = ru.measure(ctx, c, ch, func(msg string) {
 				step(Step{Case: c.ID, Done: i, Message: msg})
 			})
 			if ctx.Err() != nil {
@@ -525,14 +525,14 @@ func truncate(s string, n int) string {
 
 // measure runs one case: its repeats, each a round of N concurrent
 // requests, every request with its own prefix.
-func (ru *run) measure(ctx context.Context, c schema.BenchCase, tier string, progress func(string)) (schema.CaseResult, error) {
+func (ru *run) measure(ctx context.Context, c schema.BenchCase, ch Choice, progress func(string)) (schema.CaseResult, error) {
 	s := ru.r.Suite
 	text, err := ru.text(ctx, c)
 	if err != nil {
 		return schema.CaseResult{}, err
 	}
 	n := max(c.Concurrency, 1)
-	repeats := repeatsFor(c, tier)
+	repeats := repeatsFor(c, ch)
 	minOut := int(math.Ceil(float64(s.OutputTokens) * s.MinOutputRatio))
 	counters := ru.specCounters(ctx)
 

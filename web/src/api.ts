@@ -2241,7 +2241,15 @@ export const cancelQuant = (id: string) => send<{ ok: boolean }>(`/quant/${id}/c
 // for the administrator.
 // ---------------------------------------------------------------------------
 
-export type BenchTier = 'quick' | 'full';
+export type BenchTier = 'quick' | 'full' | 'custom';
+
+/** What a run measures: a tier, or for 'custom' the cases picked and how
+ *  often each repeats (1 once, 0 as the full tier does). */
+export interface BenchChoice {
+  tier: BenchTier;
+  cases?: string[];
+  repeats?: number;
+}
 export type BenchState = 'idle' | 'draining' | 'running' | 'done' | 'failed' | 'cancelled';
 
 /** What the confirmation shows before a run starts. */
@@ -2292,6 +2300,9 @@ export interface BenchProgress {
   run_id?: number;
   model?: string;
   tier?: BenchTier;
+  /** A custom run's picks, as it was asked for. */
+  cases?: string[];
+  repeats?: number;
   started_at?: number;
   /** The case running now. */
   case?: string;
@@ -2381,10 +2392,16 @@ export interface BenchRun extends BenchRunRow {
   submission: BenchSubmission;
 }
 
-export const benchPlan = (model: string, tier: BenchTier) =>
-  get<BenchPlan>(`/bench/plan?model=${encodeURIComponent(model)}&tier=${tier}`);
-export const startBench = (model: string, tier: BenchTier, force = false) =>
-  send<BenchProgress>('/bench/run', 'POST', { model, tier, ...(force ? { force } : {}) });
+export const benchPlan = (model: string, choice: BenchChoice) => {
+  const q = new URLSearchParams({ model, tier: choice.tier });
+  if (choice.tier === 'custom') {
+    q.set('cases', (choice.cases ?? []).join(','));
+    q.set('repeats', String(choice.repeats ?? 0));
+  }
+  return get<BenchPlan>(`/bench/plan?${q}`);
+};
+export const startBench = (model: string, choice: BenchChoice, force = false) =>
+  send<BenchProgress>('/bench/run', 'POST', { model, ...choice, ...(force ? { force } : {}) });
 export const benchStatus = () => get<BenchProgress>('/bench/status');
 export const cancelBench = () => send<BenchProgress>('/bench/cancel', 'POST');
 export const benchRuns = () => get<BenchRunRow[]>('/bench/runs');

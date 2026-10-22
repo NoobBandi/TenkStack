@@ -228,7 +228,7 @@ func TestManagerRefusals(t *testing.T) {
 	if _, err := m.Start(context.Background(), api.BenchRunRequest{Model: "m", Tier: api.BenchQuick}); !errors.As(err, &e) || e.Status != 409 {
 		t.Errorf("ComfyUI busy: %v", err)
 	}
-	plan, err := m.Plan(context.Background(), "m", api.BenchFull)
+	plan, err := m.Plan(context.Background(), "m", Choice{Tier: api.BenchFull})
 	if err != nil || !plan.ComfyBusy || !plan.Loaded || len(plan.Cases) != 11 || plan.EstimatedS == 0 || plan.Unloads == nil || plan.Name != "M" {
 		t.Errorf("plan: %+v %v", plan, err)
 	}

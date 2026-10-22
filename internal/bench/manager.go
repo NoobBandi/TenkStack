@@ -67,6 +67,8 @@ type Manager struct {
 	// began is when the run started draining, to the nanosecond; the
 	// progress keeps whole seconds.
 	began time.Time
+	// choice is what the current run measures.
+	choice Choice
 }
 
 // NewManager is a manager running the built-in suite against llama-swap at
@@ -85,23 +87,27 @@ func idle() api.BenchProgress {
 
 func active(state string) bool { return state == api.BenchDraining || state == api.BenchRunning }
 
-func validTier(tier string) bool { return tier == api.BenchQuick || tier == api.BenchFull }
-
 // Plan is what a run would do, for the confirmation (D28).
-func (m *Manager) Plan(ctx context.Context, model, tier string) (api.BenchPlan, error) {
-	p, _, err := m.plan(ctx, model, tier)
+func (m *Manager) Plan(ctx context.Context, model string, ch Choice) (api.BenchPlan, error) {
+	p, _, err := m.plan(ctx, model, ch)
 	return p, err
 }
 
-func (m *Manager) plan(ctx context.Context, model, tier string) (api.BenchPlan, Description, error) {
-	if !validTier(tier) {
-		return api.BenchPlan{}, Description{}, &Error{http.StatusUnprocessableEntity, "tier 只能是 quick 或 full"}
+// ChoiceOf is what a run request asks to measure.
+func ChoiceOf(req api.BenchRunRequest) Choice {
+	return Choice{Tier: req.Tier, Cases: req.Cases, Repeats: req.Repeats}
+}
+
+func (m *Manager) plan(ctx context.Context, model string, ch Choice) (api.BenchPlan, Description, error) {
+	if err := ch.Check(m.Runner.Suite); err != nil {
+		return api.BenchPlan{}, Description{}, &Error{http.StatusUnprocessableEntity, err.Error()}
 	}
+	tier := ch.Tier
 	d, err := m.Describer.Describe(ctx, model)
 	if err != nil {
 		return api.BenchPlan{}, d, fmt.Errorf("讀不到模型 %s 的設定：%w", model, err)
 	}
-	cases, skipped := Select(m.Runner.Suite, tier, d.ContextLimit())
+	cases, skipped := Select(m.Runner.Suite, ch, d.ContextLimit())
 	ids := make([]string, 0, len(cases))
 	for _, c := range cases {
 		ids = append(ids, c.ID)
@@ -145,23 +151,24 @@ func (m *Manager) plan(ctx context.Context, model, tier string) (api.BenchPlan, 
 		Loaded:        loaded,
 		Context:       d.ContextLimit(),
 		ContextServed: d.ServedContext > 0,
-		EstimatedS:    m.estimate(ctx, d.ModelID, tier, cases, loaded),
+		EstimatedS:    m.estimate(ctx, d.ModelID, ch, cases, loaded),
 		InFlight:      m.Gate.InFlight(),
 		ComfyBusy:     comfy,
 	}, d, nil
 }
 
-// estimate prefers how long this model and tier took last time.
-func (m *Manager) estimate(ctx context.Context, model, tier string, cases []schema.BenchCase, loaded bool) int {
-	if m.Runs != nil {
-		if last, ok := m.Runs.LastDuration(ctx, model, tier); ok {
+// estimate prefers how long this model and tier took last time; a custom
+// run's cases differ from one to the next, so it is always worked out.
+func (m *Manager) estimate(ctx context.Context, model string, ch Choice, cases []schema.BenchCase, loaded bool) int {
+	if m.Runs != nil && ch.Tier != api.BenchCustom {
+		if last, ok := m.Runs.LastDuration(ctx, model, ch.Tier); ok {
 			if !loaded {
 				last += assumedColdS
 			}
 			return int(last + 0.5)
 		}
 	}
-	return Estimate(m.Runner.Suite, tier, cases, loaded)
+	return Estimate(m.Runner.Suite, ch, cases, loaded)
 }
 
 // Status is the run now, or the last one to finish.
@@ -189,7 +196,7 @@ func (m *Manager) Start(ctx context.Context, req api.BenchRunRequest) (api.Bench
 	busy := active(cur.State)
 	// Force for the run already draining is the owner's answer to a drain
 	// that is taking too long: stop waiting and start (§7.4).
-	same := busy && req.Force && cur.Model == req.Model && cur.Tier == req.Tier
+	same := busy && req.Force && cur.Model == req.Model && m.choice.Same(ChoiceOf(req))
 	if same && cur.State == api.BenchDraining {
 		m.forceLocked()
 	}
@@ -200,7 +207,7 @@ func (m *Manager) Start(ctx context.Context, req api.BenchRunRequest) (api.Bench
 	if busy {
 		return m.Status(), &Error{http.StatusConflict, "已經有一個跑分在進行"}
 	}
-	plan, d, err := m.plan(ctx, req.Model, req.Tier)
+	plan, d, err := m.plan(ctx, req.Model, ChoiceOf(req))
 	if err != nil {
 		return m.Status(), err
 	}
@@ -225,6 +232,7 @@ func (m *Manager) Start(ctx context.Context, req api.BenchRunRequest) (api.Bench
 	m.done = make(chan struct{})
 	m.force, m.forced = make(chan struct{}), false
 	m.began = now
+	m.choice = ChoiceOf(req)
 	if req.Force {
 		m.forceLocked()
 	}
@@ -232,6 +240,8 @@ func (m *Manager) Start(ctx context.Context, req api.BenchRunRequest) (api.Bench
 		State:     api.BenchDraining,
 		Model:     d.ModelID,
 		Tier:      req.Tier,
+		Cases:     req.Cases,
+		Repeats:   req.Repeats,
 		StartedAt: now.Unix(),
 		Total:     len(plan.Cases),
 		InFlight:  m.Gate.InFlight(),
@@ -380,7 +390,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, done, forc
 	if m.Sampler != nil {
 		stop = m.Sampler.Watch(ctx, d.ModelID)
 	}
-	outcome, err := m.Runner.Run(ctx, d, req.Tier, func(s Step) {
+	outcome, err := m.Runner.Run(ctx, d, ChoiceOf(req), func(s Step) {
 		resume := time.Time{}
 		if s.Done > 0 && s.Total > 0 {
 			// Re-estimate from the pace so far: a slow model's message

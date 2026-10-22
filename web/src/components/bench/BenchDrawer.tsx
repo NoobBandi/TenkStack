@@ -1,97 +1,146 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, App as AntApp, Button, Drawer, Popconfirm, Result, Select, Space, Spin, Tag, Typography,
+  Alert, App as AntApp, Button, Drawer, Popconfirm, Result, Segmented, Select, Space, Tag, Tooltip, Typography,
 } from 'antd';
-import {
-  CheckCircleOutlined, InfoCircleOutlined, WarningOutlined,
-} from '@ant-design/icons';
+import { CheckOutlined, InfoCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import {
-  benchPlan, startBench, type BenchPlan, type BenchTier, type ModelInfo,
+  benchPlan, startBench, type BenchChoice, type BenchPlan, type BenchTier, type ModelInfo,
 } from '../../api';
 import { useStream } from '../../stream';
 import { benchActive, useBenchStatus } from '../../benchState';
 import { useNarrow } from '../Sidebar';
 import { ACCENT, LINE, MONO } from '../../theme';
 import BenchProgressView from './BenchProgressView';
-import { CaseName, ResultsTable } from './BenchResults';
+import { ResultsTable } from './BenchResults';
 import BenchReport from './BenchReport';
 import {
-  TIERS, caseLabel, fmtDuration, fmtEstimate, parseSkipped, sortCases, tierLabel,
+  CASE_DEPTH, OPTIONAL_CASES, PICK_GROUPS, QUICK_CASES, caseHint, fmtDuration, fmtEstimate, tierLabel,
 } from './labels';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
-/** While the confirmation is on screen, the plan is asked again this often:
- *  the in-flight count and ComfyUI's queue change under it. */
+/** While the drawer is open, the plan is asked again this often: the
+ *  in-flight count and ComfyUI's queue change under it. */
 const PLAN_REFRESH_MS = 5000;
 
-const TIER_TEXT: Record<BenchTier, string> = {
-  quick: '1k 深度、1 與 4 路、三種內容，各跑 1 次。調參數時用。',
-  full: '1k／8k／32k／64k／128k 深度、1／2／4 路、三種內容，各跑 3 次取平均（64k、128k 各 1 次）。超過模型上下文的深度會略過。正式比較時用。',
+type Mode = BenchTier;
+type Picks = { cases: string[]; repeats: number };
+
+/** The tiers as picks: quick adds four people and two contents, once each;
+ *  full adds everything, measured as often as the suite says. */
+const PRESET: Record<'quick' | 'full', Picks> = {
+  quick: { cases: OPTIONAL_CASES.filter((id) => QUICK_CASES.includes(id)), repeats: 1 },
+  full: { cases: OPTIONAL_CASES, repeats: 0 },
 };
 
-/** One line of "what will happen", marked by whether it is worth a second look. */
-function Consequence({ tone, children }: { tone: 'ok' | 'info' | 'warn'; children: React.ReactNode }) {
+const MODE_TEXT: Record<Mode, string> = {
+  quick: '調參數時用：1k、1 與 4 人、三種內容，各 1 次。',
+  full: '正式比較時用：所有長度、人數和內容，各 3 次取平均。',
+  custom: '只跑勾選的項目。',
+};
+
+/** Whether a depth fits the model's context, as the server decides it:
+ *  the depth, the answer and a little room for the template. */
+const fits = (id: string, context: number) => !context || !CASE_DEPTH[id] || CASE_DEPTH[id] + 256 + 128 <= context;
+
+/** The mode the picks amount to: a tier when they are exactly its picks
+ *  among the cases this model can run, otherwise custom. */
+function modeOf(p: Picks, context: number): Mode {
+  const usable = (ids: string[]) => ids.filter((id) => fits(id, context)).sort().join();
+  for (const tier of ['quick', 'full'] as const) {
+    if (p.repeats === PRESET[tier].repeats && usable(p.cases) === usable(PRESET[tier].cases)) return tier;
+  }
+  return 'custom';
+}
+
+/** A line of what deserves a look before starting; only the cases that do. */
+function Notice({ tone, children }: { tone: 'info' | 'warn'; children: React.ReactNode }) {
   const icon = tone === 'warn'
     ? <WarningOutlined style={{ color: ACCENT.warn }} />
-    : tone === 'ok'
-      ? <CheckCircleOutlined style={{ opacity: 0.55 }} />
-      : <InfoCircleOutlined style={{ opacity: 0.55 }} />;
+    : <InfoCircleOutlined style={{ opacity: 0.55 }} />;
   return (
-    <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '6px 0' }}>
+    <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '4px 0' }}>
       <span style={{ flex: 'none', width: 14 }}>{icon}</span>
       <div style={{ minWidth: 0, fontSize: 13, lineHeight: 1.6 }}>{children}</div>
     </div>
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
+function SectionTitle({ children, extra }: { children: React.ReactNode; extra?: React.ReactNode }) {
   return (
-    <Text style={{ fontSize: 12, letterSpacing: 1, opacity: 0.55, display: 'block', margin: '20px 0 8px' }}>
-      {children}
-    </Text>
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, margin: '22px 0 10px' }}>
+      <Text style={{ fontSize: 12, letterSpacing: 1, opacity: 0.55 }}>{children}</Text>
+      {extra}
+    </div>
   );
 }
 
-/** Two cards, one per tier, the same size whichever is chosen. */
-function TierChoice({ value, onChange, plans }: {
-  value: BenchTier; onChange: (t: BenchTier) => void; plans: Partial<Record<BenchTier, BenchPlan>>;
+/** A case to add or leave out, as a chip: on, off, or greyed out with why. */
+function Pick({ label, on, disabled, why, hint, onToggle, locked }: {
+  label: string; on: boolean; disabled?: boolean; why?: string; hint?: string; onToggle?: () => void; locked?: boolean;
 }) {
+  const chip = (
+    <button
+      type="button" role="checkbox" aria-checked={on} aria-disabled={disabled || locked}
+      onClick={disabled || locked ? undefined : onToggle}
+      style={{
+        font: 'inherit', fontSize: 13, color: 'inherit', padding: '4px 12px', borderRadius: 14, minWidth: 56,
+        cursor: disabled || locked ? 'default' : 'pointer',
+        border: `1px solid ${on ? 'rgba(255,255,255,0.7)' : LINE.soft}`,
+        background: on ? 'rgba(255,255,255,0.1)' : 'transparent',
+        opacity: disabled ? 0.35 : 1,
+        textDecoration: disabled ? 'line-through' : undefined,
+        transition: 'background 0.15s, border-color 0.15s',
+      }}
+    >
+      {on && !disabled && <CheckOutlined style={{ fontSize: 11, marginInlineEnd: 6, opacity: locked ? 0.5 : 0.85 }} />}
+      {label}
+    </button>
+  );
+  const tip = why ?? hint;
+  return tip ? <Tooltip title={tip} mouseEnterDelay={0.3}>{chip}</Tooltip> : chip;
+}
+
+/** The cases, by the report block that shows them: the base everyone gets,
+ *  then what each block can add. */
+function CasePicker({ picks, onChange, context }: {
+  picks: Picks; onChange: (p: Picks) => void; context: number;
+}) {
+  const toggle = (id: string) => onChange({
+    ...picks,
+    cases: picks.cases.includes(id) ? picks.cases.filter((c) => c !== id) : [...picks.cases, id],
+  });
+  const row = (title: string, hint: string, chips: React.ReactNode) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '112px minmax(0, 1fr)', gap: 12, alignItems: 'center', padding: '7px 0' }}>
+      <div>
+        <div style={{ fontSize: 13 }}>{title}</div>
+        <Text type="secondary" style={{ fontSize: 11 }}>{hint}</Text>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{chips}</div>
+    </div>
+  );
   return (
-    <div role="radiogroup" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-      {TIERS.map((t) => {
-        const on = t === value;
-        const plan = plans[t];
-        return (
-          <button
-            key={t} type="button" role="radio" aria-checked={on}
-            onClick={() => onChange(t)}
-            style={{
-              // A button centres its content; a card reads from the top, and
-              // the two cards' lines must start level whatever wraps.
-              display: 'flex', flexDirection: 'column', justifyContent: 'flex-start',
-              textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit',
-              padding: '12px 14px', borderRadius: 6,
-              border: `1px solid ${on ? 'rgba(255,255,255,0.75)' : LINE.soft}`,
-              background: on ? 'rgba(255,255,255,0.06)' : 'transparent',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-              <Text strong style={{ fontSize: 15 }}>{tierLabel(t)}</Text>
-              <Text style={{ fontFamily: MONO, fontSize: 12, opacity: 0.7 }}>
-                {plan ? fmtEstimate(plan.estimated_s) : '…'}
-              </Text>
-            </div>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4, lineHeight: 1.5 }}>
-              {TIER_TEXT[t]}
-            </Text>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4, fontFamily: MONO }}>
-              {plan ? `${plan.cases.length} 項` : ' '}
-            </Text>
-          </button>
-        );
-      })}
+    <div style={{ borderTop: `1px solid ${LINE.faint}` }}>
+      {row('單人對話', '每次都會測', (
+        <Pick label="1 人・1k・英文" on locked hint="其他項目都拿它來比：長文比它慢多少、多人比它快幾倍、內容比它快慢。" />
+      ))}
+      {PICK_GROUPS.map((g) => (
+        <div key={g.title} style={{ borderTop: `1px solid ${LINE.faint}` }}>
+          {row(g.title, g.hint, g.items.map((item) => {
+            const ok = fits(item.id, context);
+            return (
+              <Pick
+                key={item.id} label={item.label}
+                on={ok && picks.cases.includes(item.id)} disabled={!ok}
+                why={ok ? undefined : `模型上下文只有 ${context.toLocaleString()} tokens，放不下`}
+                hint={caseHint(item.id)}
+                onToggle={() => toggle(item.id)}
+              />
+            );
+          }))}
+        </div>
+      ))}
     </div>
   );
 }
@@ -140,24 +189,23 @@ function ModelPicker({ models, value, onChange }: {
   );
 }
 
-function Before({ plan, plans, tier, onTier, error, models, chosen, onChoose, onModels }: {
-  plan?: BenchPlan; plans: Partial<Record<BenchTier, BenchPlan>>;
-  tier: BenchTier; onTier: (t: BenchTier) => void; error: string | null;
+/**
+ * Before a run: the model, what to measure -- a tier as a starting point,
+ * every case pickable by the block it shows up in -- how often, and only
+ * then whatever deserves a look. The time and the start are in the footer.
+ */
+function Before({ plan, mode, onMode, picks, onPicks, error, models, chosen, onChoose, onModels }: {
+  plan?: BenchPlan; mode: Mode; onMode: (m: Mode) => void; picks: Picks; onPicks: (p: Picks) => void;
+  error: string | null;
   models: ModelInfo[]; chosen?: string; onChoose: (id: string) => void; onModels: () => void;
 }) {
-  const skipped = (plan?.skipped ?? []).map(parseSkipped);
   // The ones running, and the chosen one should it stop while this is open,
   // so the choice does not blank out under the person making it.
   const running = models.filter((m) => m.running || m.id === chosen);
+  const context = plan?.context ?? 0;
   return (
     <div>
-      <Paragraph type="secondary" style={{ fontSize: 13, marginBottom: 16 }}>
-        用一組固定的測試量一個模型在這台機器上有多快：第一個字要等多久（TTFT）、
-        讀入提示多快（Prefill）、每秒生成幾個字（Decode），以及上下文變長或多人同時用時慢多少。
-        結果會存進跑分紀錄，改了參數再跑一次，就能並排比較。
-      </Paragraph>
-
-      <SectionTitle>選擇模型</SectionTitle>
+      <SectionTitle>模型</SectionTitle>
       {running.length === 0 ? (
         <Alert
           type="info" showIcon
@@ -177,66 +225,55 @@ function Before({ plan, plans, tier, onTier, error, models, chosen, onChoose, on
       )}
       {!chosen ? null : (<>
 
-      <SectionTitle>選擇檔次</SectionTitle>
-      <TierChoice value={tier} onChange={onTier} plans={plans} />
+      <SectionTitle extra={context > 0 && (
+        <Text type="secondary" style={{ fontSize: 11 }}>
+          模型上下文 <span style={{ fontFamily: MONO }}>{context.toLocaleString()}</span> tokens
+        </Text>
+      )}>
+        測什麼
+      </SectionTitle>
+      <Segmented<Mode>
+        block value={mode} onChange={onMode}
+        options={[
+          { value: 'quick', label: '快速' },
+          { value: 'full', label: '完整' },
+          { value: 'custom', label: '自訂' },
+        ]}
+      />
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', margin: '8px 0 10px' }}>{MODE_TEXT[mode]}</Text>
+      <CasePicker picks={picks} onChange={onPicks} context={context} />
+
+      <SectionTitle>每項跑幾次</SectionTitle>
+      <Segmented<number>
+        value={picks.repeats} onChange={(repeats) => onPicks({ ...picks, repeats })}
+        options={[{ value: 1, label: '1 次' }, { value: 0, label: '3 次取平均' }]}
+      />
+      <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+        {picks.repeats === 1 ? '比較快，數字會有一點起伏。' : '比較準，時間約三倍；64k、128k 仍只跑 1 次。'}
+      </Text>
 
       {error && <Alert type="error" showIcon style={{ marginTop: 16 }} message="讀不到跑分計畫" description={error} />}
 
-      {!plan && !error && (
-        <div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>
-      )}
-
-      {plan && (
+      {plan && (!plan.loaded || plan.unloads.length > 0 || plan.in_flight > 0 || plan.comfy_busy) && (
         <>
-          <SectionTitle>開始後會發生什麼</SectionTitle>
-          <Consequence tone={plan.loaded ? 'ok' : 'info'}>
-            {plan.loaded
-              ? '模型已經載入，直接開跑。'
-              : '模型目前沒有載入，會先載入（冷啟動）。載入時間另外記錄，不算進速度。'}
-          </Consequence>
-          <Consequence tone={plan.unloads.length ? 'warn' : 'ok'}>
-            {plan.unloads.length ? (
-              <>
-                會卸載
-                {plan.unloads.map((m) => (
-                  <Tag key={m} style={{ fontFamily: MONO, fontSize: 11, marginInline: 4 }}>{m}</Tag>
-                ))}
-                ，正在用它們的人會中斷。
-              </>
-            ) : '不需要卸載其他模型。'}
-          </Consequence>
-          <Consequence tone="warn">
-            跑分期間對外 API 暫停（{fmtEstimate(plan.estimated_s)}），其他程式和對話頁的請求會收到「暫停中」。
-            {plan.in_flight > 0
-              ? <> 目前有 <Text strong>{plan.in_flight}</Text> 個請求進行中，會先等它們結束。</>
-              : ' 目前沒有進行中的請求。'}
-          </Consequence>
-          {plan.comfy_busy && (
-            <Consequence tone="warn">
-              ComfyUI 正在出圖，和模型用同一張卡，成績會偏低。建議等它結束再跑。
-            </Consequence>
+          <SectionTitle>開始前</SectionTitle>
+          {!plan.loaded && (
+            <Notice tone="info">模型目前沒有載入，會先載入（冷啟動）。載入時間另外記錄，不算進速度。</Notice>
           )}
-
-          <SectionTitle>測試項目（{plan.cases.length} 項）</SectionTitle>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
-            {plan.context > 0
-              ? <>模型上下文 <Text style={{ fontFamily: MONO, fontSize: 12 }}>{plan.context.toLocaleString()}</Text> tokens
-                  {plan.context_served ? '（模型回報）' : '（從啟動參數讀到）'}，超過的深度會略過。</>
-              : '讀不到模型的上下文長度，所有深度都會試跑；超過的會失敗並略過。'}
-          </Text>
-          <Space size={[6, 6]} wrap>
-            {sortCases(plan.cases, (c) => c).map((c) => (
-              <Tag key={c} style={{ marginInlineEnd: 0 }}><CaseName id={c} /></Tag>
-            ))}
-          </Space>
-          {skipped.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              {skipped.map((s) => (
-                <Text key={s.id} type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                  略過 {caseLabel(s.id)}{s.reason ? `：${s.reason}` : ''}
-                </Text>
+          {plan.unloads.length > 0 && (
+            <Notice tone="warn">
+              會卸載
+              {plan.unloads.map((m) => (
+                <Tag key={m} style={{ fontFamily: MONO, fontSize: 11, marginInline: 4 }}>{m}</Tag>
               ))}
-            </div>
+              ，正在用它們的人會中斷。
+            </Notice>
+          )}
+          {plan.in_flight > 0 && (
+            <Notice tone="info">目前有 <Text strong>{plan.in_flight}</Text> 個請求進行中，會先等它們結束。</Notice>
+          )}
+          {plan.comfy_busy && (
+            <Notice tone="warn">ComfyUI 正在出圖，和模型用同一張卡，成績會偏低。建議等它結束再跑。</Notice>
           )}
         </>
       )}
@@ -263,8 +300,12 @@ export default function BenchDrawer({ open, onClose }: {
   const model = useMemo(() => models.find((m) => m.id === chosen) ?? null, [models, chosen]);
   const narrow = useNarrow();
   const { status, refresh } = useBenchStatus();
-  const [tier, setTier] = useState<BenchTier>('quick');
-  const [plans, setPlans] = useState<Partial<Record<BenchTier, BenchPlan>>>({});
+  const [picks, setPicks] = useState<Picks>(PRESET.quick);
+  // What the tier buttons say: set by a click, then followed by the picks --
+  // ticking the full tier's cases by hand lands on 完整 -- except that
+  // 自訂, once clicked, stays until another tier is.
+  const [chosenMode, setChosenMode] = useState<Mode>('quick');
+  const [plan, setPlan] = useState<BenchPlan | undefined>();
   const [planError, setPlanError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   // Set once this drawer started (or watched) a run, so that when it ends the
@@ -294,7 +335,7 @@ export default function BenchDrawer({ open, onClose }: {
   // Opening for another model, or closing, starts over. Declared before the
   // effect below so that on opening it clears first and that one then sets.
   useEffect(() => {
-    setPlans({});
+    setPlan(undefined);
     setPlanError(null);
     setFollowing(false);
   }, [id]);
@@ -307,27 +348,45 @@ export default function BenchDrawer({ open, onClose }: {
     setFollowing(true);
   }, [active, status?.model, id]);
 
-  const loadPlans = useCallback(() => {
+  const context = plan?.context ?? 0;
+  const mode: Mode = chosenMode === 'custom' ? 'custom' : modeOf(picks, context);
+  // What is sent: a tier by name when the picks are one, so its run is a
+  // quick or full run, comparable with every other of its tier.
+  const choice = useMemo<BenchChoice>(() => (mode === 'custom'
+    ? { tier: 'custom', cases: picks.cases.filter((c) => fits(c, context)), repeats: picks.repeats }
+    : { tier: mode }), [mode, picks, context]);
+  const choiceKey = JSON.stringify(choice);
+
+  const onMode = (m: Mode) => {
+    setChosenMode(m);
+    if (m !== 'custom') setPicks(PRESET[m]);
+  };
+  const onPicks = (p: Picks) => {
+    setPicks(p);
+    if (chosenMode !== 'custom') setChosenMode(modeOf(p, context));
+  };
+
+  // The plan for what is picked now; the last one stays on screen until the
+  // next arrives, so the time in the footer changes rather than blinks.
+  const loadPlan = useCallback(() => {
     if (!id) return;
-    Promise.all(TIERS.map((t) => benchPlan(id, t)))
-      .then(([quick, full]) => { setPlans({ quick, full }); setPlanError(null); })
+    benchPlan(id, JSON.parse(choiceKey) as BenchChoice)
+      .then((p) => { setPlan(p); setPlanError(null); })
       .catch((e: Error) => setPlanError(e.message));
-  }, [id]);
+  }, [id, choiceKey]);
 
   useEffect(() => {
     if (!id || view !== 'before') return;
-    loadPlans();
-    const timer = window.setInterval(loadPlans, PLAN_REFRESH_MS);
+    loadPlan();
+    const timer = window.setInterval(loadPlan, PLAN_REFRESH_MS);
     return () => window.clearInterval(timer);
-  }, [id, view, loadPlans]);
-
-  const plan = plans[tier];
+  }, [id, view, loadPlan]);
 
   const start = async () => {
     if (!id) return;
     setStarting(true);
     try {
-      await startBench(id, tier);
+      await startBench(id, choice);
       setFollowing(true);
       await refresh();
     } catch (e) {
@@ -337,28 +396,43 @@ export default function BenchDrawer({ open, onClose }: {
     }
   };
 
+  // Asked again only when starting costs someone something: models
+  // unloaded, or ComfyUI's work slowed and the scores with it.
+  const disruptive = !!plan && (plan.unloads.length > 0 || plan.comfy_busy);
   const confirmText = plan ? [
-    `對外 API 會暫停${fmtEstimate(plan.estimated_s)}。`,
-    plan.unloads.length ? `會卸載 ${plan.unloads.join('、')}。` : '',
-    plan.in_flight > 0 ? `會先等 ${plan.in_flight} 個進行中的請求結束。` : '',
+    plan.unloads.length ? `會卸載 ${plan.unloads.join('、')}，正在用的人會中斷。` : '',
+    plan.comfy_busy ? 'ComfyUI 正在出圖，成績會偏低。' : '',
   ].filter(Boolean).join('') : '';
+  const ready = !!plan && plan.cases.length > 0 && !!id;
+  const startButton = (
+    <Button type="primary" loading={starting} disabled={!ready} onClick={disruptive ? undefined : start}>
+      開始跑分
+    </Button>
+  );
 
   let footer: React.ReactNode = null;
   if (view === 'before') {
     footer = (
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0, lineHeight: 1.4 }}>
+          {plan && id && (
+            <>
+              <Text style={{ fontSize: 13 }}>
+                {tierLabel(mode)}・{plan.cases.length} 項・<span style={{ fontFamily: MONO }}>{fmtEstimate(plan.estimated_s)}</span>
+              </Text>
+              <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>跑分期間對外 API 暫停，請求會收到「暫停中」</Text>
+            </>
+          )}
+        </div>
         <Button onClick={onClose}>關閉</Button>
-        <Popconfirm
-          title={`開始${tierLabel(tier)}跑分？`}
-          description={<div style={{ maxWidth: 300 }}>{confirmText}</div>}
-          okText="開始" cancelText="先不要"
-          onConfirm={start}
-          disabled={!plan || plan.cases.length === 0}
-        >
-          <Button type="primary" loading={starting} disabled={!plan || plan.cases.length === 0}>
-            開始跑分
-          </Button>
-        </Popconfirm>
+        {disruptive ? (
+          <Popconfirm
+            title="開始跑分？" description={<div style={{ maxWidth: 300 }}>{confirmText}</div>}
+            okText="開始" cancelText="先不要" onConfirm={start} disabled={!ready}
+          >
+            {startButton}
+          </Popconfirm>
+        ) : startButton}
       </div>
     );
   } else if (view === 'after') {
@@ -386,7 +460,7 @@ export default function BenchDrawer({ open, onClose }: {
       destroyOnHidden
     >
       {view === 'before' && (
-        <Before plan={plan} plans={plans} tier={tier} onTier={setTier} error={planError}
+        <Before plan={plan} mode={mode} onMode={onMode} picks={picks} onPicks={onPicks} error={planError}
                 models={models} chosen={chosen} onChoose={setChosen}
                 onModels={() => { onClose(); navigate('/models'); }} />
       )}
@@ -422,7 +496,7 @@ export default function BenchDrawer({ open, onClose }: {
                   finished; the table under it has every case. */}
               <BenchReport runs={[{
                 key: 'run', mark: 0, name: model?.name || model?.id || status.model || '',
-                results: status.results, engine: plans[tier]?.engine || model?.provider_name,
+                results: status.results, engine: plan?.engine || model?.provider_name,
                 tier: tierLabel(status.tier),
               }]} />
               <ResultsTable results={status.results} />

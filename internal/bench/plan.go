@@ -62,13 +62,13 @@ const (
 )
 
 // Estimate is how long a run of these cases should take, in seconds.
-func Estimate(s schema.BenchSuite, tier string, cases []schema.BenchCase, loaded bool) int {
+func Estimate(s schema.BenchSuite, ch Choice, cases []schema.BenchCase, loaded bool) int {
 	total := float64(max(s.Warmup, 1)) * (512/assumedPrefillTPS + float64(s.OutputTokens)/assumedGenTPS)
 	seen := map[condition]bool{}
 	langs := map[string]bool{}
 	prompts := map[string]bool{}
 	for _, c := range cases {
-		cond := conditionOf(c, tier)
+		cond := conditionOf(c, ch)
 		if seen[cond] {
 			continue
 		}

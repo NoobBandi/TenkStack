@@ -45,9 +45,33 @@ const CASE_HINT: Record<string, string> = {
 export const caseLabel = (id: string) => CASE_LABEL[id] ?? id;
 export const caseHint = (id: string) => CASE_HINT[id] ?? '';
 
-export const TIER_LABEL: Record<string, string> = { quick: '快速', full: '完整' };
+export const TIER_LABEL: Record<string, string> = { quick: '快速', full: '完整', custom: '自訂' };
 export const tierLabel = (tier?: string) => (tier ? TIER_LABEL[tier] ?? tier : '—');
 export const TIERS: BenchTier[] = ['quick', 'full'];
+
+/** What every run measures: one person, 1k, English. depth-1k, conc-1 and
+ *  content-en are that one condition under each block's name, and every
+ *  comparison in the report is against it, so it cannot be left out. */
+export const BASE_CASES = ['depth-1k', 'conc-1', 'content-en'];
+export const QUICK_CASES = ['depth-1k', 'conc-1', 'conc-4', 'content-zh', 'content-en', 'content-code'];
+/** The context a depth case fills, for greying out what a model cannot hold. */
+export const CASE_DEPTH: Record<string, number> = {
+  'depth-8k': 7680, 'depth-32k': 32256, 'depth-64k': 65024, 'depth-128k': 130560,
+};
+
+/** What a run may add to the base, by the report block that shows it. */
+export const PICK_GROUPS: { title: string; hint: string; items: { id: string; label: string }[] }[] = [
+  {
+    title: '長文', hint: '上下文變長時慢多少',
+    items: [
+      { id: 'depth-8k', label: '8k' }, { id: 'depth-32k', label: '32k' },
+      { id: 'depth-64k', label: '64k' }, { id: 'depth-128k', label: '128k' },
+    ],
+  },
+  { title: '多人同時', hint: '幾個人同時用', items: [{ id: 'conc-2', label: '2 人' }, { id: 'conc-4', label: '4 人' }] },
+  { title: '內容類型', hint: '和英文比', items: [{ id: 'content-zh', label: '中文' }, { id: 'content-code', label: '程式碼' }] },
+];
+export const OPTIONAL_CASES = PICK_GROUPS.flatMap((g) => g.items.map((i) => i.id));
 
 /** The depth cases, as the depth chart's x axis. */
 export const DEPTHS: { id: string; label: string }[] = [
