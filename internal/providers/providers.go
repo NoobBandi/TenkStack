@@ -86,6 +86,27 @@ func (b Build) Offers(image string) bool {
 	return slices.ContainsFunc(b.Choices(), func(c Choice) bool { return c.Image == image })
 }
 
+// Accepts is whether image can run in this build's launcher: one of its
+// choices, or another tag of a choice's repository -- an older release,
+// a newer one the record does not name yet, a nightly pinned by commit.
+// The launcher is the same for every tag; whether that tag runs on these
+// cards is what the record's own choices were checked for, the others not.
+func (b Build) Accepts(image string) bool {
+	return slices.ContainsFunc(b.Choices(), func(c Choice) bool { return repository(c.Image) == repository(image) })
+}
+
+// repository is an image name without its tag or digest; a registry's
+// port ("localhost:5000/x") is not a tag.
+func repository(image string) string {
+	if i := strings.Index(image, "@"); i >= 0 {
+		image = image[:i]
+	}
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		image = image[:i]
+	}
+	return image
+}
+
 // MultiCard is applied by the launcher only when an entry's card selector
 // names more than one card, and those runs keep their own kernel cache: a
 // cache written by one arrangement can deadlock a run of the other.

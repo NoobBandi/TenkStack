@@ -67,13 +67,14 @@ func withImage(text, image string) string {
 }
 
 // offers is whether a variant of the provider's build for vendor runs
-// image: any of the build's choices, or the fallback's one image.
+// image: any tag of the build's choices' repositories, or the fallback's
+// one image.
 func offers(p providers.Provider, vendor, variant, image string) bool {
 	if variant == "vulkan" {
 		return p.Fallback != nil && p.Fallback.Image == image
 	}
 	b, ok := p.Builds[vendor]
-	return ok && b.Offers(image)
+	return ok && image != "" && b.Accepts(image)
 }
 
 // Recipe reads an installed launcher: whether it is what the record
@@ -134,7 +135,7 @@ func (in *Installer) Upgrade(ctx context.Context, key, vendor, image string) (ap
 	if image == "" {
 		image = recommended
 	} else if !offers(p, vendor, variant, image) {
-		return api.Install{}, &Invalid{image + " 不是這個引擎提供的版本"}
+		return api.Install{}, &Invalid{image + " 不是這個引擎的映像（只能換成同一個映像的其他版本）"}
 	}
 	if state == RecipeCurrent && image == recommended {
 		return api.Install{}, &Invalid{"已經是這個版本"}

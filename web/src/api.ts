@@ -710,6 +710,43 @@ export const engineAction = (
   options: { variant?: string; delete_image?: boolean; image?: string } = {},
 ) => send<unknown>('/runtimes/action', 'POST', { provider, vendor, action, ...options });
 
+/** One image of an engine build's repository. */
+export interface EngineTag {
+  image: string;
+  tag: string;
+  /** release: a version, never moved; build: one numbered build; nightly:
+   *  one day's, pinned by commit; rolling: moved to each new build. */
+  kind: 'release' | 'build' | 'nightly' | 'rolling';
+  /** When the registry last moved it. */
+  updated?: string;
+  /** The engine record's name and note, for the images it names. */
+  label?: string;
+  note?: string;
+  recommended: boolean;
+}
+
+/** What is installed for a build, whether its tag has moved, and what else
+ *  there is. */
+export interface EngineVersions {
+  image: string;
+  /** What the image says it is (llama.cpp's build number), when it does. */
+  version?: string;
+  built?: string;
+  kind: EngineTag['kind'];
+  /** A rolling tag: the registry still points it at the build here. */
+  up_to_date: boolean;
+  /** A rolling tag that has moved: the build it points at now. */
+  latest?: EngineTag;
+  /** Releases after the installed one, newest first. */
+  newer: EngineTag[];
+  tags: EngineTag[];
+  /** The registry could not be asked. */
+  error?: string;
+}
+
+export const engineVersions = (provider: string, vendor: string) =>
+  get<EngineVersions>(`/runtimes/versions?provider=${encodeURIComponent(provider)}&vendor=${encodeURIComponent(vendor)}`);
+
 /** One container's CPU and memory at one moment, read from cgroup. */
 export interface ContainerSample {
   name: string;

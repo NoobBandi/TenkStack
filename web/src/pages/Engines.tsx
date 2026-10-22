@@ -3,10 +3,11 @@ import {
   Alert, App as AntApp, Button, Card, Checkbox, Drawer, Empty, Popconfirm, Progress, Radio, Select, Space,
   Tag, Tooltip, Typography,
 } from 'antd';
-import { CheckCircleFilled, ExportOutlined, WarningFilled } from '@ant-design/icons';
+import { CheckCircleFilled, ExportOutlined, InfoCircleFilled, WarningFilled } from '@ant-design/icons';
 import { Link } from 'react-router-dom';
 import {
-  engineAction, type EngineAction, fetchProviders, pullPercent, pullText, type ProviderBuild, type ProviderCard, type ProvidersPage,
+  engineAction, type EngineAction, engineVersions, type EngineTag, type EngineVersions, fetchProviders, pullPercent, pullText,
+  type ProviderBuild, type ProviderCard, type ProvidersPage,
 } from '../api';
 import { useIsOwner } from '../identity';
 import { ACCENT, LINE, MONO } from '../theme';
@@ -114,13 +115,212 @@ function EngineTile({ card, onOpen }: { card: ProviderCard; onOpen: () => void }
   );
 }
 
+const fmtDay = (iso?: string) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : `${d.getFullYear()}/`;
+  return `${year}${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+};
+
+/** A numbered build's name and number: server-intel-b11804. */
+const buildOf = (tag: string) => {
+  const m = /^(.+)-b(\d+)$/.exec(tag);
+  return m ? { name: m[1], n: Number(m[2]) } : null;
+};
+
+const GROUPS: { kind: EngineTag['kind'] | 'recommended'; title: string }[] = [
+  { kind: 'recommended', title: '建議' },
+  { kind: 'release', title: '正式版本' },
+  { kind: 'nightly', title: '每日建置（固定在某一天）' },
+  { kind: 'build', title: '編號建置' },
+  { kind: 'rolling', title: '其他' },
+];
+
+/**
+ * Which version of a build is installed and what else there is: the image
+ * and when it was built, whether a newer one is out -- for a tag the
+ * publisher moves (nightly, server-intel), whether it has moved since it
+ * was pulled -- and every version to switch to, the record's own first,
+ * then the registry's. Any other tag of the same image can be typed in.
+ */
+function VersionPanel({ card, build, onAction }: {
+  card: ProviderCard; build: ProviderBuild;
+  onAction: (action: EngineAction, opts?: { delete_image?: boolean; image?: string }) => Promise<void>;
+}) {
+  const { modal } = AntApp.useApp();
+  const st = build.state;
+  const [v, setV] = useState<EngineVersions | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [typed, setTyped] = useState('');
+  // Asked again when the installed image changes or a pull ends.
+  useEffect(() => {
+    let live = true;
+    engineVersions(card.key, build.vendor)
+      .then((x) => { if (live) { setV(x); setFailed(null); } })
+      .catch((e: Error) => { if (live) setFailed(e.message); });
+    return () => { live = false; };
+  }, [card.key, build.vendor, st.image, st.install?.state]);
+
+  const locked = st.recipe === 'edited';
+  if (!v) {
+    return (
+      <Text type="secondary" style={{ fontSize: 12 }}>
+        {failed ? `讀不到版本：${failed}` : '正在查詢版本…'}
+      </Text>
+    );
+  }
+  const current = v.tags.find((t) => t.image === v.image);
+  const repo = v.image.slice(0, v.image.lastIndexOf(':'));
+  const named = (t: EngineTag) => (t.label ? `${t.label}（${t.tag}）` : t.tag);
+
+  const switchTo = (image: string) => {
+    const t = v.tags.find((x) => x.image === image);
+    const tagName = image.slice(image.lastIndexOf(':') + 1);
+    modal.confirm({
+      title: `切換到 ${t ? named(t) : tagName}？`,
+      content: (
+        <div style={{ lineHeight: 1.7 }}>
+          {t?.note && <div>{t.note}</div>}
+          {!t?.recommended && (
+            <div style={{ color: ACCENT.warn }}>這個版本沒有在主控台驗證過，模型的啟動參數可能要跟著調整。</div>
+          )}
+          會下載 <code>{image}</code> 並改寫啟動腳本。正在跑的模型不受影響，下次載入時才會用這個版本。
+        </div>
+      ),
+      okText: '切換', cancelText: '取消',
+      onOk: () => onAction('upgrade', { image }),
+    });
+  };
+
+  // Something newer than what is here: a release after a release, a later
+  // build of the same name, a later day's nightly.
+  let newer: EngineTag | undefined = v.newer[0];
+  if (!newer && v.kind === 'build') {
+    const here = buildOf(v.image.slice(v.image.lastIndexOf(':') + 1));
+    newer = v.tags.filter((t) => { const b = buildOf(t.tag); return here && b && b.name === here.name && b.n > here.n; })
+      .sort((a, b) => (buildOf(b.tag)?.n ?? 0) - (buildOf(a.tag)?.n ?? 0))[0];
+  }
+  if (!newer && v.kind === 'nightly' && current?.updated) {
+    newer = v.tags.filter((t) => t.kind === 'nightly' && (t.updated ?? '') > (current.updated ?? ''))
+      .sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''))[0];
+  }
+
+  let status: React.ReactNode;
+  if (v.kind === 'rolling') {
+    if (v.up_to_date) {
+      status = (
+        <Text style={{ fontSize: 12 }}>
+          <CheckCircleFilled style={{ color: ACCENT.ok, marginInlineEnd: 6 }} />
+          已是最新。這個標籤會跟著發佈移動，有新的建置時會在這裡提示。
+        </Text>
+      );
+    } else if (!v.error) {
+      status = (
+        <Space size={8} wrap>
+          <Text style={{ fontSize: 12 }}>
+            <WarningFilled style={{ color: ACCENT.warn, marginInlineEnd: 6 }} />
+            有新的建置{v.latest && v.latest.tag !== current?.tag ? `：${v.latest.tag}` : ''}
+            {v.latest?.updated ? `（${fmtDay(v.latest.updated)}）` : ''}
+          </Text>
+          <Popconfirm
+            title="下載新的建置？"
+            description={(
+              <div style={{ maxWidth: 300 }}>
+                重新下載 <code>{v.image}</code>
+                {v.version && v.latest ? `（${v.version} → ${buildOf(v.latest.tag) ? `b${buildOf(v.latest.tag)?.n}` : v.latest.tag}）` : ''}。
+                正在跑的模型不受影響，下次載入時才會用新版。
+              </div>
+            )}
+            okText="下載" cancelText="取消"
+            onConfirm={() => onAction('update')}
+          >
+            <Button size="small" type="primary">下載更新</Button>
+          </Popconfirm>
+        </Space>
+      );
+    }
+  } else if (newer) {
+    status = (
+      <Space size={8} wrap>
+        <Text style={{ fontSize: 12 }}>
+          <InfoCircleFilled style={{ opacity: 0.7, marginInlineEnd: 6 }} />
+          有更新的版本：{named(newer)}{newer.updated ? `（${fmtDay(newer.updated)}）` : ''}
+        </Text>
+        <Button size="small" disabled={locked} onClick={() => switchTo(newer.image)}>切換</Button>
+      </Space>
+    );
+  } else {
+    status = <Text type="secondary" style={{ fontSize: 12 }}>固定的版本，不會自己變動。</Text>;
+  }
+
+  const option = (t: EngineTag) => ({
+    value: t.image,
+    search: `${t.tag} ${t.label ?? ''}`,
+    label: (
+      <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{named(t)}</span>
+        {t.updated && <span style={{ fontFamily: MONO, fontSize: 11, opacity: 0.5, flex: 'none' }}>{fmtDay(t.updated)}</span>}
+        {t.image === v.image && <Tag style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px' }}>目前</Tag>}
+      </span>
+    ),
+  });
+  const groups = GROUPS.map((g) => ({
+    label: g.title,
+    title: g.title,
+    options: v.tags.filter((t) => (g.kind === 'recommended' ? t.recommended : !t.recommended && t.kind === g.kind)).map(option),
+  })).filter((g) => g.options.length > 0);
+  // A tag typed in that the list does not have: any of the same image.
+  const want = typed.trim();
+  if (want && /^[\w][\w.-]{0,127}$/.test(want) && !v.tags.some((t) => t.tag === want)) {
+    groups.push({
+      label: '輸入的標籤', title: '輸入的標籤',
+      options: [{ value: `${repo}:${want}`, search: want, label: <span>使用 <code>{repo}:{want}</code></span> }],
+    });
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '56px minmax(0, 1fr)', rowGap: 8, columnGap: 8, alignItems: 'baseline', margin: '4px 0' }}>
+      <Text type="secondary" style={{ fontSize: 12 }}>目前</Text>
+      <Text style={{ fontSize: 13 }}>
+        {current ? named(current) : v.image.slice(v.image.lastIndexOf(':') + 1)}
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {v.version ? `・${v.version}` : ''}{v.built ? `・${fmtDay(v.built)} 建置` : ''}
+        </Text>
+      </Text>
+      <Text type="secondary" style={{ fontSize: 12 }}>狀態</Text>
+      <div>
+        {status}
+        {v.error && (
+          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+            查不到網路上的版本，只列出主控台記錄的版本。（{v.error}）
+          </Text>
+        )}
+      </div>
+      <Text type="secondary" style={{ fontSize: 12 }}>切換</Text>
+      <Tooltip title={locked ? '啟動腳本手動改過，要先改用主控台的啟動腳本才能切換' : undefined}>
+        <Select
+          size="small" style={{ width: '100%', maxWidth: 420 }}
+          disabled={locked}
+          value={v.image}
+          showSearch optionFilterProp="search"
+          searchValue={typed} onSearch={setTyped}
+          onChange={(image: string) => { setTyped(''); if (image !== v.image) switchTo(image); }}
+          options={groups}
+          notFoundContent="沒有這個版本；可以輸入同一個映像的其他標籤"
+          placeholder="選擇或輸入版本"
+        />
+      </Tooltip>
+    </div>
+  );
+}
+
 /** One vendor's build of an engine, with what can be done to it. */
 function BuildRow({ card, build, onAction }: {
   card: ProviderCard; build: ProviderBuild;
   onAction: (action: EngineAction, opts?: { delete_image?: boolean; image?: string }) => Promise<void>;
 }) {
   const [dropImage, setDropImage] = useState(true);
-  const { modal } = AntApp.useApp();
   const st = build.state;
   const choices = build.images ?? [];
   const [pick, setPick] = useState(build.image);
@@ -198,38 +398,7 @@ function BuildRow({ card, build, onAction }: {
           {st.image_size && <Text type="secondary" style={{ fontSize: 12 }}>映像 {st.image_size}</Text>}
           {inUse && <Text type="secondary" style={{ fontSize: 12 }}>{st.used_by.length} 個模型在用</Text>}
         </Space>
-        {choices.length > 1 && (
-          // Switching is the same rewrite as bringing a launcher up to date,
-          // onto the image picked here. A launcher edited by hand shows the
-          // choice too, but has to be adopted before it can be rewritten.
-          <Space size={8} wrap>
-            <Text type="secondary" style={{ fontSize: 12 }}>版本</Text>
-            <Tooltip title={st.recipe === 'edited' ? '啟動腳本手動改過，要先改用主控台的啟動腳本才能切換' : undefined}>
-            <Select
-              size="small"
-              style={{ minWidth: 180 }}
-              disabled={st.recipe === 'edited'}
-              value={current ? current.image : undefined}
-              placeholder="不在清單上的映像"
-              options={choices.map((c) => ({ value: c.image, label: c.label }))}
-              onChange={(image: string) => {
-                const next = choices.find((c) => c.image === image);
-                modal.confirm({
-                  title: `切換到${next?.label ?? '這個版本'}？`,
-                  content: (
-                    <div>
-                      {next?.note && <div style={{ marginBottom: 6 }}>{next.note}</div>}
-                      會下載 <code>{image}</code> 並改寫啟動腳本。正在跑的模型不受影響，下次載入時才會用新版。
-                    </div>
-                  ),
-                  okText: '切換', cancelText: '取消',
-                  onOk: () => onAction('upgrade', { image }),
-                });
-              }}
-            />
-            </Tooltip>
-          </Space>
-        )}
+        <VersionPanel card={card} build={build} onAction={onAction} />
         {st.recipe === 'outdated' && st.recommended && (
           <Alert
             type="info" showIcon
@@ -284,14 +453,6 @@ function BuildRow({ card, build, onAction }: {
           </Space>
         )}
         <Space size={6} wrap>
-          <Popconfirm
-            title="重新下載最新的映像？"
-            description="正在跑的模型不受影響，下次載入時才會用新版。"
-            okText="更新" cancelText="取消"
-            onConfirm={() => onAction('update')}
-          >
-            <Button size="small">更新</Button>
-          </Popconfirm>
           {!st.enabled && <Button size="small" onClick={() => onAction('enable')}>啟用</Button>}
           <Tooltip title={inUse
             ? `還有模型用它啟動：${st.used_by.join('、')}`

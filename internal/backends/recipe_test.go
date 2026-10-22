@@ -59,7 +59,12 @@ func TestRecipe(t *testing.T) {
 		}
 	}
 	check("as written now", current, RecipeCurrent)
-	check("another tag", imageLine.ReplaceAllString(current, `IMAGE="${VLLM_IMAGE:-vllm/vllm-openai-xpu:v0.29.0}"`), RecipeOutdated)
+	// Another tag of the same image is a version picked, not an old
+	// launcher: it stays on it, and the page offers the record's own.
+	os.WriteFile(path, []byte(imageLine.ReplaceAllString(current, `IMAGE="${VLLM_IMAGE:-vllm/vllm-openai-xpu:v0.29.0}"`)), 0o755)
+	if state, _, rec := in.Recipe(p, "intel"); state != RecipeCurrent || rec != "vllm/vllm-openai-xpu:v0.29.0" {
+		t.Errorf("another tag: %q %q", state, rec)
+	}
 	old := b2Launcher(current)
 	if old == current || !strings.Contains(old, "setvars.sh") {
 		t.Fatal("the b2 launcher was not reconstructed")

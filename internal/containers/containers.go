@@ -7,10 +7,12 @@ package containers
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Docker struct{}
@@ -83,6 +85,33 @@ func (d *Docker) ImageSizes(ctx context.Context) map[string]string {
 		}
 	}
 	return found
+}
+
+// ImageInfo is what docker knows of a local image: when it was built,
+// the registry digests it was pulled as, and its labels.
+type ImageInfo struct {
+	Created     time.Time
+	RepoDigests []string
+	Labels      map[string]string
+}
+
+// InspectImage is a local image's facts; false when it is not here.
+func (d *Docker) InspectImage(ctx context.Context, image string) (ImageInfo, bool) {
+	out, ok := d.run(ctx, "image", "inspect", "--format", "{{json .Created}}\t{{json .RepoDigests}}\t{{json .Config.Labels}}", image)
+	if !ok {
+		return ImageInfo{}, false
+	}
+	parts := strings.SplitN(strings.TrimSpace(out), "\t", 3)
+	if len(parts) != 3 {
+		return ImageInfo{}, false
+	}
+	var info ImageInfo
+	var created string
+	_ = json.Unmarshal([]byte(parts[0]), &created)
+	info.Created, _ = time.Parse(time.RFC3339Nano, created)
+	_ = json.Unmarshal([]byte(parts[1]), &info.RepoDigests)
+	_ = json.Unmarshal([]byte(parts[2]), &info.Labels)
+	return info, true
 }
 
 // ImageID is the content id behind a tag, or "" when the image is not

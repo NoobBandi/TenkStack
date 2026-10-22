@@ -281,3 +281,47 @@ type ProvidersPage struct {
 	Providers []ProviderCard `json:"providers"`
 	Runtimes  []Runtime      `json:"runtimes"`
 }
+
+// EngineVersions is what the engines page says about one build's version:
+// what is installed, whether its tag has moved since, and what else
+// there is to switch to.
+//
+//	GET /api/runtimes/versions?provider=KEY&vendor=VENDOR  admin
+type EngineVersions struct {
+	// Image is the installed one, as the launcher names it (or the
+	// record's, before installing).
+	Image string `json:"image"`
+	// Version is what the image says it is, when it says (llama.cpp's
+	// build number); Built is when it was built, RFC 3339.
+	Version string `json:"version,omitempty"`
+	Built   string `json:"built,omitempty"`
+	// Kind is the tag's: release (a version, never moved), build (one
+	// numbered build), nightly (one day's, pinned by its commit) or
+	// rolling (moved by its publisher to each new build: nightly, latest).
+	Kind string `json:"kind"`
+	// For a rolling tag: UpToDate when the registry still points it at the
+	// build here, else Latest is the build it points at now.
+	UpToDate bool       `json:"up_to_date"`
+	Latest   *EngineTag `json:"latest,omitempty"`
+	// Newer are releases after a release that is installed, newest first.
+	Newer []EngineTag `json:"newer"`
+	// Tags are what can be switched to: the record's own first, then the
+	// registry's newest releases, pinned nightlies and numbered builds.
+	Tags []EngineTag `json:"tags"`
+	// Error says the registry could not be asked; the rest is what is
+	// known without it.
+	Error string `json:"error,omitempty"`
+}
+
+// EngineTag is one image of a build's repository.
+type EngineTag struct {
+	Image   string `json:"image"`
+	Tag     string `json:"tag"`
+	Kind    string `json:"kind"`
+	Updated string `json:"updated,omitempty"` // when the registry last moved it, RFC 3339
+	// Label and Note are the engine record's, for the images it names;
+	// Recommended marks those, the ones this project runs.
+	Label       string `json:"label,omitempty"`
+	Note        string `json:"note,omitempty"`
+	Recommended bool   `json:"recommended"`
+}

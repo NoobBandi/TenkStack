@@ -46,6 +46,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/pgserver"
 	"github.com/NoobBandi/TenkStack/internal/ports"
 	"github.com/NoobBandi/TenkStack/internal/quant"
+	"github.com/NoobBandi/TenkStack/internal/registry"
 	"github.com/NoobBandi/TenkStack/internal/release"
 	"github.com/NoobBandi/TenkStack/internal/search"
 	"github.com/NoobBandi/TenkStack/internal/settings"
@@ -195,6 +196,7 @@ func main() {
 	// here and its recipe there can be compared by eye.
 	bench.TuningHash = tuning.Hash
 	srv.Bench = bench.NewManager(llamaSwapBase, httpapi.BenchDescriber{S: srv}, bench.NewRuns(db), host, host, version)
+	srv.Registry = registry.New()
 
 	httpServer := &http.Server{
 		Addr:              *listen,

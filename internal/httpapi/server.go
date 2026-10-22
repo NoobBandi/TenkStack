@@ -36,6 +36,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/paths"
 	"github.com/NoobBandi/TenkStack/internal/ports"
 	"github.com/NoobBandi/TenkStack/internal/quant"
+	"github.com/NoobBandi/TenkStack/internal/registry"
 	"github.com/NoobBandi/TenkStack/internal/release"
 	"github.com/NoobBandi/TenkStack/internal/search"
 	"github.com/NoobBandi/TenkStack/internal/settings"
@@ -66,16 +67,19 @@ type Server struct {
 	ComfyProbe *comfy.Probe
 	Comfy      *comfy.Manager
 	Installer  *backends.Installer
-	Quant      *quant.Manager
-	Chats      *chats.Store
-	Blobs      *blobs.Store
-	Vision     *visioncache.Cache
-	Search     *search.Client
-	Catalog    *catalog.Catalog
-	Remote     *gguf.Remote
-	HFToken    *hftoken.Store
-	Files      *files.Files
-	Release    *release.Client
+	// Registry asks image registries for an engine's versions; nil leaves
+	// the engines page with the record's own.
+	Registry *registry.Client
+	Quant    *quant.Manager
+	Chats    *chats.Store
+	Blobs    *blobs.Store
+	Vision   *visioncache.Cache
+	Search   *search.Client
+	Catalog  *catalog.Catalog
+	Remote   *gguf.Remote
+	HFToken  *hftoken.Store
+	Files    *files.Files
+	Release  *release.Client
 	// Bench runs the benchmark and holds /v1 while it does; nil leaves
 	// /v1 always open and the benchmark's endpoints unavailable.
 	Bench *bench.Manager
@@ -226,6 +230,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/runtimes/card", s.setCardRole)
 	mux.HandleFunc("POST /api/runtimes/comfy", s.comfyAction)
 	mux.HandleFunc("POST /api/runtimes/action", s.runtimeAction)
+	mux.HandleFunc("GET /api/runtimes/versions", s.readEngineVersions)
 
 	mux.HandleFunc("GET /api/backends/devices", s.readBackendDevices)
 	mux.HandleFunc("POST /api/runtime/container", s.runtimeContainer)

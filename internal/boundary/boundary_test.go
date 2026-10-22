@@ -71,13 +71,15 @@ var allowed = map[string][]string{
 	"profile": {"api", "schema", "locations", "hfmodel"},
 	// The benchmark: runs the suite, keeps the results, pauses /v1 meanwhile.
 	"bench": {"api", "schema", "store"},
+	// What an image registry holds: a repository's tags, a tag's digest.
+	"registry": {},
 	// The installer's screens and its provisioning; it talks to a running
 	// console over HTTP, never through the console's own packages.
 	"setup": {"providers"},
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "locations", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store", "schema", "bench", "profile", "tuning"},
+		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store", "schema", "bench", "profile", "tuning", "registry"},
 	"boundary": {},
 }
 
