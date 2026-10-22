@@ -108,38 +108,3 @@ export function CompareTable<R>({ runs, lines, measures, labelTitle }: {
     />
   );
 }
-
-/**
- * The same, turned: a row per figure and a column per run, for a block that
- * measures one condition (one person at 1k) with several figures.
- */
-export type RowMeasure<R> = Omit<Measure<R>, 'title'> & { label: React.ReactNode };
-
-export function FigureTable<R>({ runs, measures, pick }: {
-  runs: RunView[];
-  measures: RowMeasure<R>[];
-  pick: (run: RunView) => R | undefined;
-}) {
-  const shown = runs.filter((v) => !v.leaving);
-  const many = shown.length > 1;
-  type Row = RowMeasure<R>;
-  const columns: ColumnsType<Row> = [
-    { key: 'label', title: '項目', render: (_, m) => m.label },
-    ...shown.map((run, i) => ({
-      key: run.key, title: many ? <RunMark index={run.mark} /> : '數值', align: 'right' as const,
-      render: (_: unknown, m: Row) => {
-        const values = shown.map((v) => {
-          const r = pick(v);
-          return r === undefined ? undefined : m.value(r);
-        });
-        return <Figure values={values} index={i} measure={m} />;
-      },
-    })),
-  ];
-  return (
-    <Table<Row>
-      size="small" pagination={false} rowKey="key" bordered={many}
-      dataSource={measures} columns={columns} scroll={{ x: 'max-content' }}
-    />
-  );
-}

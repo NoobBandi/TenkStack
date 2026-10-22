@@ -22,6 +22,10 @@ const MAX_COMPARE = 3;
 
 const viewKey = (v: RunView) => v.key;
 
+/** What the page is showing: the runs, their views, and the letter each wears. */
+interface Shown { runs: BenchRun[]; views: RunView[]; marks: number[] }
+const NOTHING: Shown = { runs: [], views: [], marks: [] };
+
 /**
  * Which run mark (A, B, C and their colours) each selected run wears.
  *
@@ -100,10 +104,17 @@ export default function Bench() {
   // In mark order: A first, which is what the percentages compare against.
   // Memoised, like everything drawn from it, so the charts' data stays the
   // same array between the page's polls.
-  const shown = useMemo(() => selected.filter((id) => details[id])
-    .sort((a, b) => marks[a] - marks[b])
-    .map((id) => details[id]), [selected, details, marks]);
-  const views = useMemo(() => shown.map((r) => runView(r, marks[r.id])), [shown, marks]);
+  // Only once every selected run has arrived: until then the result on
+  // screen stays as it was, so picking another run in the dialog moves
+  // from one result to the next without an empty frame between them.
+  const fresh = useMemo<Shown | null>(() => {
+    if (!selected.every((id) => details[id])) return null;
+    const runs = [...selected].sort((a, b) => marks[a] - marks[b]).map((id) => details[id]);
+    return { runs, views: runs.map((r) => runView(r, marks[r.id])), marks: runs.map((r) => marks[r.id]) };
+  }, [selected, details, marks]);
+  const [kept, setKept] = useState<Shown>(NOTHING);
+  if (fresh && fresh !== kept) setKept(fresh);
+  const { runs: shown, views, marks: shownMarks } = fresh ?? kept;
   // A run unticked stays a moment, folding away, rather than vanishing.
   const present = usePresence(views, viewKey);
   const drawn = useMemo(() => present.map((p) => (p.leaving ? { ...p.item, leaving: true } : p.item)), [present]);
@@ -154,6 +165,17 @@ export default function Bench() {
     fetchedFor.current = id;
     void load();
   }, [status?.state, status?.run_id, rows, load]);
+
+  // Every run's details as the dialog opens, so a pick there shows at once
+  // rather than after a round trip.
+  useEffect(() => {
+    if (!listOpen || !rows) return;
+    const missing = rows.map((r) => r.id).filter((id) => !details[id]);
+    if (!missing.length) return;
+    Promise.all(missing.map(benchRun))
+      .then((got) => setDetails((prev) => ({ ...prev, ...Object.fromEntries(got.map((r) => [r.id, r])) })))
+      .catch(() => { /* the pick fetches its own and reports a failure */ });
+  }, [listOpen, rows, details]);
 
   // Details for what is selected, fetched once each.
   useEffect(() => {
@@ -244,7 +266,7 @@ export default function Bench() {
               </Empty>
             </Card>
           )}
-          {shown.length > 0 && <BenchDetail runs={shown} marks={shown.map((r) => marks[r.id])} />}
+          {shown.length > 0 && <BenchDetail runs={shown} marks={shownMarks} />}
         </>
       )}
 
@@ -252,7 +274,7 @@ export default function Bench() {
         open={listOpen} onClose={() => setListOpen(false)}
         rows={rows} loading={loading} onReload={() => void load()}
         selected={selected} marks={marks} max={MAX_COMPARE}
-        onToggle={toggle} onDelete={(id) => void remove(id)}
+        onPick={(id) => select([id])} onToggle={toggle} onDelete={(id) => void remove(id)}
       />
       <BenchDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
     </div>

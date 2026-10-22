@@ -55,6 +55,16 @@
   transition: width 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), opacity 0.3s;
 }
 
+/* A block's table when the runs it shows change: it fades in rather than
+   swapping in one frame beside a chart that animates. */
+.bn-fade {
+  animation: bn-fade 0.3s ease-out both;
+}
+@keyframes bn-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* Rows of the performance table answer to the pointer as a whole. */
 .bn-perf-row:hover > div {
   background: rgba(255, 255, 255, 0.03);
@@ -63,7 +73,8 @@
 @media (prefers-reduced-motion: reduce) {
   .bn-row.bn-enter,
   .bn-row.bn-leave,
-  .bn-bar {
+  .bn-bar,
+  .bn-fade {
     animation: none;
   }
   .bn-bar,

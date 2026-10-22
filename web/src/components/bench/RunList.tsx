@@ -21,18 +21,23 @@ export interface RowExtras {
 /**
  * One saved run: picked or not, the letter it wears while comparing, what
  * ran and when, its two headline numbers, and export and delete.
+ *
+ * The row and its checkbox do different things. The row reads that run
+ * alone, in place of whatever was shown; only the checkbox adds a run to
+ * a comparison. A click on a second row used to add it, and somebody
+ * opening another record found it set beside the last as A and B.
  */
-function RunItem({ row, checked, mark, comparing, disabled, onToggle, onDelete, extras }: {
+function RunItem({ row, checked, mark, comparing, disabled, onPick, onToggle, onDelete, extras }: {
   row: BenchRunRow; checked: boolean; mark?: number; comparing: boolean; disabled: boolean;
-  onToggle: () => void; onDelete: () => void; extras: RowExtras;
+  onPick: () => void; onToggle: () => void; onDelete: () => void; extras: RowExtras;
 }) {
   return (
     <div
       role="button" tabIndex={0}
-      onClick={() => { if (!disabled) onToggle(); }}
-      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && !disabled) { e.preventDefault(); onToggle(); } }}
+      onClick={onPick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(); } }}
       style={{
-        display: 'flex', gap: 10, padding: '10px 12px', cursor: disabled ? 'not-allowed' : 'pointer',
+        display: 'flex', gap: 10, padding: '10px 12px', cursor: 'pointer',
         borderTop: `1px solid ${LINE.faint}`,
         background: checked ? 'rgba(255,255,255,0.06)' : undefined,
         transition: 'background 0.2s, box-shadow 0.2s',
@@ -43,7 +48,9 @@ function RunItem({ row, checked, mark, comparing, disabled, onToggle, onDelete, 
           second run does not shift the names. */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, paddingTop: 2, flex: 'none' }}
            onClick={(e) => e.stopPropagation()}>
-        <Checkbox checked={checked} disabled={disabled} onChange={onToggle} aria-label="選取" />
+        <Tooltip title={disabled ? undefined : checked ? '移出比較' : '加入比較'} mouseEnterDelay={0.4}>
+          <Checkbox checked={checked} disabled={disabled} onChange={onToggle} aria-label="加入比較" />
+        </Tooltip>
         <span style={{ width: 18, display: 'inline-flex' }}>
           {mark !== undefined && checked && comparing && <RunMark index={mark} />}
         </span>
@@ -84,15 +91,15 @@ function RunItem({ row, checked, mark, comparing, disabled, onToggle, onDelete, 
 }
 
 /**
- * 跑分紀錄 as a dialog: every saved run, newest first, ticked to read one or
- * compare up to `max`. The selection applies as it is made, so the page
- * behind it is already showing what is ticked when the dialog closes.
+ * 跑分紀錄 as a dialog: every saved run, newest first. A row is read on its
+ * own and the checkboxes build a comparison of up to `max`; either applies
+ * at once to the page behind, and the dialog stays open to pick again.
  */
-export default function RunsDialog({ open, onClose, rows, loading, onReload, selected, marks, max, onToggle, onDelete, extras = {} }: {
+export default function RunsDialog({ open, onClose, rows, loading, onReload, selected, marks, max, onPick, onToggle, onDelete, extras = {} }: {
   open: boolean; onClose: () => void;
   rows: BenchRunRow[] | null; loading: boolean; onReload: () => void;
   selected: number[]; marks: Record<number, number>; max: number;
-  onToggle: (id: number) => void; onDelete: (id: number) => void;
+  onPick: (id: number) => void; onToggle: (id: number) => void; onDelete: (id: number) => void;
   extras?: RowExtras;
 }) {
   const comparing = selected.length > 1;
@@ -112,8 +119,8 @@ export default function RunsDialog({ open, onClose, rows, loading, onReload, sel
       styles={{ body: { padding: 0 } }}
     >
       <Text type="secondary" style={{ fontSize: 12, display: 'block', padding: '4px 12px 8px' }}>
-        勾 1 筆看單筆，勾 2–{max} 筆並排比較
-        {selected.length > 0 && <>・已選 {selected.length} 筆</>}
+        點一筆查看；勾左邊的方框加入比較，最多 {max} 筆
+        {selected.length > 1 && <>・比較中 {selected.length} 筆</>}
       </Text>
       {rows === null ? (
         <div style={{ padding: 24, textAlign: 'center' }}><Spin /></div>
@@ -127,6 +134,7 @@ export default function RunsDialog({ open, onClose, rows, loading, onReload, sel
               checked={selected.includes(row.id)}
               mark={marks[row.id]} comparing={comparing}
               disabled={selected.length >= max && !selected.includes(row.id)}
+              onPick={() => onPick(row.id)}
               onToggle={() => onToggle(row.id)}
               onDelete={() => onDelete(row.id)}
               extras={extras}

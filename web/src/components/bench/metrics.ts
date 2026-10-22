@@ -146,7 +146,10 @@ export function runView(run: BenchRun, mark: number): RunView {
   const s = run.submission;
   const gpu = s?.hardware?.gpu;
   return {
-    key: String(run.id),
+    // The slot, not the run: reading another run in A's place changes the
+    // figures where they stand -- rows update, chart lines move to the new
+    // values -- instead of one row folding away while another opens.
+    key: `m${mark}`,
     mark,
     name: run.name || run.model,
     results: s?.results,
@@ -160,7 +163,7 @@ export function runView(run: BenchRun, mark: number): RunView {
 
 /** The header line: model · engine · GPU · quant · tier · date. */
 export const headerParts = (v: RunView) =>
-  [v.engine, v.gpu, v.quant, v.tier ? `${v.tier}檔` : undefined, v.when].filter(Boolean) as string[];
+  [v.engine, v.gpu, v.quant, v.tier ? (v.tier === '自訂' ? '自訂項目' : `${v.tier}檔`) : undefined, v.when].filter(Boolean) as string[];
 
 const mdTable = (head: string[], rows: string[][]) => [
   `| ${head.join(' | ')} |`,

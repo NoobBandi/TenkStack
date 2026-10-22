@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { App as AntApp, Button, Card, Tooltip, Typography } from 'antd';
 import type { BenchCaseResult } from '../../api';
 import { CopyOutlined } from '@ant-design/icons';
@@ -8,7 +8,7 @@ import {
 import { LINE, MONO, SURFACE } from '../../theme';
 import { BarLine } from './Bars';
 import { ColTitle, Readout } from './BenchResults';
-import { CompareTable, FigureTable, type Measure, type RowMeasure, type TableLine } from './CompareTable';
+import { CompareTable, type Measure, type TableLine } from './CompareTable';
 import { RUN_MARKS, TERMS, fmtPromptTps, fmtTps } from './labels';
 import { MarkSlot, Row } from './motion';
 import {
@@ -132,122 +132,180 @@ const tooltipBox = (heading: string, rows: Parameters<typeof Readout>[0]['rows']
 // --- 單人對話 ---------------------------------------------------------------
 
 /**
- * A 500-token answer as a timeline: the wait for the first word, then the
- * generation, on one time scale shared by every run, the total at the end.
- * The wait is grey for every run -- it is the same thing for all of them --
- * and the generation wears the run's colour.
+ * A 500-token answer as a timeline, one bar per run on one time scale: the
+ * wait for the first word in grey, then the generation in the run's colour.
+ * The two moments a person notices are written under the bar where they
+ * happen -- the first word, the answer done -- instead of in a legend that
+ * had to be decoded first; the grey sliver alone said nothing.
  */
-function AnswerTimeline({ runs }: { runs: RunView[] }) {
+const AnswerTimeline = memo(function AnswerTimeline({ runs }: { runs: RunView[] }) {
+  const [ref, width] = useWidth();
   const rows = runs.map((v) => ({ v, t: answerSeconds(headline(v.results)) }));
   const max = Math.max(0, ...rows.filter((r) => !r.v.leaving).map((r) => r.t?.total ?? 0));
-  if (!max) return null;
-  // One time scale for every run, ending at a round number of seconds.
-  const axis = niceAxis([max], 4);
-  const top = axis.ticks[axis.ticks.length - 1];
   const many = comparing(runs);
+  // One scale for every run, with room past the longest for its label.
+  const top = max * 1.04;
   const lead = many ? 26 : 0;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {rows.map(({ v, t }) => (
-        <Row key={v.key} leaving={v.leaving}>
-        <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
-          <MarkSlot mark={v.mark} show={many} />
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-            {t ? (
-              <>
-                <div className="bn-bar" style={{ width: `calc((100% - 52px) * ${Math.min(1, t.total / top)})`, display: 'flex', gap: 2, height: 18 }}>
-                  <Tooltip title={`等待第一個字（TTFT）${secs(t.wait)} 秒`}>
-                    <div style={{ flex: `${t.wait} 0 0`, minWidth: 2, background: WAIT_FILL }} />
-                  </Tooltip>
-                  <Tooltip title={`生成 ${ANSWER_TOKENS} token：${secs(t.gen)} 秒（${fmtTps(headline(v.results).decode)} tok/s）`}>
-                    <div style={{ flex: `${t.gen} 0 0`, minWidth: 2, background: colour(v.mark), borderRadius: '0 4px 4px 0' }} />
-                  </Tooltip>
-                </div>
-                <Text style={{ fontSize: 12, fontFamily: MONO, whiteSpace: 'nowrap' }}>{secs(t.total)} 秒</Text>
-              </>
-            ) : <Text type="secondary" style={{ fontSize: 12 }}>沒有 1k 的量測</Text>}
-          </div>
-        </div>
-        </Row>
-      ))}
-      {/* The time scale: hairline ticks at round seconds under the bars. */}
-      <div style={{
-        position: 'relative', height: 16, marginTop: 4, marginInlineStart: lead,
-        width: `calc(100% - ${lead}px - 52px)`, transition: 'margin 0.3s, width 0.3s',
-      }}>
-        <div style={{ position: 'absolute', left: 0, right: 0, top: 0, borderTop: `1px solid ${LINE.soft}` }} />
-        {axis.ticks.map((tick) => (
-          <span key={tick} style={{
-            position: 'absolute', left: `${(tick / top) * 100}%`, top: 2,
-            transform: tick === 0 ? undefined : 'translateX(-50%)',
-            fontSize: 10, fontFamily: MONO, color: 'rgba(255,255,255,0.45)', whiteSpace: 'nowrap',
-          }}>
-            {tick}{tick === top ? ' 秒' : ''}
-          </span>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 2 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: WAIT_FILL, borderRadius: 2 }} />
-          <Text type="secondary" style={{ fontSize: 11 }}>等待第一個字</Text>
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 10, height: 10, background: many ? 'rgba(255,255,255,0.65)' : colour(runs[0].mark), borderRadius: 2 }} />
-          <Text type="secondary" style={{ fontSize: 11 }}>生成 {ANSWER_TOKENS} token</Text>
-        </span>
-        {!many && rows[0].t && (
-          <Text type="secondary" style={{ fontSize: 11, fontFamily: MONO }}>
-            {secs(rows[0].t.wait)} 秒 + {secs(rows[0].t.gen)} 秒
-          </Text>
-        )}
-      </div>
+    <div ref={ref} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Text type="secondary" style={{ fontSize: 11, marginBottom: 4 }}>
+        一段 {ANSWER_TOKENS} token（一則中等長度的回覆）從送出到寫完
+      </Text>
+      {max > 0 && rows.map(({ v, t }) => {
+        const fill = t ? Math.min(1, t.total / top) : 0;
+        // Both labels fit under a bar this long; a shorter one gets them as
+        // one line from its start.
+        const roomy = (width - lead) * fill >= 250;
+        return (
+          <Row key={v.key} leaving={v.leaving}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', padding: '4px 0 6px' }}>
+              <MarkSlot mark={v.mark} show={many} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {t ? (
+                  <div className="bn-bar" style={{ width: `${fill * 100}%` }}>
+                    <div style={{ display: 'flex', gap: 2, height: 20 }}>
+                      <Tooltip title={`等第一個字（TTFT）${secs(t.wait)} 秒`}>
+                        <div style={{ flex: `${t.wait} 0 0`, minWidth: 4, background: WAIT_FILL, borderRadius: '3px 0 0 3px' }} />
+                      </Tooltip>
+                      <Tooltip title={`生成 ${ANSWER_TOKENS} token 花 ${secs(t.gen)} 秒（${fmtTps(headline(v.results).decode)} tok/s）`}>
+                        <div style={{ flex: `${t.gen} 0 0`, minWidth: 4, background: colour(v.mark), borderRadius: '0 3px 3px 0' }} />
+                      </Tooltip>
+                    </div>
+                    {roomy ? (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginTop: 4 }}>
+                        <Moment at="start" value={t.wait.toFixed(1)} what="第一個字出現" />
+                        <Moment at="end" value={t.total.toFixed(1)} what="回答寫完" strong />
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 4, whiteSpace: 'nowrap' }}>
+                        <Moment at="start" value={t.wait.toFixed(1)} what="出第一個字" />
+                        <Text type="secondary" style={{ fontSize: 11 }}>・</Text>
+                        <Moment value={t.total.toFixed(1)} what="寫完" strong />
+                      </div>
+                    )}
+                  </div>
+                ) : <Text type="secondary" style={{ fontSize: 12 }}>沒有 1k 的量測</Text>}
+              </div>
+            </div>
+          </Row>
+        );
+      })}
     </div>
+  );
+});
+
+/** A moment on the answer timeline, written under the bar where it falls:
+ *  a tick up to the bar, the seconds, and what happens then. */
+function Moment({ at, value, what, strong }: { at?: 'start' | 'end'; value: string; what: string; strong?: boolean }) {
+  const tick = <span style={{ display: 'inline-block', width: 1, height: 8, background: 'rgba(255,255,255,0.45)', alignSelf: 'flex-start' }} />;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, whiteSpace: 'nowrap' }}>
+      {at === 'start' && tick}
+      <span style={{ fontSize: 12, fontFamily: MONO, fontWeight: strong ? 600 : 400 }}>{value} 秒</span>
+      <Text type="secondary" style={{ fontSize: 11 }}>{what}</Text>
+      {at === 'end' && tick}
+    </span>
   );
 }
 
 // --- 多人同時 ---------------------------------------------------------------
 
+/** Chart props that are objects, made once: recharts redraws -- and replays
+ *  its line animation -- when one of them is a new object, which inline
+ *  literals are on every render, and the page renders every two seconds
+ *  for the run status. That replay was the endpoint value blinking out. */
+const CHART_MARGIN = { top: 14, right: 48, left: 0, bottom: 0 };
+const CURSOR = { stroke: LINE.strong, strokeWidth: 1 };
+const X_TICK = { ...AXIS_TICK, fill: 'rgba(255,255,255,0.65)' };
+
+/** The same array as last time when the content is the same, so a parent
+ *  rebuilding equal data does not restart an animation. */
+function useSteady<T>(value: T): T {
+  const last = useRef<{ sig: string; value: T } | null>(null);
+  const sig = JSON.stringify(value);
+  if (last.current?.sig !== sig) last.current = { sig, value };
+  return last.current.value;
+}
+
 /**
- * Total generation at 1 / 2 / 4 streams, with each run's ideal -- N times
- * its own single-stream decode -- dashed beside it, so the gap between what
- * it did and what perfect sharing would give is the reading.
+ * Where each run's value goes at the right end of a line chart: beside its
+ * last point, nudged apart when two would print over each other.
  */
-function CrowdChart({ runs: all }: { runs: RunView[] }) {
-  // The lines are the runs staying; one folding away just leaves its line.
-  // Memoised on the runs, which the page keeps stable: data rebuilt on every
-  // render would replay the lines' animation each time the page polls.
-  const runs = useMemo(() => activeRuns(all), [all]);
-  const data = useMemo(() => {
+function endOffsets(ends: { key: string; value: number | undefined }[], top: number, plotHeight: number) {
+  const placed = ends
+    .filter((e): e is { key: string; value: number } => e.value !== undefined)
+    .map((e) => ({ key: e.key, y: plotHeight - (e.value / top) * plotHeight }))
+    .sort((a, b) => a.y - b.y);
+  const out: Record<string, number> = {};
+  let floor = -Infinity;
+  for (const p of placed) {
+    const y = Math.max(p.y, floor + 13);
+    out[p.key] = y - p.y;
+    floor = y;
+  }
+  return out;
+}
+
+/** The value at a line's last point, for LabelList's content. */
+function endLabel(last: number, shift: number) {
+  return function EndLabel(p: unknown) {
+    const { x, y, value, index } = p as { x?: number; y?: number; value?: number; index?: number };
+    if (index !== last || value === undefined || x === undefined || y === undefined) return null;
+    return (
+      <text x={Number(x) + 8} y={Number(y) + 4 + shift} fill="rgba(255,255,255,0.85)" fontSize={11} fontFamily={MONO}>
+        {fmtTps(value)}
+      </text>
+    );
+  };
+}
+
+/**
+ * Total generation by how many people use it at once, each run's ideal --
+ * N times its own one-person speed -- dashed beside it. The people go on a
+ * number line, so 4 sits twice as far out as 2 and the ideal is straight;
+ * spaced as categories, 1, 2 and 4 bent it.
+ */
+const CrowdChart = memo(function CrowdChart({ runs: all }: { runs: RunView[] }) {
+  const [ref, width] = useWidth();
+  const runs = activeRuns(all);
+  const data = useSteady(useMemo(() => {
     const streams = [...new Set(runs.flatMap((v) => streamRows(v.results).map((s) => s.streams)))].sort((a, b) => a - b);
     return streams.map((n) => {
-      const row: Record<string, string | number | undefined> = { x: `${n} 路` };
+      const row: Record<string, number | undefined> = { n };
       for (const v of runs) {
         const rows = streamRows(v.results);
-        const s = rows.find((r) => r.streams === n);
         const one = rows.find((r) => r.streams === 1);
-        row[`a${v.key}`] = s?.total;
+        row[`a${v.key}`] = rows.find((r) => r.streams === n)?.total;
         row[`i${v.key}`] = one ? one.decode * n : undefined;
       }
       return row;
     });
-  }, [runs]);
+  }, [runs]));
   if (data.length < 2) return null;
-  const axis = niceAxis(data.flatMap((row) => runs.flatMap((v) => [row[`a${v.key}`], row[`i${v.key}`]] as (number | undefined)[])));
+  const people = data.map((row) => row.n as number);
+  const axis = niceAxis(data.flatMap((row) => runs.flatMap((v) => [row[`a${v.key}`], row[`i${v.key}`]])));
+  const top = axis.ticks[axis.ticks.length - 1];
+  // Taller when the block gives it the whole width, so it is not a strip.
+  const height = width > 720 ? 210 : 170;
   const last = data.length - 1;
+  const shifts = endOffsets(runs.map((v) => ({ key: v.key, value: data[last][`a${v.key}`] })), top, height - 14 - 22);
   return (
-    <div>
-      <ResponsiveContainer width="100%" height={CHART_H} debounce={250}>
-        <LineChart data={data} margin={{ top: 14, right: 40, left: 0, bottom: 0 }}>
+    <div ref={ref}>
+      <Text type="secondary" style={{ fontSize: 11 }}>總吞吐 tok/s，依同時使用的人數</Text>
+      <ResponsiveContainer width="100%" height={height} debounce={250}>
+        <LineChart data={data} margin={CHART_MARGIN}>
           <CartesianGrid stroke={LINE.faint} vertical={false} />
-          <XAxis dataKey="x" stroke={LINE.soft} tick={{ ...AXIS_TICK, fill: 'rgba(255,255,255,0.65)' }} tickLine={false} height={22} />
+          <XAxis dataKey="n" type="number" domain={[people[0], people[people.length - 1]]} ticks={people}
+                 tickFormatter={(n: number) => `${n} 人`} padding={{ left: 10, right: 10 }}
+                 stroke={LINE.soft} tick={X_TICK} tickLine={false} height={22} />
           <YAxis stroke={LINE.soft} tick={AXIS_TICK} tickLine={false} width={40}
-                 domain={[0, axis.ticks[axis.ticks.length - 1]]} ticks={axis.ticks} tickFormatter={axis.label} />
+                 domain={[0, top]} ticks={axis.ticks} tickFormatter={axis.label} />
           <ChartTooltip
-            cursor={{ stroke: LINE.strong, strokeWidth: 1 }}
+            cursor={CURSOR}
             content={({ active, label, payload }) => {
               if (!active || !payload?.length) return null;
               const row = payload[0]?.payload as Record<string, number | undefined>;
-              return tooltipBox(`${label}・總吞吐`, runs.map((v) => ({
+              return tooltipBox(`${label} 人同時・總吞吐`, runs.map((v) => ({
                 key: v.key, colour: colour(v.mark),
                 value: row[`a${v.key}`] !== undefined ? `${fmtTps(row[`a${v.key}`])} tok/s` : '—',
                 label: `${runs.length > 1 ? `${RUN_MARKS[v.mark]?.letter} ` : ''}理想 ${fmtTps(row[`i${v.key}`])}`,
@@ -255,7 +313,7 @@ function CrowdChart({ runs: all }: { runs: RunView[] }) {
             }}
           />
           {runs.map((v) => (
-            <Line key={`i${v.key}`} dataKey={`i${v.key}`} stroke={colour(v.mark)} strokeOpacity={0.5}
+            <Line key={`i${v.key}`} dataKey={`i${v.key}`} stroke={colour(v.mark)} strokeOpacity={0.45}
                   strokeDasharray="4 4" strokeWidth={1.5} dot={false} activeDot={false}
                   {...LINE_MOTION} connectNulls />
           ))}
@@ -265,17 +323,7 @@ function CrowdChart({ runs: all }: { runs: RunView[] }) {
                   dot={{ r: 4, fill: colour(v.mark), stroke: SURFACE.card, strokeWidth: 2 }}
                   activeDot={{ r: 5, fill: colour(v.mark), stroke: SURFACE.card, strokeWidth: 2 }}
                   {...LINE_MOTION} connectNulls>
-              {/* The endpoint only, and only for one run: several runs' endpoints
-                  collide, and their figures are in the lines above. */}
-              <LabelList dataKey={`a${v.key}`} content={(p) => {
-                const { x, y, value, index } = p as { x?: number; y?: number; value?: number; index?: number };
-                if (runs.length > 1 || index !== last || value === undefined || x === undefined || y === undefined) return null;
-                return (
-                  <text x={Number(x) + 8} y={Number(y) + 4} fill="rgba(255,255,255,0.85)" fontSize={11} fontFamily={MONO}>
-                    {fmtTps(value)}
-                  </text>
-                );
-              }} />
+              <LabelList dataKey={`a${v.key}`} content={endLabel(last, shifts[v.key] ?? 0)} />
             </Line>
           ))}
         </LineChart>
@@ -283,45 +331,48 @@ function CrowdChart({ runs: all }: { runs: RunView[] }) {
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 4 }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <svg width="18" height="6"><line x1="0" y1="3" x2="18" y2="3" stroke="rgba(255,255,255,0.75)" strokeWidth="2" /></svg>
-          <Text type="secondary" style={{ fontSize: 11 }}>實際總吞吐 tok/s</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>實際總吞吐</Text>
         </span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <svg width="18" height="6"><line x1="0" y1="3" x2="18" y2="3" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" strokeDasharray="4 4" /></svg>
-          <Text type="secondary" style={{ fontSize: 11 }}>理想：N × 單人速度</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>理想：人數 × 1 人時的速度</Text>
         </span>
       </div>
     </div>
   );
-}
+});
 
 // --- 長文 -------------------------------------------------------------------
 
 /** Decode against context depth, one line per run that measured more than
  *  one depth; the first-token wait at each depth is in the table beside it
  *  rather than on a second axis. */
-function LongChart({ runs: all }: { runs: RunView[] }) {
-  const runs = useMemo(() => activeRuns(all), [all]);
-  const deep = useMemo(() => runs.filter((v) => depthRows(v.results).length > 1), [runs]);
-  const data = useMemo(() => DEPTH_TESTS
+const LongChart = memo(function LongChart({ runs: all }: { runs: RunView[] }) {
+  const runs = activeRuns(all);
+  const deep = runs.filter((v) => depthRows(v.results).length > 1);
+  const data = useSteady(useMemo(() => DEPTH_TESTS
     .filter((d) => deep.some((v) => find(v.results, d.id)))
     .map((d) => {
       const row: Record<string, string | number | undefined> = { x: d.short };
       for (const v of deep) row[`d${v.key}`] = find(v.results, d.id)?.gen_tps;
       return row;
-    }), [deep]);
+    }), [deep]));
   const axis = niceAxis(data.flatMap((row) => deep.map((v) => row[`d${v.key}`] as number | undefined)));
+  const top = axis.ticks[axis.ticks.length - 1];
+  const height = CHART_H - 10;
   const last = data.length - 1;
+  const shifts = endOffsets(deep.map((v) => ({ key: v.key, value: data[last]?.[`d${v.key}`] as number | undefined })), top, height - 14 - 22);
   return (
     <div>
       <Text type="secondary" style={{ fontSize: 11 }}>Decode tok/s，依上下文長度</Text>
-      <ResponsiveContainer width="100%" height={CHART_H - 30} debounce={250}>
-        <LineChart data={data} margin={{ top: 14, right: 40, left: 0, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={height} debounce={250}>
+        <LineChart data={data} margin={CHART_MARGIN}>
           <CartesianGrid stroke={LINE.faint} vertical={false} />
-          <XAxis dataKey="x" stroke={LINE.soft} tick={{ ...AXIS_TICK, fill: 'rgba(255,255,255,0.65)' }} tickLine={false} height={22} />
+          <XAxis dataKey="x" stroke={LINE.soft} tick={X_TICK} tickLine={false} height={22} />
           <YAxis stroke={LINE.soft} tick={AXIS_TICK} tickLine={false} width={40}
-                 domain={[0, axis.ticks[axis.ticks.length - 1]]} ticks={axis.ticks} tickFormatter={axis.label} />
+                 domain={[0, top]} ticks={axis.ticks} tickFormatter={axis.label} />
           <ChartTooltip
-            cursor={{ stroke: LINE.strong, strokeWidth: 1 }}
+            cursor={CURSOR}
             content={({ active, label, payload }) => {
               if (!active || !payload?.length) return null;
               const row = payload[0]?.payload as Record<string, number | undefined>;
@@ -341,22 +392,14 @@ function LongChart({ runs: all }: { runs: RunView[] }) {
                   dot={{ r: 4, fill: colour(v.mark), stroke: SURFACE.card, strokeWidth: 2 }}
                   activeDot={{ r: 5, fill: colour(v.mark), stroke: SURFACE.card, strokeWidth: 2 }}
                   {...LINE_MOTION} connectNulls>
-              <LabelList dataKey={`d${v.key}`} content={(p) => {
-                const { x, y, value, index } = p as { x?: number; y?: number; value?: number; index?: number };
-                if (runs.length > 1 || index !== last || value === undefined || x === undefined || y === undefined) return null;
-                return (
-                  <text x={Number(x) + 8} y={Number(y) + 4} fill="rgba(255,255,255,0.85)" fontSize={11} fontFamily={MONO}>
-                    {fmtTps(value)}
-                  </text>
-                );
-              }} />
+              <LabelList dataKey={`d${v.key}`} content={endLabel(last, shifts[v.key] ?? 0)} />
             </Line>
           ))}
         </LineChart>
       </ResponsiveContainer>
     </div>
   );
-}
+});
 
 // --- 內容類型 ---------------------------------------------------------------
 
@@ -403,15 +446,18 @@ function ContentChart({ runs }: { runs: RunView[] }) {
  * numbers -- the table that used to be one long one at the foot of the
  * page, cut into the four places it is read.
  */
-function Block({ title, question, empty, headlines, verdicts, chart, table, columns = 0 }: {
-  title: string; question: string; empty?: string;
+function Block({ title, question, empty, headlines, verdicts, chart, table, columns = 0, stack, runs }: {
+  title: string; question: string; empty?: string; runs: RunView[];
   headlines?: React.ReactNode; verdicts?: React.ReactNode; chart?: React.ReactNode; table?: React.ReactNode;
   /** How many figure columns the table has; past six it takes the full
    *  width under the chart rather than being cut off beside it. */
   columns?: number;
+  /** The table under the chart however wide the block is: a one-row table
+   *  beside a short chart left half the card empty. */
+  stack?: boolean;
 }) {
   const [ref, width] = useWidth();
-  const side = width >= 860 && columns <= 6;
+  const side = !stack && width >= 860 && columns <= 6;
   return (
     <Card
       size="small"
@@ -432,7 +478,12 @@ function Block({ title, question, empty, headlines, verdicts, chart, table, colu
               gridTemplateColumns: side ? 'minmax(0, 5fr) minmax(0, 6fr)' : 'minmax(0, 1fr)',
             }}>
               <div style={{ minWidth: 0 }}>{chart}</div>
-              <div style={{ minWidth: 0 }}>{table}</div>
+              {/* Keyed on how many runs are compared, not which: a run read
+                  in another's place changes the numbers in place, while a
+                  table that gains or loses columns fades in. */}
+              <div key={activeRuns(runs).length} className="bn-fade" style={{ minWidth: 0 }}>
+                {table}
+              </div>
             </div>
           </>
         )}
@@ -446,20 +497,33 @@ const base1k = (v: RunView) => find(v.results, 'depth-1k') ?? find(v.results, 'c
 const sec2 = (v: number) => (v < 10 ? v.toFixed(2) : v.toFixed(1));
 
 function ChatBlock({ runs }: { runs: RunView[] }) {
-  const measures: RowMeasure<BenchCaseResult>[] = [
-    { key: 'ttft', label: <ColTitle en="TTFT" unit="秒" zh="首字延遲" tip={TERMS.ttft} />,
+  // One condition, one row, its figures across -- the other three blocks'
+  // tables turned the same way -- under the timeline rather than beside it.
+  const lines: TableLine<BenchCaseResult>[] = [{
+    key: '1k',
+    label: (
+      <span style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.3 }}>
+        <span>1 人・1k</span>
+        <Text type="secondary" style={{ fontSize: 10, fontFamily: MONO }}>{testName(DEPTH_TESTS[0].pp)}</Text>
+      </span>
+    ),
+    pick: base1k,
+  }];
+  const measures: Measure<BenchCaseResult>[] = [
+    { key: 'ttft', title: <ColTitle en="TTFT" unit="秒" zh="首字延遲" tip={TERMS.ttft} />,
       value: (r) => r.ttft_ms / 1000, text: sec2, better: 'lower' },
-    { key: 'pp', label: <ColTitle en="Prefill" unit="tok/s" zh="讀入提示" tip={TERMS.prefill} />,
+    { key: 'pp', title: <ColTitle en="Prefill" unit="tok/s" zh="讀入提示" tip={TERMS.prefill} />,
       value: (r) => r.prompt_tps, text: fmtPromptTps, better: 'higher' },
-    { key: 'tg', label: <ColTitle en="Decode" unit="tok/s" zh="生成速度" tip={TERMS.decode} />,
+    { key: 'tg', title: <ColTitle en="Decode" unit="tok/s" zh="生成速度" tip={TERMS.decode} />,
       value: (r) => r.gen_tps, text: fmtTps, better: 'higher' },
-    { key: 'tpot', label: <ColTitle en="TPOT" unit="ms" zh="每個 token" tip="開始生成之後，平均每個 token 花幾毫秒，等於 1000 ÷ Decode。" />,
+    { key: 'tpot', title: <ColTitle en="TPOT" unit="ms" zh="每個 token" tip="開始生成之後，平均每個 token 花幾毫秒，等於 1000 ÷ Decode。" />,
       value: (r) => tpot(r), text: fmtTps, better: 'lower' },
-    { key: 'answer', label: <ColTitle en="Answer" unit="秒" zh={`一段 ${ANSWER_TOKENS} token 的回答`} />,
+    { key: 'answer', title: <ColTitle en="Answer" unit="秒" zh={`${ANSWER_TOKENS} token 回答`} tip={`等第一個字的時間，加上生成 ${ANSWER_TOKENS} token 的時間。`} />,
       value: (r) => answerSeconds({ decode: r.gen_tps, ttft: r.ttft_ms })?.total, text: (v) => v.toFixed(1), better: 'lower' },
   ];
   return (
     <Block
+      runs={runs}
       title="單人對話" question="一個人聊天時，回覆快不快？"
       empty={runs.some((v) => base1k(v)) ? undefined : '這次沒有量 1k 單人。'}
       headlines={<Headlines runs={runs} figures={(v) => {
@@ -471,12 +535,14 @@ function ChatBlock({ runs }: { runs: RunView[] }) {
       }} />}
       verdicts={<Verdicts runs={runs} say={(v) => chatVerdict(headline(v.results))} />}
       chart={<AnswerTimeline runs={runs} />}
-      table={<FigureTable runs={runs} measures={measures} pick={base1k} />}
+      stack
+      table={<CompareTable runs={runs} lines={lines} measures={measures}
+                           labelTitle={<ColTitle en="Test" zh="測試" tip={TERMS.depth} />} />}
     />
   );
 }
 
-const QUICK_ONLY = '快速檔只測 1k。用完整檔跑一次，才看得到上下文變長後慢多少。';
+const QUICK_ONLY = '這次只測了 1k。用完整檔，或自訂勾選更長的上下文，才看得到上下文變長後慢多少。';
 
 function LongBlock({ runs }: { runs: RunView[] }) {
   const any = runs.some((v) => depthRows(v.results).length > 1);
@@ -502,6 +568,7 @@ function LongBlock({ runs }: { runs: RunView[] }) {
   ];
   return (
     <Block
+      runs={runs}
       title="長文" question="貼進很長的文件、或對話拉得很長時，會慢多少？"
       empty={any ? undefined : QUICK_ONLY}
       headlines={<Headlines runs={runs} figures={(v) => {
@@ -543,8 +610,9 @@ function CrowdBlock({ runs }: { runs: RunView[] }) {
   ];
   return (
     <Block
+      runs={runs}
       title="多人同時" question="幾個人同時用，會不會互相拖慢？"
-      empty={any ? undefined : '這次沒有量多路。'}
+      empty={any ? undefined : '這次沒有量多人同時。'}
       headlines={<Headlines runs={runs} figures={(v) => {
         const top = topStreams(v.results);
         if (!top) return [{ value: '', unit: '', label: '沒有量多路' }];
@@ -567,7 +635,8 @@ function CrowdBlock({ runs }: { runs: RunView[] }) {
 interface ContentLine { rate: number; accept?: number; vsZh?: number }
 
 function ContentBlock({ runs }: { runs: RunView[] }) {
-  const any = runs.some((v) => contentRows(v.results).length > 0);
+  // English alone is the base every run has; the block compares contents.
+  const any = runs.some((v) => contentRows(v.results).length > 1);
   const pick = (id: string) => (v: RunView): ContentLine | undefined => {
     const rows = contentRows(v.results);
     const c = rows.find((x) => x.id === id);
@@ -593,6 +662,7 @@ function ContentBlock({ runs }: { runs: RunView[] }) {
   ];
   return (
     <Block
+      runs={runs}
       title="內容類型" question="中文、英文、程式碼，哪一種生成最快？"
       empty={any ? undefined : '這次沒有量內容類型。'}
       headlines={<Headlines runs={runs} figures={(v) => {
