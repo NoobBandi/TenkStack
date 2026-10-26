@@ -121,6 +121,8 @@ func TestAuthorization(t *testing.T) {
 		{"DELETE", "/api/settings/huggingface"},
 		{"GET", "/api/search/service"},
 		{"POST", "/api/search/restart"},
+		{"POST", "/api/sandbox/build"},
+		{"DELETE", "/api/sandbox"},
 		// A benchmark unloads other people's models and pauses /v1 (D29).
 		{"GET", "/api/bench/plan?model=m&tier=quick"},
 		{"POST", "/api/bench/run"},

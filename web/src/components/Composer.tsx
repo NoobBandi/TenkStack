@@ -67,6 +67,10 @@ interface Props {
    *  and the button would promise something that never happens. */
   agent: boolean;
   onAgentChange: (on: boolean) => void;
+  /** Where the agent's Python runs: a container on the server, or Pyodide in
+   *  this browser. Named in the tooltip because the two differ in what a
+   *  person gets -- files to download and state that lasts, or neither. */
+  pythonOnServer?: boolean;
   onToggleHistory: () => void;
   historyOpen: boolean;
 }
@@ -75,7 +79,8 @@ export default function Composer({
   value, onChange, onSend, onStop, streaming, disabled, placeholder,
   capabilities, images, onImagesChange,
   models, model, onModelChange, onClear, canClear,
-  onToggleSettings, settingsOpen, agent, onAgentChange, onToggleHistory, historyOpen,
+  onToggleSettings, settingsOpen, agent, onAgentChange, pythonOnServer,
+  onToggleHistory, historyOpen,
 }: Props) {
   const { message: toast } = AntApp.useApp();
   const filePicker = useRef<HTMLInputElement>(null);
@@ -230,9 +235,17 @@ export default function Composer({
           />
 
           {capabilities?.tools && (
-            <Tooltip title={agent
-              ? 'Agent 已開啟：模型可以自己寫 Python 執行、讀結果，再決定下一步'
-              : '開啟 Agent：讓模型能寫 Python 執行來回答需要計算的問題'}>
+            <Tooltip title={<>
+              {agent
+                ? 'Agent 已開啟：模型可以自己寫 Python 執行、讀結果，再決定下一步'
+                : '開啟 Agent：讓模型能寫 Python 執行來回答需要計算的問題'}
+              <br />
+              <span style={{ opacity: 0.7 }}>
+                {pythonOnServer
+                  ? 'Python 在伺服器上的隔離容器執行，產生的檔案可以下載'
+                  : 'Python 在這個瀏覽器裡執行（Pyodide）'}
+              </span>
+            </>}>
               {/* Named rather than iconic. This is the one control here that
                   changes what a reply costs and how long it takes, and a bare
                   glyph makes that a guess. */}

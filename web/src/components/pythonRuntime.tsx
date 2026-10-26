@@ -60,6 +60,15 @@ export interface RunResult {
   elapsed_ms: number;
   timed_out: boolean;
   truncated: boolean;
+  /** The rest are only ever set by the server sandbox, and optional so that a
+   *  Pyodide result -- and every conversation saved before there was a server
+   *  sandbox -- is still a RunResult. */
+  /** Files the call created or changed in the working directory. */
+  files?: { path: string; size: number }[];
+  /** The call hit the time limit and was interrupted; its variables survive. */
+  interrupted?: boolean;
+  /** The environment was (re)started for this call: earlier state is gone. */
+  reset?: boolean;
 }
 
 /**

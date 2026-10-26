@@ -58,13 +58,15 @@ var allowed = map[string][]string{
 	"images":           {},
 	"visioncache":      {"store"},
 	"search":           {"api"},
-	"catalog":          {"api", "locations", "hfmodel"},
-	"files":            {"api"},
-	"comfy":            {"api", "vendors"},
-	"network":          {"api"},
-	"versions":         {"api"},
-	"release":          {"api"},
-	"quant":            {"api", "vendors", "providers"},
+	// The agent's Python: builds its image, runs a container per conversation.
+	"sandbox":  {"api"},
+	"catalog":  {"api", "locations", "hfmodel"},
+	"files":    {"api"},
+	"comfy":    {"api", "vendors"},
+	"network":  {"api"},
+	"versions": {"api"},
+	"release":  {"api"},
+	"quant":    {"api", "vendors", "providers"},
 	// A launch command read into a benchmark run's parameters (schema.Tuning).
 	"tuning": {"schema"},
 	// The machine, a model's files and its engine as a benchmark run names them.
@@ -79,7 +81,7 @@ var allowed = map[string][]string{
 
 	// The HTTP surface may reach every domain package.
 	"httpapi": {"api", "paths", "locations", "ports", "vendors", "providers", "auth", "users", "settings", "system", "gpu", "gpuhistory",
-		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store", "schema", "bench", "profile", "tuning", "registry"},
+		"journal", "activity", "llamaswap", "hftoken", "containers", "containerhistory", "backends", "flags", "gguf", "channels", "network", "versions", "comfy", "blobs", "chats", "images", "visioncache", "search", "catalog", "files", "release", "quant", "store", "schema", "bench", "profile", "tuning", "registry", "sandbox"},
 	"boundary": {},
 }
 

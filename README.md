@@ -274,6 +274,20 @@ nothing by being readable from anywhere. Messages from a frame are checked with
 `event.source === frame.contentWindow`, never `event.origin`, which is `"null"`
 for any sandboxed frame including a hostile one.
 
+**The agent's Python runs on the server when it can, under gVisor.** Each
+conversation gets a container started with `--runtime=runsc`, no network, no
+mounts, a read-only root, two size-capped tmpfs and a memory, CPU and process
+limit; the code travels on stdin to a kernel inside it, never into docker's
+arguments. gVisor is the boundary: its sentry answers the system calls itself,
+so the host kernel -- which also holds the GPUs and every model -- is not what
+generated code talks to. The kernel keeps one namespace for the conversation,
+so variables and files survive between calls; a call past the time limit gets
+SIGINT and keeps them, and only one that ignores it costs the container.
+Without runsc nothing runs on the server at all and the chat falls back to
+Pyodide in the browser: the plain Docker runtime is not offered as a weaker
+alternative. The image is built here from `internal/sandbox/image`, tagged by a
+hash of those files, from 設定 → 對話 → Python 沙箱.
+
 **The documents injected into those frames are checked before every build.**
 They are template literals, so an escape written the ordinary way arrives
 changed: `\b` became a backspace inside a regex, and a joined `\n` became a real

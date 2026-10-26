@@ -48,6 +48,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/quant"
 	"github.com/NoobBandi/TenkStack/internal/registry"
 	"github.com/NoobBandi/TenkStack/internal/release"
+	"github.com/NoobBandi/TenkStack/internal/sandbox"
 	"github.com/NoobBandi/TenkStack/internal/search"
 	"github.com/NoobBandi/TenkStack/internal/settings"
 	"github.com/NoobBandi/TenkStack/internal/setup"
@@ -154,11 +155,14 @@ func main() {
 		Channels:     gateway,
 		ComfyProbe: comfy.NewProbe(portTable.ComfyPorts(), portTable.ComfyPublicFirst-portTable.ComfyFirst,
 			network.PortOpen, docker),
-		Comfy:   comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
-		Chats:   chatStore,
-		Blobs:   blobStore,
-		Vision:  vision,
-		Search:  search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
+		Comfy:  comfy.NewManager(docker, gateway, portTable.ComfyPorts(), layout.ComfyDir, containers.BusKey),
+		Chats:  chatStore,
+		Blobs:  blobStore,
+		Vision: vision,
+		Search: search.New(envOr("CONSOLE_SEARXNG_URL", "http://127.0.0.1:8090")),
+		Sandbox: sandbox.New(filepath.Join(layout.StateDir, "sandbox"), func() (time.Duration, int64) {
+			return time.Duration(prefs.Get("sandbox_timeout_s")) * time.Second, prefs.Get("sandbox_memory_gib")
+		}),
 		Catalog: catalogWithToken(catalog.New(models), hfToken),
 		Files: &files.Files{ComfyDir: layout.ComfyDir, StateDir: layout.StateDir, Home: home,
 			Roots: os.Getenv("CONSOLE_FILE_ROOTS"), ExtraDeny: os.Getenv("CONSOLE_FILE_DENY")},
@@ -258,6 +262,7 @@ func main() {
 	logs.Start(ctx)
 	defer logs.Stop()
 	go srv.WatchComfyIdle(ctx)
+	go srv.Sandbox.Watch(ctx)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -300,6 +300,95 @@ export interface SearchService {
 }
 export const fetchSearchService = () => get<SearchService>('/search/service');
 export const restartSearch = () => send<{ ok: boolean }>('/search/restart', 'POST', {});
+
+// ---------------------------------------------------------------------------
+// Python sandbox
+//
+// The agent's run_python, on the server: one container per conversation under
+// gVisor, no network, a real CPython that keeps its variables between calls.
+// When it is not ready -- no runsc, no image yet -- the chat falls back to the
+// Pyodide frame in the browser, so nothing here is required for chat to work.
+// ---------------------------------------------------------------------------
+
+export interface SandboxStatus {
+  /** gVisor (runsc) is registered with Docker. Without it there is no
+   *  isolation worth the name, and the server refuses to run anything. */
+  runtime: boolean;
+  /** `outdated`: an older image exists and still serves runs; a build
+   *  replaces it. */
+  state: 'absent' | 'building' | 'ready' | 'outdated' | 'error';
+  /** Runs go to the server: runtime present and an image usable. */
+  ready: boolean;
+  image?: string;
+  /** The tail of the build log when state is 'error'. */
+  message?: string;
+  /** Sandbox containers alive now. */
+  sessions: number;
+  /** Per-call limit, from the setting sandbox_timeout_s. */
+  timeout_s: number;
+  memory_gib: number;
+  /** A container idle this long is removed, and its state with it. */
+  idle_min: number;
+}
+
+/** A file the call created or changed in the working directory, relative
+ *  to it. */
+export interface SandboxFile {
+  path: string;
+  size: number;
+}
+
+export interface SandboxRun {
+  stdout: string;
+  stderr: string;
+  value: string | null;
+  error: string | null;
+  images: string[];
+  elapsed_ms: number;
+  timed_out: boolean;
+  truncated: boolean;
+  files: SandboxFile[];
+  /** Hit the time limit and was interrupted; the kernel and its variables
+   *  are still there. */
+  interrupted: boolean;
+  /** The environment had to be (re)started, so earlier variables are gone. */
+  reset: boolean;
+}
+
+export const fetchSandbox = () => get<SandboxStatus>('/sandbox');
+export const buildSandbox = () => send<SandboxStatus>('/sandbox/build', 'POST', {});
+export const removeSandbox = () => send<SandboxStatus>('/sandbox', 'DELETE');
+
+/**
+ * One call into a conversation's sandbox.
+ *
+ * Its own fetch rather than `send`, for the signal: stopping the chat aborts
+ * the request, and the backend takes a cancelled request as the order to
+ * interrupt the code. Without that a stopped answer would leave a loop
+ * spinning in the container until the time limit.
+ */
+export async function sandboxRun(
+  session: string, code: string, signal?: AbortSignal,
+): Promise<SandboxRun> {
+  const path = '/sandbox/run';
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session, code }),
+    signal,
+  });
+  if (!res.ok) throw new Error(await failure(res, path));
+  return res.json() as Promise<SandboxRun>;
+}
+
+export const sandboxReset = (session: string) =>
+  send<{ ok: boolean }>('/sandbox/reset', 'POST', { session });
+
+/** A link rather than a fetch: the server sends it as an attachment, and the
+ *  browser's own download takes the name it gives. It can 404 once the
+ *  container idled out -- the file lived only there. */
+export const sandboxFileUrl = (session: string, path: string) =>
+  `${BASE}/sandbox/file?session=${encodeURIComponent(session)}&path=${encodeURIComponent(path)}`;
 export const fetchModels = () => get<ModelInfo[]>('/models');
 /** The model id of the most recent request, or null on a box with no history.
  *  For naming a model in a config file when none is loaded. */

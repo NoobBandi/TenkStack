@@ -4,7 +4,7 @@ import {
   Tooltip, Typography,
 } from 'antd';
 import {
-  CopyOutlined, DownOutlined, RedoOutlined, ReloadOutlined, SlidersOutlined,
+  CopyOutlined, DownOutlined, FileOutlined, RedoOutlined, ReloadOutlined, SlidersOutlined,
 } from '@ant-design/icons';
 import Composer from '../components/Composer';
 import ChatSettings from '../components/ChatSettings';
@@ -14,7 +14,9 @@ import ChatHistory from '../components/ChatHistory';
 import Markdown, { lastVisualBlock, splitCode } from '../components/Markdown';
 import Trace from '../components/Trace';
 import { useStream } from '../stream';
-import { foldExchanges, useChat, type Turn } from '../chat';
+import { foldExchanges, useChat, type ExchangeFile, type Turn } from '../chat';
+import { sandboxFileUrl } from '../api';
+import { bytes } from '../components/files/kit';
 import { LINE, MONO } from '../theme';
 import { useNarrow } from '../components/Sidebar';
 import { benchActive, pauseMessage, useBenchStatus } from '../benchState';
@@ -105,6 +107,47 @@ function TurnStats({ turn }: { turn: Turn }) {
   );
 }
 
+/**
+ * The files a run wrote, as downloads under the answer.
+ *
+ * Plain links: the server sends each as an attachment, so the browser's own
+ * download names it. The file lives in the conversation's container, which is
+ * removed once it idles out -- an old conversation's link then 404s, and the
+ * server's answer says why. Saying so on every chip in advance would be noise
+ * for the common case of downloading it now.
+ */
+function FileChips({ files }: { files: ExchangeFile[] }) {
+  if (!files.length) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+      {files.map((file) => {
+        const name = file.path.split('/').pop() || file.path;
+        return (
+          <Tooltip key={`${file.session}/${file.path}`} title={`下載 ${file.path}`}>
+            <a
+              href={sandboxFileUrl(file.session, file.path)}
+              download={name}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, maxWidth: '100%',
+                padding: '3px 10px', borderRadius: 6, border: `1px solid ${LINE.soft}`,
+                background: 'rgba(255,255,255,0.03)', color: 'inherit', fontSize: 12,
+              }}
+            >
+              <FileOutlined style={{ opacity: 0.55 }} />
+              <span style={{
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+              }}>{name}</span>
+              <span style={{ opacity: 0.45, fontFamily: MONO, fontSize: 11, flex: 'none' }}>
+                {bytes(file.size)}
+              </span>
+            </a>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
 function ChatInner() {
   const { message: toast } = AntApp.useApp();
   const { models } = useStream();
@@ -114,7 +157,7 @@ function ChatInner() {
   const paused = benchActive(bench);
   const {
     model, setModel, seedParams, turns, draft, setDraft, images, setImages,
-    params, setParams, streaming, agent, setAgent, step,
+    params, setParams, streaming, agent, setAgent, sandboxStatus, step,
     streamStartedAt, conversationId, historyKey,
     send, stop, regenerate, openConversation, newConversation, error, clearError,
   } = useChat();
@@ -541,6 +584,7 @@ function ChatInner() {
                             }}
                           />
                         ))}
+                        <FileChips files={exchange.files} />
 
                         {tracing && !exchange.steps.length && (
                           <Space size={8}>
@@ -613,6 +657,7 @@ function ChatInner() {
             canClear={turns.length > 0 && !streaming}
             agent={agent}
             onAgentChange={setAgent}
+            pythonOnServer={!!sandboxStatus?.ready}
             onToggleSettings={() => setShowSettings((v) => !v)}
             settingsOpen={showSettings}
             onToggleHistory={() => setShowHistory((v) => !v)}

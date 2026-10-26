@@ -11,12 +11,13 @@ import LocationForm from '../components/LocationForm';
 import { Panel, Row } from '../components/Panel';
 import { bytes } from '../components/files/kit';
 import {
-  addModelLocation, clearHuggingFace, fetchConfig, fetchHuggingFace, fetchMachine,
-  fetchModelLocations, fetchSearchService, fetchSettings, locationName, removeModelLocation,
+  addModelLocation, buildSandbox, clearHuggingFace, fetchConfig, fetchHuggingFace, fetchMachine,
+  fetchModelLocations, fetchSandbox, fetchSearchService, fetchSettings, locationName,
+  removeModelLocation, removeSandbox,
   restartSearch, saveConfigRaw, saveHuggingFace, saveSettings, setModelLocationDefaults,
   updateModelLocation,
   type HuggingFaceToken, type MachinePath, type MachineUnit, type ModelFormat, type ModelLocations,
-  type SearchService, type Setting,
+  type SandboxStatus, type SearchService, type Setting,
 } from '../api';
 import { useIsOwner } from '../identity';
 import { ACCENT, LINE, MONO, SURFACE } from '../theme';
@@ -528,6 +529,121 @@ function SearchServiceRow() {
   );
 }
 
+/**
+ * Where the agent's Python runs, and the image that decides it.
+ *
+ * Beside search for the same reason search is here: when the sandbox is not
+ * usable the chat does not fail, it quietly runs Python in the browser
+ * instead -- no files, no state between calls -- and the only place that
+ * difference is said out loud is this row.
+ *
+ * A build takes minutes and runs on the server whether or not this page stays
+ * open, so the row polls while it lasts rather than waiting on the request.
+ */
+function SandboxRow() {
+  const { message } = AntApp.useApp();
+  const admin = useIsOwner();
+  const [box, setBox] = useState<SandboxStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(() => {
+    fetchSandbox().then(setBox).catch(() => setBox(null));
+  }, []);
+  useEffect(load, [load]);
+
+  const building = box?.state === 'building';
+  useEffect(() => {
+    if (!building) return undefined;
+    const timer = window.setInterval(load, 3000);
+    return () => window.clearInterval(timer);
+  }, [building, load]);
+
+  const act = async (what: () => Promise<SandboxStatus>, done?: string) => {
+    setBusy(true);
+    try {
+      setBox(await what());
+      if (done) message.success(done);
+    } catch (error) {
+      message.error((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!box) return null;
+  const tagStyle = { marginInlineEnd: 0 };
+  const tag = !box.runtime ? <Tag color="warning" style={tagStyle}>沒有 gVisor</Tag>
+    : box.state === 'building' ? <Tag icon={<LoadingOutlined />} color="processing" style={tagStyle}>建立中</Tag>
+    : box.state === 'ready' ? <Tag color="green" style={tagStyle}>可以使用</Tag>
+    : box.state === 'outdated' ? <Tag color="gold" style={tagStyle}>有新版本</Tag>
+    : box.state === 'error' ? <Tag color="error" style={tagStyle}>失敗</Tag>
+    : <Tag style={tagStyle}>未建立</Tag>;
+
+  // Said in terms of where the code goes, which is what a person deciding
+  // whether to build it needs to know -- not in terms of images and runtimes.
+  const note = box.ready
+    ? `對話的 Python 在伺服器上的隔離容器執行，沒有網路，檔案可以下載。目前 ${box.sessions} 個容器在跑`
+    : !box.runtime
+      ? '這台沒有 gVisor（runsc），對話的 Python 改在使用者的瀏覽器裡執行（Pyodide）'
+      : `${building ? '建立完成前' : box.state === 'error' ? '建立失敗，' : '還沒建立，'}`
+        + '對話的 Python 改在使用者的瀏覽器裡執行（Pyodide）';
+
+  // The image stays usable through an error or an outdated tag, so removing
+  // is offered whenever there is something to remove.
+  const removable = box.state !== 'absent' && !building;
+  return (
+    <Row
+      label="Python 沙箱"
+      note={note}
+      detail={<>
+        每個對話一個容器，用 gVisor 隔離，看不到這台機器的檔案、顯示卡與網路；
+        變數和檔案在呼叫之間保留，閒置 {box.idle_min} 分鐘後移除。
+        每次呼叫最多 {box.timeout_s} 秒、{box.memory_gib} GiB 記憶體。
+        {!box.runtime && ' 安裝 gVisor 並向 Docker 註冊 runsc 後才能建立。'}
+        {box.image && <><br />映像：<span style={{ fontFamily: MONO }}>{box.image}</span></>}
+      </>}
+      right={(
+        <>
+          {tag}
+          {admin && box.runtime && (box.state === 'absent' || box.state === 'error') && (
+            <Button size="small" loading={busy}
+                    onClick={() => void act(buildSandbox, '開始建立，需要幾分鐘')}>
+              建立
+            </Button>
+          )}
+          {admin && box.runtime && box.state === 'outdated' && (
+            <Button size="small" loading={busy}
+                    onClick={() => void act(buildSandbox, '開始更新，舊版在更新完成前照常使用')}>
+              更新
+            </Button>
+          )}
+          {admin && removable && (
+            <Popconfirm
+              title="移除 Python 沙箱？"
+              description="所有沙箱容器和映像都會刪掉，對話中的變數與檔案隨之消失；之後改在瀏覽器裡執行。"
+              okText="移除" okButtonProps={{ danger: true }} cancelText="取消"
+              onConfirm={() => act(removeSandbox, '已移除')}
+            >
+              <Button size="small" danger disabled={busy}>移除</Button>
+            </Popconfirm>
+          )}
+        </>
+      )}
+    >
+      {box.state === 'error' && box.message && (
+        <pre style={{
+          margin: 0, padding: '7px 10px', borderRadius: 4, maxHeight: 200, overflow: 'auto',
+          background: 'rgba(255,255,255,0.03)', border: `1px solid ${LINE.faint}`,
+          font: `11px/1.6 ${MONO}`, color: ACCENT.error, whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}>
+          {box.message}
+        </pre>
+      )}
+    </Row>
+  );
+}
+
 /** A plain line in the paths dialog: a name, a value, something on the right. */
 function Item({ label, value, right }: { label: React.ReactNode; value?: React.ReactNode; right?: React.ReactNode }) {
   return (
@@ -708,6 +824,8 @@ export default function Settings() {
       <Panel title="對話">
         {rows('agent_max_steps', 'vision_cache')}
         {settings !== null && <SearchServiceRow />}
+        {settings !== null && <SandboxRow />}
+        {rows('sandbox_timeout_s', 'sandbox_memory_gib')}
       </Panel>
       <Panel title="模型目錄">
         <HuggingFaceRow />

@@ -2,16 +2,16 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
 } from 'react';
 import {
-  chatStream, DEFAULT_PARAMS, fetchChat, patchChat, saveChat, searchAvailable,
-  webRead, webSearch,
-  type ModelInfo,
-  type ChatMessage, type ChatParams, type Timings, type ToolCall, type Usage,
+  chatStream, DEFAULT_PARAMS, fetchChat, fetchSandbox, patchChat, sandboxRun, saveChat,
+  searchAvailable, webRead, webSearch,
+  type ModelInfo, type SandboxStatus,
+  type ChatMessage, type ChatParams, type Timings, type ToolCall, type ToolSpec, type Usage,
 } from './api';
 import { usePythonRuntime, type RunResult } from './components/pythonRuntime';
 import type { Step } from './components/Trace';
 import {
   describeCall, describePage, describeResult, describeSearch, MAX_STEPS, parseCode,
-  SANDBOX_TOOL, SEARCH_TOOLS,
+  SANDBOX_TOOL, SEARCH_TOOLS, serverSandboxTool,
 } from './sandboxTool';
 
 /**
@@ -41,6 +41,11 @@ export interface Turn extends ChatMessage {
      *  model reads. The trace lists them as links, and a link is a thing to
      *  click rather than a string in a paragraph. */
     sources?: { title: string; url: string }[];
+    /** The server sandbox session the code ran in, absent when it ran in the
+     *  browser. Kept per turn rather than per conversation because that is
+     *  where the files it wrote live: a conversation reopened later runs in a
+     *  new session, and a link built from that one would point at nothing. */
+    session?: string;
   };
   usage?: Usage;
   timings?: Timings;
@@ -78,6 +83,16 @@ export interface Exchange {
    *  how the answer was reached -- leaving it inside a collapsed code row means
    *  the thing that was asked for is the one thing not shown. */
   figures: string[];
+  /** Files the run wrote, lifted out the same way and for the same reason:
+   *  asked for a spreadsheet, the spreadsheet is the answer. Each carries the
+   *  session it was written in, which is what its download link names. */
+  files: ExchangeFile[];
+}
+
+export interface ExchangeFile {
+  path: string;
+  size: number;
+  session: string;
 }
 
 export function foldExchanges(turns: Turn[]): Exchange[] {
@@ -86,18 +101,26 @@ export function foldExchanges(turns: Turn[]): Exchange[] {
 
   for (const turn of turns) {
     if (turn.role === 'user') {
-      current = { user: turn, steps: [], answer: null, figures: [] };
+      current = { user: turn, steps: [], answer: null, figures: [], files: [] };
       out.push(current);
       continue;
     }
     if (!current) {
-      current = { user: null, steps: [], answer: null, figures: [] };
+      current = { user: null, steps: [], answer: null, figures: [], files: [] };
       out.push(current);
     }
 
     if (turn.role === 'tool') {
       current.steps.push({ kind: 'code', text: turn.run?.code ?? '', turn });
       current.figures.push(...(turn.run?.result?.images ?? []));
+      const session = turn.run?.session ?? '';
+      for (const file of (session && turn.run?.result?.files) || []) {
+        // A file rewritten by a later step is one file, at its latest size --
+        // the link fetches whatever is there now either way.
+        const known = current.files.find((f) => f.session === session && f.path === file.path);
+        if (known) known.size = file.size;
+        else current.files.push({ path: file.path, size: file.size, session });
+      }
       continue;
     }
 
@@ -119,6 +142,28 @@ export function foldExchanges(turns: Turn[]): Exchange[] {
  */
 const FLUSH_INTERVAL_MS = 80;
 
+/** A call that never reached an interpreter, as a result the model can read. */
+function failedRun(error: string): RunResult {
+  return {
+    stdout: '', stderr: '', value: null, images: [], error,
+    elapsed_ms: 0, timed_out: false, truncated: false,
+  };
+}
+
+/**
+ * A server sandbox session id for a conversation that has none yet.
+ *
+ * Not crypto.randomUUID: that exists only in a secure context, and this
+ * console is often reached over plain http on the LAN. getRandomValues has no
+ * such restriction. The id only has to be unguessable enough not to collide
+ * with somebody else's conversation; the server checks ownership anyway.
+ */
+function freshSession(): string {
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 interface ChatState {
   model?: string;
   setModel: (id: string) => void;
@@ -138,6 +183,9 @@ interface ChatState {
    *  for somebody without their asking. */
   agent: boolean;
   setAgent: (on: boolean) => void;
+  /** The server sandbox as last probed, null until it answers. When it is
+   *  ready run_python goes there; otherwise to Pyodide in the browser. */
+  sandboxStatus: SandboxStatus | null;
   /** Which step of an agent run is in flight, 0 when none is. */
   step: number;
   /** performance.now() when the current request went out, for an elapsed
@@ -178,9 +226,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // Off by default. Offering the sandbox changes what an answer costs and how
   // long it takes, which is not something to switch on for somebody without
   // their asking.
-  const [agent, setAgent] = useState(false);
+  const [agent, setAgentState] = useState(false);
   const [step, setStep] = useState(0);
   const sandbox = usePythonRuntime();
+  // Where run_python goes. Probed on mount and again whenever the agent is
+  // switched on -- an administrator may have built or removed the image since
+  // the page loaded, and switching on is the moment it starts to matter.
+  const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null);
+  const probeSandbox = useCallback(() => {
+    fetchSandbox().then(setSandboxStatus).catch(() => setSandboxStatus(null));
+  }, []);
+  useEffect(probeSandbox, [probeSandbox]);
+  const setAgent = useCallback((on: boolean) => {
+    setAgentState(on);
+    if (on) probeSandbox();
+  }, [probeSandbox]);
+  // The container this conversation's code runs in. A ref, not state: nothing
+  // renders from it, and the agent loop reads it once per run.
+  const sessionRef = useRef(freshSession());
   // Probed once. SearXNG is a container that may not be running, and the
   // answer decides whether the search tools are offered at all.
   const [searchable, setSearchable] = useState(false);
@@ -266,7 +329,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
    */
   const streamOnce = useCallback(async (
     messages: Turn[], activeModel: string, controller: AbortController,
-    withTools: boolean,
+    pythonTool: ToolSpec | null,
   ): Promise<Turn> => {
     const startedAt = performance.now();
     setStreamStartedAt(startedAt);
@@ -307,8 +370,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Search only when the service answered. A tool that is offered and
       // then always fails is worse than one never mentioned -- the model
       // spends a step discovering it and often a second one retrying.
-      ...(withTools
-        ? { tools: [SANDBOX_TOOL, ...(searchable ? SEARCH_TOOLS : [])] }
+      ...(pythonTool
+        ? { tools: [pythonTool, ...(searchable ? SEARCH_TOOLS : [])] }
         : {}),
     })) {
       if ((delta.content || delta.reasoning) && ttft === undefined) {
@@ -361,6 +424,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     if (!model) return;
     const activeModel = model;
     const useTools = agent;
+    // Chosen once per run, so the description the model was given and the
+    // engine that answers it cannot disagree halfway through -- a probe that
+    // lands mid-run would otherwise switch one without the other.
+    const server = sandboxStatus?.ready ? sandboxStatus : null;
+    const session = sessionRef.current;
+    const pythonTool = !useTools ? null
+      : server ? serverSandboxTool(server) : SANDBOX_TOOL;
 
     // Save before generating: a question asked is worth keeping even if the
     // answer never arrives, and the history list should show the thread the
@@ -382,7 +452,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       for (let step = 0; step < MAX_STEPS; step += 1) {
         setStep(useTools ? step + 1 : 0);
-        const reply = await streamOnce(conversation, activeModel, controller, useTools);
+        const reply = await streamOnce(conversation, activeModel, controller, pythonTool);
         conversation = [...conversation, reply];
         last = reply;
 
@@ -455,12 +525,34 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             }
           } else {
             const parsed = parseCode(call.function.arguments);
-            result = 'error' in parsed
-              ? { stdout: '', stderr: '', value: null, images: [],
-                  error: parsed.error,
-                  elapsed_ms: 0, timed_out: false, truncated: false }
-              : await sandbox.run(parsed.code);
-            content = describeResult(result);
+            if ('error' in parsed) {
+              result = failedRun(parsed.error);
+            } else if (server) {
+              try {
+                // The run's own signal: stopping the chat cancels the request,
+                // and the server interrupts the code when it sees that.
+                result = await sandboxRun(session, parsed.code, controller.signal);
+              } catch (err) {
+                if ((err as Error).name === 'AbortError') {
+                  // Answered rather than rethrown. Throwing here would save the
+                  // conversation with this call unanswered, which is not one
+                  // that can be continued; the aborted signal ends the turn at
+                  // the next check anyway, after this reply is in the list.
+                  result = { ...failedRun('使用者停止了這次執行，程式已被中斷。'), interrupted: true };
+                } else {
+                  // Back to the model as a result, like a malformed argument:
+                  // it can say so or try again, and the turn is not lost. The
+                  // status is re-read so that a sandbox removed since the probe
+                  // sends the next question to the browser instead of failing
+                  // again.
+                  result = failedRun(`伺服器沙箱呼叫失敗：${(err as Error).message}`);
+                  probeSandbox();
+                }
+              }
+            } else {
+              result = await sandbox.run(parsed.code);
+            }
+            content = describeResult(result, server ? 'server' : 'browser');
           }
 
           // The model cannot see the loop it is running inside, so it cannot
@@ -481,6 +573,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: content + budget,
             run: {
               code: shown, tool: heading, result, sources,
+              session: result && server ? session : undefined,
               // Only for the tools whose answer is prose. A search's answer is
               // a list of links and is rendered as one.
               output: result || name === 'web_search' ? undefined : content,
@@ -512,7 +605,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }
     }
-  }, [model, agent, sandbox, streamOnce, persist, generateTitle]);
+  }, [model, agent, sandbox, sandboxStatus, probeSandbox, streamOnce, persist, generateTitle]);
 
   const send = useCallback((text?: string) => {
     const content = (text ?? draft).trim();
@@ -538,6 +631,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       idRef.current = chat.id;
       setConversationId(chat.id);
       setTurns(chat.messages as Turn[]);
+      // Derived from the id, so reopening the same conversation twice within
+      // the idle window finds the container -- and its variables -- it left.
+      sessionRef.current = `chat-${chat.id}`;
       if (chat.model) setModel((current) => chat.model || current);
       // Restore the settings the conversation was held under, defaulting
       // anything an older record does not carry. Marked as already seeded so
@@ -580,6 +676,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     idRef.current = null;
     setConversationId(null);
     setTurns([]);
+    // A new conversation gets a clean interpreter; the old container idles
+    // out on its own.
+    sessionRef.current = freshSession();
     setDraft('');
     setImages([]);
     setError(null);
@@ -587,12 +686,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo<ChatState>(() => ({
     model, setModel, seedParams, turns, draft, setDraft, images, setImages,
-    params, setParams, streaming, agent, setAgent, step,
+    params, setParams, streaming, agent, setAgent, sandboxStatus, step,
     streamStartedAt, conversationId, historyKey,
     send, stop: () => abort.current?.abort(), regenerate,
     openConversation, newConversation,
     error, clearError: () => setError(null),
-  }), [model, seedParams, turns, draft, images, params, streaming, agent, step,
+  }), [model, seedParams, turns, draft, images, params, streaming, agent, setAgent,
+    sandboxStatus, step,
     streamStartedAt,
        conversationId, historyKey,
        send, regenerate, openConversation, newConversation, error]);

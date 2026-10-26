@@ -38,6 +38,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/quant"
 	"github.com/NoobBandi/TenkStack/internal/registry"
 	"github.com/NoobBandi/TenkStack/internal/release"
+	"github.com/NoobBandi/TenkStack/internal/sandbox"
 	"github.com/NoobBandi/TenkStack/internal/search"
 	"github.com/NoobBandi/TenkStack/internal/settings"
 	"github.com/NoobBandi/TenkStack/internal/system"
@@ -75,11 +76,13 @@ type Server struct {
 	Blobs    *blobs.Store
 	Vision   *visioncache.Cache
 	Search   *search.Client
-	Catalog  *catalog.Catalog
-	Remote   *gguf.Remote
-	HFToken  *hftoken.Store
-	Files    *files.Files
-	Release  *release.Client
+	// Sandbox runs the agent's Python in a container per conversation.
+	Sandbox *sandbox.Manager
+	Catalog *catalog.Catalog
+	Remote  *gguf.Remote
+	HFToken *hftoken.Store
+	Files   *files.Files
+	Release *release.Client
 	// Bench runs the benchmark and holds /v1 while it does; nil leaves
 	// /v1 always open and the benchmark's endpoints unavailable.
 	Bench *bench.Manager
@@ -198,6 +201,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/search/available", s.webAvailable)
 	mux.HandleFunc("GET /api/search/service", s.readSearchService)
 	mux.HandleFunc("POST /api/search/restart", s.restartSearch)
+	mux.HandleFunc("GET /api/sandbox", s.readSandbox)
+	mux.HandleFunc("POST /api/sandbox/build", s.buildSandbox)
+	mux.HandleFunc("DELETE /api/sandbox", s.removeSandbox)
+	mux.HandleFunc("POST /api/sandbox/run", s.runSandbox)
+	mux.HandleFunc("POST /api/sandbox/reset", s.resetSandbox)
+	mux.HandleFunc("GET /api/sandbox/file", s.sandboxFile)
 	mux.HandleFunc("GET /api/bench/plan", s.readBenchPlan)
 	mux.HandleFunc("POST /api/bench/run", s.startBench)
 	mux.HandleFunc("GET /api/bench/status", s.readBenchStatus)

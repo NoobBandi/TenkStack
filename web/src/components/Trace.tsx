@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Typography } from 'antd';
 import type { Turn } from '../chat';
+import { sandboxFileUrl } from '../api';
+import { bytes } from './files/kit';
 import { ACCENT, LINE, MONO } from '../theme';
 import './thinking.css';
 
@@ -144,8 +146,23 @@ function Block({ label, value, tone }: { label?: string; value: string; tone?: s
 /** Everything a code step produced, shown when its row is opened. */
 function Detail({ step }: { step: Step }) {
   const result = step.turn?.run?.result;
+  const session = step.turn?.run?.session;
+  const files = result?.files ?? [];
   return (
     <div style={{ padding: '2px 6px 10px 27px' }}>
+      {/* Above the code, because each changes how the rest reads: a NameError
+          after a restart is not a bug in the code, and an interrupted run's
+          missing output is the time limit rather than the program. */}
+      {result?.reset && (
+        <Text style={{ fontSize: 11, color: ACCENT.warn, display: 'block', marginTop: 6 }}>
+          執行環境重新啟動過，之前的變數已經不在
+        </Text>
+      )}
+      {result?.interrupted && (
+        <Text style={{ fontSize: 11, color: ACCENT.warn, display: 'block', marginTop: 6 }}>
+          超過時間上限被中斷，變數仍保留
+        </Text>
+      )}
       <Block value={step.text} />
       {/* The tools that answer in prose -- a result list, a page -- put it
           here. Python has structure and gets the labelled blocks below. */}
@@ -157,12 +174,28 @@ function Detail({ step }: { step: Step }) {
         <Block label="回傳值" value={result.value} tone="#7fb8d8" />
       )}
       {/* No figures here. They are shown with the answer, where what was
-          asked for belongs, rather than inside the working that produced it. */}
+          asked for belongs, rather than inside the working that produced it.
+          Files are listed, though: which step wrote which file is part of
+          the record, even if the download is offered with the answer too. */}
+      {files.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <Text style={{ fontSize: 10, letterSpacing: 0.8, opacity: 0.4 }}>檔案</Text>
+          {files.map((file) => (
+            <div key={file.path} style={{ font: `11px/1.7 ${MONO}` }}>
+              {session
+                ? <a href={sandboxFileUrl(session, file.path)} download={file.path.split('/').pop()}>{file.path}</a>
+                : file.path}
+              <span style={{ opacity: 0.4, marginLeft: 8 }}>{bytes(file.size)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {result
         && !result.error
         && !result.stdout.trim()
         && result.value === null
-        && !result.images.length && (
+        && !result.images.length
+        && !files.length && (
         <Text style={{ fontSize: 11, opacity: 0.4, display: 'block', marginTop: 6 }}>
           沒有輸出
         </Text>
