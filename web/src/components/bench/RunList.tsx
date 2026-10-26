@@ -11,13 +11,6 @@ const { Text } = Typography;
 
 const num: React.CSSProperties = { fontFamily: MONO, fontVariantNumeric: 'tabular-nums' };
 
-/** What a page adds to each row beside the run's own facts: a tag after
- *  the date, and buttons above export and delete. */
-export interface RowExtras {
-  badge?: (row: BenchRunRow) => React.ReactNode;
-  actions?: (row: BenchRunRow) => React.ReactNode;
-}
-
 /**
  * One saved run: picked or not, the letter it wears while comparing, what
  * ran and when, its two headline numbers, and export and delete.
@@ -27,9 +20,9 @@ export interface RowExtras {
  * a comparison. A click on a second row used to add it, and somebody
  * opening another record found it set beside the last as A and B.
  */
-function RunItem({ row, checked, mark, comparing, disabled, onPick, onToggle, onDelete, extras }: {
+function RunItem({ row, checked, mark, comparing, disabled, onPick, onToggle, onDelete }: {
   row: BenchRunRow; checked: boolean; mark?: number; comparing: boolean; disabled: boolean;
-  onPick: () => void; onToggle: () => void; onDelete: () => void; extras: RowExtras;
+  onPick: () => void; onToggle: () => void; onDelete: () => void;
 }) {
   return (
     <div
@@ -61,7 +54,6 @@ function RunItem({ row, checked, mark, comparing, disabled, onPick, onToggle, on
           <Text type="secondary" style={{ fontSize: 12 }}>{row.engine}</Text>
           <Tag style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: '16px', paddingInline: 5 }}>{tierLabel(row.tier)}</Tag>
           <Text type="secondary" style={{ fontSize: 12, ...num }}>{fmtWhen(row.started_at)}</Text>
-          {extras.badge?.(row)}
         </div>
         <Text style={{ fontSize: 12, display: 'block', marginTop: 3, opacity: 0.8 }}>
           Decode <span style={num}>{fmtTps(row.gen_tps_1k)}</span> tok/s
@@ -71,7 +63,6 @@ function RunItem({ row, checked, mark, comparing, disabled, onPick, onToggle, on
       </div>
       <div style={{ display: 'flex', gap: 2, flex: 'none', alignItems: 'flex-start' }}
            onClick={(e) => e.stopPropagation()}>
-        {extras.actions?.(row)}
         <Tooltip title="匯出 JSON（不含本機路徑與啟動指令）">
           <Button size="small" type="text" icon={<DownloadOutlined />}
                   aria-label="匯出" onClick={() => exportBenchRun(row.id)} />
@@ -95,12 +86,11 @@ function RunItem({ row, checked, mark, comparing, disabled, onPick, onToggle, on
  * own and the checkboxes build a comparison of up to `max`; either applies
  * at once to the page behind, and the dialog stays open to pick again.
  */
-export default function RunsDialog({ open, onClose, rows, loading, onReload, selected, marks, max, onPick, onToggle, onDelete, extras = {} }: {
+export default function RunsDialog({ open, onClose, rows, loading, onReload, selected, marks, max, onPick, onToggle, onDelete }: {
   open: boolean; onClose: () => void;
   rows: BenchRunRow[] | null; loading: boolean; onReload: () => void;
   selected: number[]; marks: Record<number, number>; max: number;
   onPick: (id: number) => void; onToggle: (id: number) => void; onDelete: (id: number) => void;
-  extras?: RowExtras;
 }) {
   const comparing = selected.length > 1;
   return (
@@ -137,7 +127,6 @@ export default function RunsDialog({ open, onClose, rows, loading, onReload, sel
               onPick={() => onPick(row.id)}
               onToggle={() => onToggle(row.id)}
               onDelete={() => onDelete(row.id)}
-              extras={extras}
             />
           ))}
         </div>

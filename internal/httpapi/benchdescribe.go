@@ -26,7 +26,7 @@ import (
 // BenchDescriber is the console's bench.Describer: it gathers what the
 // console knows -- llama-swap's entry, the cards, /proc, the engine
 // registry, the launcher script, docker -- and lets internal/profile name
-// it the workshop's way. Every source is optional; a Server missing one
+// it the way a run records it. Every source is optional; a Server missing one
 // (as in tests) leaves those fields empty rather than failing the run.
 type BenchDescriber struct{ S *Server }
 

@@ -60,6 +60,10 @@ type Outcome struct {
 	Skipped    []string
 	ColdStartS *float64
 	Loaded     bool // the model was resident when the run began
+	// The measuring: from the end of the warmup to the last case, and the
+	// tokens generated in it, which the energy per token is reckoned on.
+	MeasuredFrom, MeasuredTo time.Time
+	Generated                int
 }
 
 // ignoreEOSEngines take ignore_eos (D24). Strata does not; it is given
@@ -80,6 +84,8 @@ type run struct {
 	dropped map[string]bool
 	base    map[string]int     // prompt ref + filler language -> prompt tokens with no filler
 	rate    map[string]float64 // filler language -> tokens per rune of filler
+
+	generated int // tokens the measured requests produced, short ones too
 }
 
 // Run warms the model up and measures every case of the choice. It stops
@@ -130,6 +136,7 @@ func (r *Runner) Run(ctx context.Context, desc Description, ch Choice, report fu
 		}
 	}
 
+	out.MeasuredFrom = time.Now()
 	measured := map[condition]schema.CaseResult{}
 	for i, c := range cases {
 		step(Step{Case: c.ID, Done: i, Message: fmt.Sprintf("正在測 %s（%d/%d）", c.ID, i+1, len(cases))})
@@ -152,6 +159,7 @@ func (r *Runner) Run(ctx context.Context, desc Description, ch Choice, report fu
 		res.CaseID = c.ID
 		out.Results = append(out.Results, res)
 	}
+	out.MeasuredTo, out.Generated = time.Now(), ru.generated
 	step(Step{Done: len(cases), Message: "測完了"})
 	if len(out.Results) == 0 {
 		return out, errors.New("每一項都沒有得到有效的成績：" + strings.Join(out.Skipped, "；"))
@@ -565,6 +573,9 @@ func (ru *run) measure(ctx context.Context, c schema.BenchCase, ch Choice, progr
 					lastErr = errs[i]
 					continue
 				}
+				// Counted before the check: a reply too short to score still
+				// drew the power the energy per token divides.
+				ru.generated += smp.completionTokens
 				if smp.completionTokens < minOut || smp.decode <= 0 {
 					lastErr = fmt.Errorf("生成長度 %d 不到目標 %d 的 %.0f%%，不計", smp.completionTokens, s.OutputTokens, s.MinOutputRatio*100)
 					continue

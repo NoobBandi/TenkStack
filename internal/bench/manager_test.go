@@ -117,8 +117,10 @@ type fakeMachine struct{ comfy bool }
 func (fakeMachine) Groups(context.Context) []Group           { return nil }
 func (fakeMachine) Names(context.Context) map[string]string  { return map[string]string{"m": "M"} }
 func (m fakeMachine) ComfyBusy(context.Context, string) bool { return m.comfy }
-func (fakeMachine) Watch(context.Context, string) func() schema.Resources {
-	return func() schema.Resources { return schema.Resources{VRAMPeakMiB: []int{1000, 2000}, RAMPeakMiB: 300} }
+func (fakeMachine) Watch(context.Context, string) func(Window) schema.Resources {
+	return func(Window) schema.Resources {
+		return schema.Resources{VRAMPeakMiB: []int{1000, 2000}, RAMPeakMiB: 300}
+	}
 }
 
 func newManager(t *testing.T, f *fakeEngine) *Manager {

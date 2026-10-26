@@ -89,8 +89,8 @@ var hfName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`)
 var hubCache = regexp.MustCompile(`(?:^|/)models--([^/]+?)--([^/]+)/snapshots/([0-9a-f]{40})(?:/(.*))?$`)
 
 // Model is the identity of the weights an entry names (raw, as ModelArg
-// returned it), as the workshop matches it (§6): GGUF by repo and file
-// (or sha256), safetensors by repo, both with the quantisation.
+// returned it), as a run records it: GGUF by repo and file, safetensors
+// by repo, both with the quantisation.
 //
 // The repo is read off the path, because the catalog downloads into
 // <location>/<owner>/<repo>/<file as the repo names it>: the first two
@@ -158,7 +158,7 @@ var shardSuffix = regexp.MustCompile(`(?i)-\d{5}-of-\d{5}$`)
 // the directory it sits in (unsloth puts a split GGUF in UD-IQ3_XXS/), else
 // what the header's file type says. The name wins over the header because
 // the header records only the base type -- every unsloth UD-Q6_K_XL file
-// says Q6_K -- and the name is what people and the workshop call it.
+// says Q6_K -- and the name is what people call it.
 func GGUFQuant(name string, fileType int) string {
 	parts := strings.Split(filepath.ToSlash(name), "/")
 	for i := len(parts) - 1; i >= 0; i-- {

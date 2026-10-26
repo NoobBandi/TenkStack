@@ -1,6 +1,5 @@
 // Package bench runs the benchmark suite (跑分) against one llama-swap model
-// and keeps the results: phase one of the parameter workshop, described in
-// §7 of tenkstack-workshop-devlog.md.
+// and keeps the results.
 package bench
 
 import (

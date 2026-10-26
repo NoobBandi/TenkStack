@@ -1,6 +1,6 @@
 // Package profile names the machine, a model's files and its engine the way
-// the parameter workshop matches them (§4 and §6 of the workshop devlog):
-// a GPU by its marketing name and the number of cards the model runs on, a
+// a benchmark run records them, so runs from different setups compare: a
+// GPU by its marketing name and the number of cards the model runs on, a
 // model by its Hugging Face repo, file and quantisation, an engine by key
 // and version.
 //
@@ -8,8 +8,7 @@
 // cards, /proc, llama-swap's config, the engine registry, docker -- is
 // fetched by the HTTP layer and handed in, so every rule here is tested
 // without hardware. Nothing machine-specific may come out: no path, host,
-// user or container name, because these values are what a run exports and
-// what the workshop will one day receive (§11).
+// user or container name, because these values are what a run exports.
 package profile
 
 import (
@@ -43,7 +42,7 @@ func clean(name string) string {
 
 var vendorBrand = map[string]string{"intel": "Intel", "nvidia": "NVIDIA", "amd": "AMD"}
 
-// NormalizeGPU is a card's model as the workshop compares it: the
+// NormalizeGPU is a card's model as runs compare it: the
 // marketing name with the trademark marks gone, the vendor's brand in
 // front exactly once, and Intel's trailing "Graphics" dropped when a model
 // number precedes it. Two tools naming one card must agree, and two cards
@@ -78,8 +77,8 @@ func NormalizeGPU(vendor, name string) string {
 }
 
 // CleanCPU is a CPU's model as /proc/cpuinfo has it, with trademark marks
-// and padding removed. The workshop only compares CPUs loosely (same or
-// different, §6), so no further normalisation is attempted.
+// and padding removed. A run only shows the CPU, it does not group runs by
+// it, so no further normalisation is attempted.
 func CleanCPU(model string) string { return clean(model) }
 
 // Hardware is the profile of the cards a model runs on (see CardsUsed),

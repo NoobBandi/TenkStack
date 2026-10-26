@@ -68,9 +68,9 @@ func selected(variable, value string) (ordinals []int, n int, all bool) {
 }
 
 // CardsUsed is the cards an entry's model runs on, in the order the engine
-// numbers them. It answers what the workshop calls the card count (§6),
-// which is a property of the recipe, not of the machine: a model pinned to
-// one of two cards is a one-card result.
+// numbers them. It is the card count a run records, which is a property
+// of the setup, not of the machine: a model pinned to one of two cards is
+// a one-card result.
 //
 //  1. What the engine can see. The entry's selector variable, when it has
 //     one, hides every card it does not name; without one the engine sees

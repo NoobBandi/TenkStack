@@ -2,9 +2,8 @@ package api
 
 import "github.com/NoobBandi/TenkStack/internal/schema"
 
-// The benchmark (跑分), phase one of the parameter workshop: a suite run
-// against one llama-swap model on this machine, with outside requests on
-// /v1 paused for its duration. Endpoints:
+// The benchmark (跑分): a suite run against one llama-swap model on this
+// machine, with outside requests on /v1 paused for its duration. Endpoints:
 //
 //	GET    /api/bench/plan?model=ID&tier=quick|full|custom[&cases=a,b&repeats=1]  BenchPlan  admin
 //	POST   /api/bench/run         BenchRunRequest -> BenchProgress (202)  admin

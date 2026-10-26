@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/backends"
 	"github.com/NoobBandi/TenkStack/internal/bench"
 	"github.com/NoobBandi/TenkStack/internal/containers"
+	"github.com/NoobBandi/TenkStack/internal/gpu"
 	"github.com/NoobBandi/TenkStack/internal/llamaswap"
 	"github.com/NoobBandi/TenkStack/internal/schema"
 	"github.com/NoobBandi/TenkStack/internal/vendors"
@@ -443,11 +445,151 @@ func (s *Server) benchContainer(modelID string) string {
 // that already run poll every 2 s too.
 const rssEvery = 2 * time.Second
 
+// energyEvery is how often a run reads its cards' energy counters. The
+// peak power is then a tenth of a second's average, which is where a card
+// touching its limit shows: a B70 measured 230 W, its cap, in 0.1 s
+// windows and never more than 204 W in any one-second window -- the
+// resolution of the history the figures used to come from.
+const energyEvery = 100 * time.Millisecond
+
+// energyReading is a card's energy counter, in joules, at a time.
+type energyReading struct{ t, joules float64 }
+
+// meteredPower is a card's power over [from, to] from its energy counter:
+// the average is the energy used over the time, exactly, and the peak the
+// highest average between two consecutive readings. ok is false when the
+// window holds fewer than two readings.
+func meteredPower(readings []energyReading, from, to float64) (avg, peak, joules float64, ok bool) {
+	var first, last *energyReading
+	for i := range readings {
+		r := &readings[i]
+		if r.t < from || r.t > to {
+			continue
+		}
+		if first == nil {
+			first = r
+		} else if dt := r.t - last.t; dt > 0 {
+			peak = max(peak, (r.joules-last.joules)/dt)
+		}
+		last = r
+	}
+	if first == nil || last == first || last.t <= first.t {
+		return 0, 0, 0, false
+	}
+	joules = last.joules - first.joules
+	return joules / (last.t - first.t), peak, joules, true
+}
+
+// cardResources fills the per-card figures from each card's history: the
+// VRAM peak over the whole run (load included), and over the measuring
+// window the VRAM it began with, power, temperature, clock -- and the
+// cards' energy over the tokens the window generated.
+//
+// A card whose energy counter was read through the window (metered[i])
+// takes its power and energy from that instead of the history's samples.
+func cardResources(out *schema.Resources, perCard [][]api.GpuHistoryPoint, metered [][]energyReading, runFrom time.Time, w bench.Window) {
+	start := float64(runFrom.UnixNano()) / 1e9
+	from, to := float64(w.From.UnixNano())/1e9, float64(w.To.UnixNano())/1e9
+	measured := !w.From.IsZero() && w.To.After(w.From)
+	n := len(perCard)
+	loaded, powAvg, powMax := make([]*int, n), make([]*float64, n), make([]*float64, n)
+	temps, clocks := make([]*int, n), make([]*int, n)
+	energy, any := 0.0, false
+	for i, points := range perCard {
+		peak := 0.0
+		var pw, fq []float64
+		var hot *float64
+		for _, p := range points {
+			if p.T >= start && p.Vram != nil {
+				peak = max(peak, *p.Vram)
+			}
+			if !measured || p.T < from || p.T > to {
+				continue
+			}
+			if loaded[i] == nil && p.Vram != nil {
+				v := int(math.Round(*p.Vram))
+				loaded[i] = &v
+			}
+			if p.Power != nil {
+				pw = append(pw, *p.Power)
+			}
+			if p.Freq != nil {
+				fq = append(fq, *p.Freq)
+			}
+			if p.Temp != nil && (hot == nil || *p.Temp > *hot) {
+				t := *p.Temp
+				hot = &t
+			}
+		}
+		out.VRAMPeakMiB = append(out.VRAMPeakMiB, int(math.Round(peak)))
+		if i < len(metered) && measured {
+			if avg, top, joules, ok := meteredPower(metered[i], from, to); ok {
+				avg, top = math.Round(avg*10)/10, math.Round(top*10)/10
+				powAvg[i], powMax[i] = &avg, &top
+				energy += joules
+				any = true
+				pw = nil
+			}
+		}
+		if len(pw) > 0 {
+			avg, top := mean(pw), slices.Max(pw)
+			avg, top = math.Round(avg*10)/10, math.Round(top*10)/10
+			powAvg[i], powMax[i] = &avg, &top
+			energy += avg * (to - from)
+			any = true
+		}
+		if len(fq) > 0 {
+			c := int(math.Round(mean(fq)))
+			clocks[i] = &c
+		}
+		if hot != nil {
+			t := int(math.Round(*hot))
+			temps[i] = &t
+		}
+	}
+	out.VRAMLoadedMiB = keepInts(loaded)
+	out.PowerAvgW, out.PowerMaxW = keepFloats(powAvg), keepFloats(powMax)
+	out.TempMaxC, out.ClockAvgMHz = keepInts(temps), keepInts(clocks)
+	if any && w.Tokens > 0 {
+		j := math.Round(energy/float64(w.Tokens)*100) / 100
+		out.EnergyPerTokenJ = &j
+	}
+}
+
+func mean(v []float64) float64 {
+	sum := 0.0
+	for _, x := range v {
+		sum += x
+	}
+	return sum / float64(len(v))
+}
+
+// keepInts and keepFloats are a per-card list, or nil when no card had a
+// figure, so the field is left out rather than sent as nulls.
+func keepInts(v []*int) []*int {
+	for _, x := range v {
+		if x != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func keepFloats(v []*float64) []*float64 {
+	for _, x := range v {
+		if x != nil {
+			return v
+		}
+	}
+	return nil
+}
+
 // Watch records a model's peaks from the samplers that already run: the
 // GPU history per card, and the container history -- or, for an engine
 // with no container, the resident memory of llama-swap's children, polled
-// here because nothing else watches it.
-func (h BenchHost) Watch(ctx context.Context, modelID string) func() schema.Resources {
+// here because nothing else watches it -- and each card's energy counter,
+// read every energyEvery.
+func (h BenchHost) Watch(ctx context.Context, modelID string) func(bench.Window) schema.Resources {
 	s := h.S
 	from := time.Now()
 	cards := s.modelCards(ctx, modelID)
@@ -457,6 +599,40 @@ func (h BenchHost) Watch(ctx context.Context, modelID string) func() schema.Reso
 	var rssPeak int64
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
+
+	// The cards' energy counters, read every tenth of a second while the
+	// run lasts; a card without one keeps an empty list.
+	metered := make([][]energyReading, len(cards))
+	bdfs := make([]string, len(cards))
+	for i, card := range cards {
+		if card.PCIBDFAddress != nil {
+			bdfs[i] = *card.PCIBDFAddress
+		}
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tick := time.NewTicker(energyEvery)
+		defer tick.Stop()
+		for {
+			now := float64(time.Now().UnixNano()) / 1e9
+			mu.Lock()
+			for i, bdf := range bdfs {
+				if j, ok := gpu.BoardEnergy("/sys", bdf); ok {
+					metered[i] = append(metered[i], energyReading{t: now, joules: j})
+				}
+			}
+			mu.Unlock()
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -476,23 +652,21 @@ func (h BenchHost) Watch(ctx context.Context, modelID string) func() schema.Reso
 		}
 	}()
 
-	return func() schema.Resources {
+	return func(w bench.Window) schema.Resources {
 		close(stop)
 		wg.Wait()
-		start := float64(from.UnixNano()) / 1e9
 		secs := int(time.Since(from).Seconds()) + 5
 		out := schema.Resources{VRAMPeakMiB: []int{}}
 		if s.History != nil {
+			var perCard [][]api.GpuHistoryPoint
 			for _, card := range cards {
-				peak := 0.0
-				for _, p := range s.History.Points(card.Index, &secs, 0) {
-					if p.T >= start && p.Vram != nil {
-						peak = max(peak, *p.Vram)
-					}
-				}
-				out.VRAMPeakMiB = append(out.VRAMPeakMiB, int(math.Round(peak)))
+				perCard = append(perCard, s.History.Points(card.Index, &secs, 0))
 			}
+			mu.Lock()
+			cardResources(&out, perCard, metered, from, w)
+			mu.Unlock()
 		}
+		start := float64(from.UnixNano()) / 1e9
 		var memPeak int64
 		if container != "" && s.Containers != nil {
 			for _, p := range s.Containers.Points(container, &secs, 0) {

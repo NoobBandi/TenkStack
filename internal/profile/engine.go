@@ -8,7 +8,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/schema"
 )
 
-// Engine keys as the workshop knows them.
+// Engine keys as a run records them.
 const (
 	LlamaCpp = "llamacpp"
 	VLLM     = "vllm"
@@ -59,8 +59,8 @@ func (l Launcher) names() string {
 // a macro nobody claims is llama.cpp, as the console has always treated a
 // natively built llama-server it was pointed at (llamaswap.ProviderOf).
 // The Strata entry runs a script in Strata's checkout, which its name
-// gives away. Anything else is "other": an engine the workshop has no
-// recipes for is better unnamed than misnamed.
+// gives away. Anything else is "other": an engine the console does not
+// know is better unnamed than misnamed.
 func EngineKey(l Launcher, registered string) string {
 	switch registered {
 	case LlamaCpp, VLLM, SGLang:
@@ -146,7 +146,7 @@ type EngineFacts struct {
 	Reported string
 }
 
-// Engine is the engine an entry runs, as the workshop names it. The
+// Engine is the engine an entry runs, as a run records it. The
 // version is, in order of trust: what the engine reported, the image's own
 // version label, the image's tag ("v0.30.0" -> "0.30.0",
 // "server-intel-b11176" -> "b11176"; a tag like "latest" says nothing and

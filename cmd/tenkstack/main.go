@@ -192,8 +192,7 @@ func main() {
 	// The benchmark describes models and samples resources through the
 	// server, so it is made once the server exists.
 	host := httpapi.BenchHost{S: srv}
-	// The workshop computes the same hash (its spec, §6), so a run's hash
-	// here and its recipe there can be compared by eye.
+	// Runs with equal hashes used the same parameters (BenchRunRow.TuningHash).
 	bench.TuningHash = tuning.Hash
 	srv.Bench = bench.NewManager(llamaSwapBase, httpapi.BenchDescriber{S: srv}, bench.NewRuns(db), host, host, version)
 	srv.Registry = registry.New()

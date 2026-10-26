@@ -2410,7 +2410,19 @@ export interface BenchSubmission {
   /** Names only, never values. */
   unrecognized_flags: string[] | null;
   results: BenchCaseResult[] | null;
-  resources: { vram_peak_mib: number[] | null; ram_peak_mib: number };
+  /** Lists are one entry per card the model uses, null where that card
+   *  does not report it; a list no card reports is absent. All but the
+   *  peaks cover the measuring only, the load not included. */
+  resources: {
+    vram_peak_mib: number[] | null;
+    vram_loaded_mib?: (number | null)[];
+    ram_peak_mib: number;
+    power_avg_w?: (number | null)[];
+    power_max_w?: (number | null)[];
+    temp_max_c?: (number | null)[];
+    clock_avg_mhz?: (number | null)[];
+    energy_per_token_j?: number;
+  };
   run: {
     started_at: string;
     duration_s: number;
@@ -2419,7 +2431,6 @@ export interface BenchSubmission {
     external_paused: boolean;
     clean: boolean;
   };
-  reproduces?: string;
 }
 
 /** A saved run in full. `command` is the launch command as it was; it never

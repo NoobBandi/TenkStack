@@ -1,8 +1,7 @@
-// Package schema is the wire format shared with the parameter workshop: what
-// a benchmark run reports and what a recommendation carries. It mirrors §4 of
-// the workshop devlog (tenkstack-workshop-devlog.md); the workshop is a
-// separate service, and these types are what crosses between the two, so a
-// change here is a change to a published format (bump BenchV1/RecommendV1).
+// Package schema is the benchmark's record format: what a run measured on,
+// what it ran, and what it scored. A run is kept in this shape as it was
+// produced (bench_runs.submission) and downloaded in it by the export, so a
+// change here changes what saved runs read back as (bump BenchV1).
 package schema
 
 import (
@@ -11,10 +10,7 @@ import (
 	"strconv"
 )
 
-const (
-	RecommendV1 = "tenkstack.recommend.v1"
-	BenchV1     = "tenkstack.bench.v1"
-)
+const BenchV1 = "tenkstack.bench.v1"
 
 type Client struct {
 	Name    string `json:"name"` // "tenkstack"
@@ -134,42 +130,6 @@ type Tuning struct {
 	Sampling             *Sampling    `json:"sampling,omitempty"`
 }
 
-type RecommendRequest struct {
-	Schema   string          `json:"schema"`
-	Client   Client          `json:"client"`
-	Hardware HardwareProfile `json:"hardware"`
-	Model    ModelRef        `json:"model"`
-	Engines  []EngineRef     `json:"engines"`
-}
-
-type ScoreSummary struct {
-	GenTPS1k     float64            `json:"gen_tps_1k"`
-	GenTPS32k    *float64           `json:"gen_tps_32k,omitempty"`
-	TTFTMs1k     float64            `json:"ttft_ms_1k"`
-	TotalTPS4Way *float64           `json:"total_tps_4way,omitempty"`
-	ByContent    map[string]float64 `json:"by_content,omitempty"` // zh | en | code
-}
-
-type Recommendation struct {
-	RecipeID string    `json:"recipe_id"`
-	Engine   EngineRef `json:"engine"`
-	Tuning   Tuning    `json:"tuning"`
-	Match    struct {
-		CPU string `json:"cpu"` // same | different
-		RAM string `json:"ram"` // enough
-	} `json:"match"`
-	Requires struct {
-		RAMPeakMiB int `json:"ram_peak_mib"`
-	} `json:"requires"`
-	Score         ScoreSummary `json:"score"`
-	Reproductions int          `json:"reproductions"`
-	UpdatedAt     string       `json:"updated_at"`
-}
-
-type RecommendResponse struct {
-	Results []Recommendation `json:"results"`
-}
-
 type BenchCase struct {
 	ID          string   `json:"id"`
 	DepthTokens int      `json:"depth_tokens"`
@@ -222,7 +182,6 @@ type BenchSubmission struct {
 	Results           []CaseResult    `json:"results"`
 	Resources         Resources       `json:"resources"`
 	Run               RunInfo         `json:"run"`
-	Reproduces        string          `json:"reproduces,omitempty"`
 }
 
 func (g GPULayers) MarshalJSON() ([]byte, error) {
@@ -255,10 +214,25 @@ type SuiteRef struct {
 	Version string `json:"version"`
 }
 
-// Resources are the peaks seen while the suite ran.
+// Resources is what a run cost the machine. Every list has one entry per
+// card the model uses, in the order of vram_peak_mib; an entry is null when
+// that card does not report it, and a list no card reports is left out.
+// The figures other than the peaks cover the measuring only: from the end
+// of the warmup to the last case, the model's load not included.
 type Resources struct {
-	VRAMPeakMiB []int `json:"vram_peak_mib"` // one per card the model uses
-	RAMPeakMiB  int   `json:"ram_peak_mib"`
+	VRAMPeakMiB []int `json:"vram_peak_mib"`
+	// VRAMLoadedMiB is each card's VRAM as the measuring began: the model
+	// and what its engine allocated up front. The peak less it is what the
+	// cases added, the long contexts' KV.
+	VRAMLoadedMiB []*int     `json:"vram_loaded_mib,omitempty"`
+	RAMPeakMiB    int        `json:"ram_peak_mib"`
+	PowerAvgW     []*float64 `json:"power_avg_w,omitempty"`
+	PowerMaxW     []*float64 `json:"power_max_w,omitempty"`
+	TempMaxC      []*int     `json:"temp_max_c,omitempty"`
+	ClockAvgMHz   []*int     `json:"clock_avg_mhz,omitempty"` // well under the card's own: throttled
+	// EnergyPerTokenJ is the cards' energy over the measuring divided by
+	// the tokens generated in it, probes' prefill included.
+	EnergyPerTokenJ *float64 `json:"energy_per_token_j,omitempty"`
 }
 
 // RunInfo is how the run itself went.

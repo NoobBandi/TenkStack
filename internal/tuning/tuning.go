@@ -1,8 +1,8 @@
-// Package tuning reads a llama-swap launch command into the workshop's
-// parameters (schema.Tuning), so that two benchmark runs can say which
-// settings they differ in however each command spelled them. It knows the
-// engines' flags (§8 and §9 of the workshop devlog); what it cannot place
-// it names, without values, for the run to report as unrecognized.
+// Package tuning reads a llama-swap launch command into a benchmark run's
+// parameters (schema.Tuning), so that two runs can say which settings they
+// differ in however each command spelled them. It knows the engines' flags;
+// what it cannot place it names, without values, for the run to report as
+// unrecognized.
 //
 // What is left out on purpose is not unrecognized either: where the model
 // is, which cards, the port, and the engine- or platform-level fixes the

@@ -236,6 +236,12 @@ function ParameterDiff({ runs, mark }: { runs: BenchRun[]; mark: (i: number) => 
 
 interface FactRow { label: string; tip?: string; values: React.ReactNode[] }
 
+/** A per-card list as one line, "a、b", a card without a figure as —. */
+function perCard(list: (number | null)[] | undefined, fmt: (v: number) => string): string {
+  if (!list?.length) return '—';
+  return list.map((v) => (v == null ? '—' : fmt(v))).join('、');
+}
+
 /** How each run went: when, how long, what it took from the machine. */
 function RunFacts({ runs, mark }: { runs: BenchRun[]; mark: (i: number) => number }) {
   const gib = (mib: number) => `${(mib / 1024).toFixed(1)} GiB`;
@@ -252,8 +258,36 @@ function RunFacts({ runs, mark }: { runs: BenchRun[]; mark: (i: number) => numbe
       values: runs.map((r) => (r.submission?.resources?.vram_peak_mib ?? []).map(gib).join('、') || '—'),
     },
     {
+      label: '載入後顯存', tip: '暖機完成、開始測試時的顯存：模型本身加上引擎預先配置的快取。和峰值的差，是跑長文時多長出來的部分。',
+      values: runs.map((r) => perCard(r.submission?.resources?.vram_loaded_mib, gib)),
+    },
+    {
       label: '主機記憶體峰值',
       values: runs.map((r) => (r.submission?.resources?.ram_peak_mib ? gib(r.submission.resources.ram_peak_mib) : '—')),
+    },
+    {
+      label: '功耗 平均／最高', tip: '每張卡在測試期間的平均與最高功耗，不含載入模型。平均是這段時間用掉的電能除以時間；最高是每 0.1 秒的平均裡最高的一次，卡碰到功耗上限時會在這裡看到。2026-10-20 以前的紀錄只有每秒取樣，最高值會偏低。',
+      values: runs.map((r) => {
+        const res = r.submission?.resources;
+        const avg = res?.power_avg_w ?? [];
+        const top = res?.power_max_w ?? [];
+        if (!avg.length) return '—';
+        return avg.map((a, i) => `${a == null ? '—' : Math.round(a)}／${top[i] == null ? '—' : Math.round(top[i] as number)} W`).join('、');
+      }),
+    },
+    {
+      label: '最高溫度', values: runs.map((r) => perCard(r.submission?.resources?.temp_max_c, (v) => `${v} °C`)),
+    },
+    {
+      label: '平均時脈', tip: '每張卡在測試期間的平均 GPU 時脈；明顯低於平常，代表過熱降頻，成績會偏低。',
+      values: runs.map((r) => perCard(r.submission?.resources?.clock_avg_mhz, (v) => `${v.toLocaleString()} MHz`)),
+    },
+    {
+      label: '每 token 耗電', tip: '測試期間所有卡的總耗電 ÷ 生成的 token 數，越低越省電。',
+      values: runs.map((r) => {
+        const j = r.submission?.resources?.energy_per_token_j;
+        return j == null ? '—' : `${j.toFixed(2)} J`;
+      }),
     },
     {
       label: '測試組',

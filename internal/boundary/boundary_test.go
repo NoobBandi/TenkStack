@@ -17,7 +17,7 @@ const module = "github.com/NoobBandi/TenkStack/internal/"
 
 var allowed = map[string][]string{
 	// Leaves: shared by everything, importing nothing -- except that api
-	// carries the workshop's wire types (schema) in the benchmark responses.
+	// carries the benchmark's record format (schema) in its responses.
 	"api":    {"schema"},
 	"schema": {},
 	"paths":  {},
@@ -65,9 +65,9 @@ var allowed = map[string][]string{
 	"versions":         {"api"},
 	"release":          {"api"},
 	"quant":            {"api", "vendors", "providers"},
-	// A launch command read into the workshop's parameters (schema.Tuning).
+	// A launch command read into a benchmark run's parameters (schema.Tuning).
 	"tuning": {"schema"},
-	// The machine, a model's files and its engine as the workshop names them.
+	// The machine, a model's files and its engine as a benchmark run names them.
 	"profile": {"api", "schema", "locations", "hfmodel"},
 	// The benchmark: runs the suite, keeps the results, pauses /v1 meanwhile.
 	"bench": {"api", "schema", "store"},

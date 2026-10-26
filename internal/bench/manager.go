@@ -29,7 +29,14 @@ type Machine interface {
 // it uses, and host memory -- its container's, or for an engine that runs
 // natively, the processes llama-swap started.
 type Sampler interface {
-	Watch(ctx context.Context, modelID string) (stop func() schema.Resources)
+	Watch(ctx context.Context, modelID string) (stop func(Window) schema.Resources)
+}
+
+// Window is the measuring part of a run, which the averages and the
+// energy cover, and the tokens generated in it.
+type Window struct {
+	From, To time.Time
+	Tokens   int
 }
 
 // Error is a refusal to plan or start, with the status it answers with.
@@ -386,7 +393,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, done, forc
 		p.Message = "開始跑分"
 	})
 	m.Gate.SetResume(started.Add(estimate))
-	var stop func() schema.Resources
+	var stop func(Window) schema.Resources
 	if m.Sampler != nil {
 		stop = m.Sampler.Watch(ctx, d.ModelID)
 	}
@@ -409,7 +416,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, done, forc
 	})
 	resources := schema.Resources{VRAMPeakMiB: []int{}}
 	if stop != nil {
-		resources = stop()
+		resources = stop(Window{From: outcome.MeasuredFrom, To: outcome.MeasuredTo, Tokens: outcome.Generated})
 	}
 	if ctx.Err() != nil {
 		m.ended(ctx)

@@ -12,17 +12,16 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/schema"
 )
 
-// Suite v1 is built in until the workshop hands suites out (D33); it is the
-// same BenchSuite shape the workshop will send, so the runner does not care
-// where it came from. The prompts and the filler are original text written
-// for the suite, safe to publish with it.
+// Suite v1 is built in, as a BenchSuite like any other, so the runner does
+// not care where a suite came from. The prompts and the filler are original
+// text written for the suite, safe to publish with it.
 //
 //go:embed suite/v1/*
 var suiteFiles embed.FS
 
 // Prompts carries the depth filler beside the questions, under these keys:
-// the workshop needs the filler as much as the prompts for two machines'
-// numbers to be comparable.
+// two machines' numbers are comparable only when both the prompts and the
+// filler are the same.
 const (
 	fillerPrefix = "filler-"
 	// Code is padded with English prose: there is no third language, and

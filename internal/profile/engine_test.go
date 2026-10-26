@@ -30,7 +30,7 @@ func TestEngineKey(t *testing.T) {
 		{"vllm serve Qwen/Qwen3-8B", "", "vllm", "", ""},
 		{"/opt/llama.cpp/build/bin/llama-server -m x.gguf", "", "llamacpp", "", ""},
 		{"/opt/tgi/run.sh --model x", "", "other", "", ""},
-		// A registered engine the workshop has no key for yet.
+		// A registered engine with no key of its own yet.
 		{"${trt-nvidia} --model x", "trtllm", "other", "nvidia", "nvidia"},
 	}
 	for _, c := range cases {
