@@ -40,17 +40,19 @@ func (j *Journal) UnitLabels() map[string]string {
 // Units are the user units followed, with the labels the page shows.
 // init.scope is the user manager's own record of the units above starting
 // and stopping, the only place a service that died on startup says so.
+//
+// llama-swap and the console each have two names: the installer's, and the
+// one installs from before the installer existed still use.
 var Units = map[string]string{
-	"llama-swap.service": "模型",
-	"caddy.service":      "代理",
-	// Both names the console has run under: the installer's, and the one
-	// the machine it was written on still uses.
-	"tenkstack-console.service": "主控台",
-	"ai-console.service":        "主控台",
-	"init.scope":                "系統",
+	"tenkstack-llama-swap.service": "模型",
+	"llama-swap.service":           "模型",
+	"caddy.service":                "代理",
+	"tenkstack-console.service":    "主控台",
+	"ai-console.service":           "主控台",
+	"init.scope":                   "系統",
 }
 
-var unitOrder = []string{"llama-swap.service", "caddy.service", "tenkstack-console.service", "ai-console.service", "init.scope"}
+var unitOrder = []string{"tenkstack-llama-swap.service", "llama-swap.service", "caddy.service", "tenkstack-console.service", "ai-console.service", "init.scope"}
 
 // xpu-smi writes MEI permission errors to syslog on every invocation.
 var noiseIdentifiers = map[string]bool{"xpu-smi": true}

@@ -109,6 +109,7 @@ func (s *Server) readMachine(w http.ResponseWriter, r *http.Request) {
 	}
 	units := []api.MachineUnit{}
 	for _, u := range []struct{ name, note string }{
+		{"tenkstack-llama-swap.service", "模型生命週期，OpenAI／Anthropic 端點"},
 		{"llama-swap.service", "模型生命週期，OpenAI／Anthropic 端點"},
 		{"caddy.service", "TLS 與單一入口"},
 		{"tenkstack-console.service", "本服務"},

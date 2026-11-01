@@ -328,7 +328,8 @@ func (s *Store) CanonicalModel(name string) string {
 }
 
 func journal(ctx context.Context, args ...string) (string, bool) {
-	full := append([]string{"--user", "-u", "llama-swap.service", "--no-pager"}, args...)
+	// The installer's name for the unit, and the older one.
+	full := append([]string{"--user", "-u", "tenkstack-llama-swap.service", "-u", "llama-swap.service", "--no-pager"}, args...)
 	out, err := exec.CommandContext(ctx, "journalctl", full...).Output()
 	if err != nil {
 		return "", false

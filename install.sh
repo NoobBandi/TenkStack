@@ -898,7 +898,9 @@ write_units() {
 
   # CONSOLE_AI_DIR is written out rather than left to the default in the binary.
   # An installation that is running must not move because a default changed in
-  # a later version.
+  # a later version. The ports likewise: the console has to find llama-swap
+  # and SearXNG where this script put them, and write the addresses Caddy
+  # serves, even when they are not the defaults.
   run bash -c "cat > '$dir/tenkstack-console.service' <<UNIT
 [Unit]
 Description=TenkStack console
@@ -908,6 +910,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=CONSOLE_AI_DIR=$ROOT
+Environment=CONSOLE_PORT=$CONSOLE_PORT
+Environment=CONSOLE_LLAMA_SWAP_PORT=$LLAMA_SWAP_PORT
+Environment=CONSOLE_API_PORT=$API_PORT
+Environment=CONSOLE_TLS_PORT=$CONSOLE_TLS_PORT
+Environment=CONSOLE_SEARXNG_URL=http://127.0.0.1:$SEARXNG_PORT
 ExecStart=$ROOT/console/tenkstack -listen 127.0.0.1:$CONSOLE_PORT
 Restart=on-failure
 RestartSec=5
