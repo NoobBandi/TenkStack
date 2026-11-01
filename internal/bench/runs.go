@@ -25,7 +25,7 @@ var TuningHash = func(t schema.Tuning) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Runs keeps finished runs in the console's database (D30).
+// Runs keeps finished runs in the console's database.
 type Runs struct{ db *sql.DB }
 
 func NewRuns(db *sql.DB) *Runs { return &Runs{db: db} }

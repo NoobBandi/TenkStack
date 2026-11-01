@@ -1,4 +1,4 @@
-The Qwen3.6-35B-A3B-FP8 entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+A llama-swap entry from a two-B70 machine.
 -- engine --
 vllm
 -- env --

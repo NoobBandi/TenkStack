@@ -19,7 +19,7 @@ type Machine interface {
 	// Groups is llama-swap's groups as config.yaml has them now.
 	Groups(ctx context.Context) []Group
 	// ComfyBusy says whether ComfyUI is drawing, or has drawings queued,
-	// on the cards the model uses (§7.4).
+	// on the cards the model uses.
 	ComfyBusy(ctx context.Context, modelID string) bool
 	// Names is each configured model's display name by id.
 	Names(ctx context.Context) map[string]string
@@ -94,7 +94,7 @@ func idle() api.BenchProgress {
 
 func active(state string) bool { return state == api.BenchDraining || state == api.BenchRunning }
 
-// Plan is what a run would do, for the confirmation (D28).
+// Plan is what a run would do, for the confirmation.
 func (m *Manager) Plan(ctx context.Context, model string, ch Choice) (api.BenchPlan, error) {
 	p, _, err := m.plan(ctx, model, ch)
 	return p, err
@@ -202,7 +202,7 @@ func (m *Manager) Start(ctx context.Context, req api.BenchRunRequest) (api.Bench
 	cur := m.progress
 	busy := active(cur.State)
 	// Force for the run already draining is the owner's answer to a drain
-	// that is taking too long: stop waiting and start (§7.4).
+	// that is taking too long: stop waiting and start.
 	same := busy && req.Force && cur.Model == req.Model && m.choice.Same(ChoiceOf(req))
 	if same && cur.State == api.BenchDraining {
 		m.forceLocked()
@@ -359,7 +359,7 @@ func (m *Manager) run(ctx context.Context, cancel context.CancelFunc, done, forc
 	req api.BenchRunRequest, estimate time.Duration) {
 	defer close(done)
 	defer cancel()
-	// Whatever happens below, /v1 comes back (§7.4).
+	// Whatever happens below, /v1 comes back.
 	defer m.Gate.Open()
 	defer func() {
 		if r := recover(); r != nil {

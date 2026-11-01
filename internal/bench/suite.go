@@ -164,7 +164,7 @@ func Select(s schema.BenchSuite, ch Choice, limit int) (cases []schema.BenchCase
 	return cases, skipped
 }
 
-// repeatsFor: a quick run measures each case once (D32), and so does a
+// repeatsFor: a quick run measures each case once, and so does a
 // custom one asked to.
 func repeatsFor(c schema.BenchCase, ch Choice) int {
 	if ch.Tier == api.BenchQuick || (ch.Tier == api.BenchCustom && ch.Repeats == 1) || c.Repeats < 1 {

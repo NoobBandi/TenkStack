@@ -39,12 +39,12 @@ func TestWhoAmI(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		w.Write([]byte(`{"name":"tenk"}`))
+		w.Write([]byte(`{"name":"someone"}`))
 	}))
 	defer hub.Close()
 	s := New(filepath.Join(t.TempDir(), "t"))
 	s.Hub = hub.URL
-	if name, err := s.WhoAmI(context.Background(), "hf_good"); err != nil || name != "tenk" {
+	if name, err := s.WhoAmI(context.Background(), "hf_good"); err != nil || name != "someone" {
 		t.Errorf("%q %v", name, err)
 	}
 	var invalid *Invalid

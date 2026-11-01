@@ -131,7 +131,6 @@ type fakeConsole struct {
 	locked  bool
 	macros  []string
 	polls   map[string]int
-	comfyOK bool
 	actions []string
 }
 

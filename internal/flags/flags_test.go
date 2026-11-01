@@ -37,13 +37,14 @@ func TestLlamaServerHelp(t *testing.T) {
 		value bool
 		env   string
 	}{
-		// §8.5: these were read as switches, so the picker added them
+		// These were once read as switches, so the picker added them
 		// without room for the value they need.
 		{"-sm", []string{"-sm", "--split-mode"}, true, "LLAMA_ARG_SPLIT_MODE"},
 		{"-ts", []string{"-ts", "--tensor-split"}, true, "LLAMA_ARG_TENSOR_SPLIT"},
 		{"--rope-scaling", []string{"--rope-scaling"}, true, "LLAMA_ARG_ROPE_SCALING_TYPE"},
 		{"-fitt", []string{"-fitt", "--fit-target"}, true, "LLAMA_ARG_FIT_TARGET"},
-		// §8.5: -simple, -mtp, -mod ... were the tails of its choices.
+		// -simple, -mtp, -mod ... in its help were once taken for flags;
+		// they are the tails of its choices.
 		{"--spec-type", []string{"--spec-type"}, true, "LLAMA_ARG_SPEC_TYPE"},
 		{"-c", []string{"-c", "--ctx-size"}, true, "LLAMA_ARG_CTX_SIZE"},
 		{"-ngl", []string{"-ngl", "--gpu-layers", "--n-gpu-layers"}, true, "LLAMA_ARG_N_GPU_LAYERS"},

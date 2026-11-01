@@ -86,12 +86,12 @@ func TestUnloads(t *testing.T) {
 
 func TestExportScrubs(t *testing.T) {
 	sub := Assemble(SuiteV1(), Description{
-		ModelID: "m", Command: "/home/tenk/ai/run.sh",
-		Model:  schema.ModelRef{Format: "gguf", Repo: "/home/tenk/models/x", File: "/home/tenk/models/x/q6.gguf", Quant: "Q6_K"},
-		Engine: schema.EngineRef{Key: "llamacpp", Image: "/home/tenk/img.tar"},
+		ModelID: "m", Command: "/home/someone/ai/run.sh",
+		Model:  schema.ModelRef{Format: "gguf", Repo: "/home/someone/models/x", File: "/home/someone/models/x/q6.gguf", Quant: "Q6_K"},
+		Engine: schema.EngineRef{Key: "llamacpp", Image: "/home/someone/img.tar"},
 		Tuning: schema.Tuning{ContextLength: 4096, Speculative: &schema.Speculative{Methods: []string{"draft"},
 			DraftModel: &schema.ModelRef{File: "${models-dir}/d.gguf"}}},
-		Unrecognized: []string{"--foo=/home/tenk/bar", "--baz"},
+		Unrecognized: []string{"--foo=/home/someone/bar", "--baz"},
 	}, "1.2.3", api.BenchQuick, Outcome{}, schema.Resources{}, time.Unix(0, 0), time.Minute, true)
 	out := Export(sub)
 	if out.Model.Repo != "" || out.Model.File != "q6.gguf" || out.Engine.Image != "" ||

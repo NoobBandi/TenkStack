@@ -1,7 +1,7 @@
 // Package settings holds the console's own knobs. A value is a setting when
 // a reasonable owner would want it different and nothing else can derive it;
 // facts about the machine are read from the machine instead. Defaults live
-// in the spec, not the table, so clearing a row restores the behaviour.
+// in Specs, not the table, so clearing a row restores the behaviour.
 package settings
 
 import (

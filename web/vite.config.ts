@@ -12,9 +12,10 @@ import react from '@vitejs/plugin-react';
  * number's third home -- and when the copy went, `v${undefined}` printed the
  * literal string vundefined where a version belonged.
  *
- * release this is, the commit says which build of it is actually serving you,
- * and only the second can answer "did my deploy land". It is shown on hover, so
- * the visible line stays a version number. `--dirty` is included, so a build
+ * The two answer different questions: the version says which release this is,
+ * the commit says which build of it is actually serving you, and only the
+ * second can answer "did my deploy land". It is shown on hover, so the visible
+ * line stays a version number. `--dirty` is included, so a build
  * made from uncommitted edits admits it.
  */
 function buildStamp(): string {

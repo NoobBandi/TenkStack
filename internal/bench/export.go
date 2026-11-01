@@ -8,7 +8,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/schema"
 )
 
-// Assemble is the submission for a finished run (§4.3): what was measured,
+// Assemble is the submission for a finished run: what was measured,
 // with the Description's account of the machine, model, engine and
 // parameters beside it. Nothing local goes in -- the launch command stays
 // on the Description -- and Export scrubs it again on the way out.
@@ -47,7 +47,7 @@ func Assemble(s schema.BenchSuite, d Description, version, tier string, o Outcom
 	}
 }
 
-// Export is a saved submission as it may leave the machine (§11.1): no
+// Export is a saved submission as it may leave the machine: no
 // paths, and flags by name only. The submission is built without them; this
 // is the second line, for whatever a describer let through.
 func Export(sub schema.BenchSubmission) schema.BenchSubmission {

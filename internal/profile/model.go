@@ -132,8 +132,9 @@ func Model(raw string, macros map[string]string, locs []locations.Location, fact
 	if gguf && out.File == "" {
 		out.File = path.Base(expanded)
 	}
-	// Belt and braces for §11: whatever went wrong above, a value that
-	// looks like a path or an unexpanded macro does not leave.
+	// Belt and braces, since nothing local may leave the machine: whatever
+	// went wrong above, a value that looks like a path or an unexpanded
+	// macro does not leave.
 	for _, v := range []*string{&out.Repo, &out.File} {
 		if strings.HasPrefix(*v, "/") || strings.HasPrefix(*v, "~") || strings.Contains(*v, "$") || strings.Contains(*v, "..") {
 			*v = ""

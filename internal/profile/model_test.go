@@ -42,14 +42,14 @@ func TestModel(t *testing.T) {
 		want  schema.ModelRef
 	}{
 		// The B70 machine's entries.
-		{"vllm bf16 served as online fp8 is still bf16", "${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated",
+		{"vllm bf16 served as online fp8 is still bf16", "${models-dir}/Qwen/Qwen3.8-27B",
 			ModelFacts{Precision: "bf16", FileType: -1},
-			schema.ModelRef{Format: "safetensors", Repo: "huihui-ai/Huihui-Qwen3.8-27B-abliterated", Quant: "bf16"}},
+			schema.ModelRef{Format: "safetensors", Repo: "Qwen/Qwen3.8-27B", Quant: "bf16"}},
 		{"vllm published fp8", "${models-dir}/Qwen/Qwen3.6-35B-A3B-FP8", ModelFacts{Precision: "fp8", FileType: -1},
 			schema.ModelRef{Format: "safetensors", Repo: "Qwen/Qwen3.6-35B-A3B-FP8", Quant: "fp8"}},
-		{"gguf", "${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-UD-Q6_K_XL.gguf", none,
-			schema.ModelRef{Format: "gguf", Repo: "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF",
-				File: "Huihui-Qwen3.8-27B-abliterated-UD-Q6_K_XL.gguf", Quant: "UD-Q6_K_XL"}},
+		{"gguf", "${models-dir}/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q6_K_XL.gguf", none,
+			schema.ModelRef{Format: "gguf", Repo: "unsloth/Qwen3.8-27B-GGUF",
+				File: "Qwen3.8-27B-UD-Q6_K_XL.gguf", Quant: "UD-Q6_K_XL"}},
 		{"split gguf in a quant directory", "${models-dir}/unsloth/Qwen3.8-Flash-Next-GGUF/UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf", none,
 			schema.ModelRef{Format: "gguf", Repo: "unsloth/Qwen3.8-Flash-Next-GGUF",
 				File: "UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf", Quant: "UD-IQ3_XXS"}},
@@ -115,8 +115,8 @@ func TestLocate(t *testing.T) {
 
 func TestGGUFQuant(t *testing.T) {
 	for name, want := range map[string]string{
-		"Huihui-Qwen3.8-27B-abliterated-UD-Q6_K_XL.gguf":                           "UD-Q6_K_XL",
-		"Huihui-Qwen3.8-27B-abliterated-UD-Q8_K_XL.gguf":                           "UD-Q8_K_XL",
+		"Qwen3.8-27B-UD-Q6_K_XL.gguf":                                              "UD-Q6_K_XL",
+		"Qwen3.8-27B-UD-Q8_K_XL.gguf":                                              "UD-Q8_K_XL",
 		"UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf":             "UD-IQ3_XXS",
 		"Q4_K_M/model-00001-of-00002.gguf":                                         "Q4_K_M",
 		"qwen2.5-7b-instruct-q4_k_m.gguf":                                          "Q4_K_M",

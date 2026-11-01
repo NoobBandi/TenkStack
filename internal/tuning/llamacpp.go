@@ -6,7 +6,7 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/schema"
 )
 
-// llamaCppTable is the hand-kept half of the llama.cpp mapping (§8.3):
+// llamaCppTable is the hand-kept half of the llama.cpp mapping:
 // what each flag means. Spellings and environment variables are the ones
 // llama-server f805c57 prints in --help (internal/flags/testdata), so
 // Parse works without asking a binary; ParseWith adds whatever the
@@ -70,7 +70,7 @@ var llamaCppTable = []entry{
 	{names: []string{"--n-cpu-moe", "-ncmoe"}, env: "LLAMA_ARG_N_CPU_MOE",
 		rule: intRule(func(b *builder, n int) { b.t.CPUMoELayers = &n })},
 
-	// The projector file is found locally (§4.1); whether one is loaded is
+	// The projector file is found locally; whether one is loaded is
 	// the parameter.
 	{names: []string{"--mmproj", "-mm"}, env: "LLAMA_ARG_MMPROJ", rule: vision(true)},
 	{names: []string{"--mmproj-url", "-mmu"}, env: "LLAMA_ARG_MMPROJ_URL", rule: vision(true)},
@@ -102,12 +102,12 @@ var llamaCppTable = []entry{
 	{names: []string{"--chat-template-kwargs"}, env: "LLAMA_ARG_CHAT_TEMPLATE_KWARGS",
 		rule: jsonRule("--chat-template-kwargs")},
 
-	// §9.3 is undecided on the template file (Q6): it changes what the
-	// model is shown, but it is a file on this machine. Reported for now.
+	// The template file is undecided: it changes what the model is shown,
+	// but it is a file on this machine. Reported for now.
 	{names: []string{"--chat-template-file"}, env: "LLAMA_ARG_CHAT_TEMPLATE_FILE"},
 	{names: []string{"--cpu-moe", "-cmoe"}, env: "LLAMA_ARG_CPU_MOE", bool: true},
 
-	// Not a recipe's (§9.2): where the model is and how it is served.
+	// Not a tuning parameter: where the model is and how it is served.
 	{names: []string{"--model", "-m"}, env: "LLAMA_ARG_MODEL", ignore: true},
 	{names: []string{"--model-url", "-mu"}, env: "LLAMA_ARG_MODEL_URL", ignore: true},
 	{names: []string{"--hf-repo", "-hf", "-hfr"}, env: "LLAMA_ARG_HF_REPO", ignore: true},
@@ -126,13 +126,13 @@ var llamaCppTable = []entry{
 	{names: []string{"--log-verbosity", "-lv", "--verbosity"}, env: "LLAMA_ARG_LOG_VERBOSITY", ignore: true},
 	{names: []string{"--log-file"}, env: "LLAMA_ARG_LOG_FILE", ignore: true},
 	{names: []string{"--timeout", "-to"}, env: "LLAMA_ARG_TIMEOUT", ignore: true},
-	// Which cards (D10) and the CPU threads, which follow the machine
-	// rather than the model (Q7).
+	// Which cards and the CPU threads, which follow the machine rather
+	// than the model.
 	{names: []string{"--device", "-dev"}, env: "LLAMA_ARG_DEVICE", ignore: true},
 	{names: []string{"--main-gpu", "-mg"}, env: "LLAMA_ARG_MAIN_GPU", ignore: true},
 	{names: []string{"--threads", "-t"}, env: "LLAMA_ARG_THREADS", ignore: true},
 	{names: []string{"--threads-batch", "-tb"}, ignore: true},
-	// Platform fixes (D11): how the weights are read in, and --fit, which
+	// Platform fixes the engine record owns: how the weights are read in, and --fit, which
 	// rewrites unset arguments to fit the cards in hand.
 	{names: []string{"--load-mode", "-lm"}, env: "LLAMA_ARG_LOAD_MODE", ignore: true},
 	{names: []string{"--no-host"}, env: "LLAMA_ARG_NO_HOST", bool: true, ignore: true},

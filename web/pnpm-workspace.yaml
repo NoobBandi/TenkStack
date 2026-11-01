@@ -1,0 +1,6 @@
+# Settings only; web/ is a single package, not a workspace of several.
+# pnpm 11 and later read overrides from here, not from package.json.
+
+overrides:
+  # monaco-editor pins a DOMPurify with known sanitizer bypasses.
+  dompurify: '>=3.4.17'

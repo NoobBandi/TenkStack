@@ -2,7 +2,7 @@ package tuning
 
 import "strings"
 
-// vllmTable is vLLM's half of §8.3, spelled as `vllm serve --help=all`
+// vllmTable is vLLM's flag mapping, spelled as `vllm serve --help=all`
 // prints it in v0.30.0. Underscored spellings (--max_model_len) and
 // dotted JSON keys (--speculative-config.method) are folded before the
 // lookup, as vLLM itself does.
@@ -60,8 +60,8 @@ var vllmTable = []entry{
 	{names: []string{"--enable-chunked-prefill"}, bool: true},
 	{names: []string{"--enable-expert-parallel", "-ep"}, bool: true},
 
-	// Not a recipe's (§9.2): the model, how it is served, and the card
-	// count (D10).
+	// Not a tuning parameter: the model, how it is served, and the card
+	// count.
 	{names: []string{"--model"}, ignore: true},
 	{names: []string{"--served-model-name"}, ignore: true},
 	{names: []string{"--host"}, ignore: true},
@@ -77,7 +77,7 @@ var vllmTable = []entry{
 	{names: []string{"--pipeline-parallel-size", "-pp"}, ignore: true},
 	{names: []string{"--data-parallel-size", "-dp"}, ignore: true},
 	{names: []string{"--device"}, ignore: true},
-	// Engine and platform fixes the engine record owns (D11).
+	// Engine and platform fixes the engine record owns.
 	{names: []string{"--compilation-config", "-cc"}, ignore: true},
 	{names: []string{"--enforce-eager"}, bool: true, ignore: true},
 	{names: []string{"--distributed-executor-backend"}, ignore: true},

@@ -6,7 +6,7 @@
 //
 // What is left out on purpose is not unrecognized either: where the model
 // is, which cards, the port, and the engine- or platform-level fixes the
-// local engine record decides (D10, D11) -- --compilation-config,
+// local engine record decides -- --compilation-config,
 // --enforce-eager, --tensor-parallel-size and the like.
 package tuning
 

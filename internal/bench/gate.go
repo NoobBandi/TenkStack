@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Gate is the /v1 pause (D27, §7.4). The console's /v1 proxy is the one way
+// Gate is the /v1 pause. The console's /v1 proxy is the one way
 // in for outside clients -- llama-swap listens on 127.0.0.1 only -- so it is
 // the one place that asks. It also counts the requests in flight, which is
 // what draining waits for. It lives in memory only: a restart lifts it.

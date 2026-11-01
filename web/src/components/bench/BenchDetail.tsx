@@ -266,7 +266,7 @@ function RunFacts({ runs, mark }: { runs: BenchRun[]; mark: (i: number) => numbe
       values: runs.map((r) => (r.submission?.resources?.ram_peak_mib ? gib(r.submission.resources.ram_peak_mib) : '—')),
     },
     {
-      label: '功耗 平均／最高', tip: '每張卡在測試期間的平均與最高功耗，不含載入模型。平均是這段時間用掉的電能除以時間；最高是每 0.1 秒的平均裡最高的一次，卡碰到功耗上限時會在這裡看到。2026-10-20 以前的紀錄只有每秒取樣，最高值會偏低。',
+      label: '功耗 平均／最高', tip: '每張卡在測試期間的平均與最高功耗，不含載入模型。平均是這段時間用掉的電能除以時間；最高是每 0.1 秒的平均裡最高的一次，卡碰到功耗上限時會在這裡看到。',
       values: runs.map((r) => {
         const res = r.submission?.resources;
         const avg = res?.power_avg_w ?? [];

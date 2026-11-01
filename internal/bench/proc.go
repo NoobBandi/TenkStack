@@ -13,7 +13,7 @@ var procRoot = "/proc"
 // DescendantRSS is the resident memory, in bytes, of every process below
 // the processes named parent -- llama-swap's children and theirs. It is the
 // host memory of an engine that runs natively, like Strata, where there is
-// no container to read it from (Q16).
+// no container to read it from.
 func DescendantRSS(parent string) int64 {
 	entries, err := os.ReadDir(procRoot)
 	if err != nil {

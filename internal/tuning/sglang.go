@@ -58,8 +58,8 @@ var sglangTable = []entry{
 	{names: []string{"--trust-remote-code"}, bool: true, ignore: true},
 	{names: []string{"--tp-size", "--tp", "--tensor-parallel-size"}, ignore: true},
 	{names: []string{"--dp-size", "--dp", "--data-parallel-size"}, ignore: true},
-	// The XPU build's own requirements, which its engine record passes
-	// (D11): the device, the attention backend and the page size it takes,
+	// The XPU build's own requirements, which its engine record passes:
+	// the device, the attention backend and the page size it takes,
 	// no overlap schedule; and the graph switch that is --enforce-eager's
 	// counterpart.
 	{names: []string{"--device"}, ignore: true},

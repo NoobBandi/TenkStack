@@ -227,13 +227,13 @@ func TestFolderDownloadKeepsWhatIsThere(t *testing.T) {
 // folder: GGUF repositories and MLX exports.
 func TestNotForServer(t *testing.T) {
 	for id, tags := range map[string][]any{
-		"unsloth/Qwen3.8-27B-GGUF":          {"gguf"},
-		"someone/Qwen3.8-27B-mlx-4Bit":      {"safetensors"},
-		"root4k/Qwen3.8-27B-oQ4e-mtp":       {"mlx", "safetensors"},
-		"huihui-ai/Huihui-Qwen3.8-27B-abli": nil,
+		"unsloth/Qwen3.8-27B-GGUF":     {"gguf"},
+		"someone/Qwen3.8-27B-mlx-4Bit": {"safetensors"},
+		"root4k/Qwen3.8-27B-oQ4e-mtp":  {"mlx", "safetensors"},
+		"Qwen/Qwen3.8-27B":             nil,
 	} {
 		got := notForServer(map[string]any{"id": id, "tags": tags})
-		if want := id != "huihui-ai/Huihui-Qwen3.8-27B-abli"; got != want {
+		if want := id != "Qwen/Qwen3.8-27B"; got != want {
 			t.Errorf("%s: %v, want %v", id, got, want)
 		}
 	}
@@ -281,10 +281,10 @@ func TestCoarsePrecision(t *testing.T) {
 		gib    float64
 	}{
 		// As the Hub lists them for Qwen3.8-27B, Llama 3.1 and quantisations.
-		{"huihui-ai/Huihui-Qwen3.8-27B-abliterated", nil, map[string]int64{"BF16": 27781427952}, "bf16", 51.75},
+		{"Qwen/Qwen3.8-27B", nil, map[string]int64{"BF16": 27781427952}, "bf16", 51.75},
 		{"Qwen/Qwen3.8-27B-FP8", []string{"fp8"}, map[string]int64{"BF16": 3082220272, "F8_E4M3": 24699207680}, "fp8", 28.74},
 		// Packed values are left out of the size, which the listing gives.
-		{"sakamakismile/Huihui-Qwen3.8-27B-abliterated-NVFP4", []string{"nvfp4", "8-bit"}, map[string]int64{"BF16": 3006172400, "U8": 24350556160}, "nvfp4", 5.6},
+		{"RedHatAI/Qwen3.8-27B-NVFP4", []string{"nvfp4", "8-bit"}, map[string]int64{"BF16": 3006172400, "U8": 24350556160}, "nvfp4", 5.6},
 		// The name says NVFP4 though the tags only say 8-bit.
 		{"nvidia/Llama-3.1-8B-Instruct-NVFP4", []string{"8-bit"}, nil, "nvfp4", 0},
 		// bitsandbytes is its own thing, not the int4 an engine writes.

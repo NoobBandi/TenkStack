@@ -1,4 +1,4 @@
-The qwen38-flash-next-iq4 entry of ~/ai/llama-swap/config.yaml.bak-before-vllm030 (since removed; kept for --n-cpu-moe, --tensor-split, --reasoning and --threads).
+A llama-swap entry from a two-B70 machine, kept for --n-cpu-moe, --tensor-split, --reasoning and --threads.
 -- engine --
 llamacpp
 -- env --

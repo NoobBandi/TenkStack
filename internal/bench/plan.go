@@ -33,7 +33,7 @@ func groupOf(groups []Group, model string) Group {
 
 // Unloads is which resident models llama-swap will stop to load model:
 // the other members of its group when the group swaps, and everything
-// outside the group, persistent groups apart, when it is exclusive (D28).
+// outside the group, persistent groups apart, when it is exclusive.
 func Unloads(groups []Group, running []string, model string) []string {
 	if slices.Contains(running, model) {
 		return []string{}
@@ -89,7 +89,7 @@ func Estimate(s schema.BenchSuite, ch Choice, cases []schema.BenchCase, loaded b
 }
 
 // drainTimeout is how long a run waits for requests in flight before the
-// owner is offered to force the start (Q13); drainGrace how much longer it
+// owner is offered to force the start; drainGrace how much longer it
 // then waits for an answer before it cancels itself.
 const (
 	drainTimeout = 2 * time.Minute
@@ -101,7 +101,7 @@ const (
 var drainPoll = 250 * time.Millisecond
 
 // hardLimit is how long the pause may last whatever happens: twice the
-// estimate (§7.4), but never less than the estimate plus a slow model load,
+// estimate, but never less than the estimate plus a slow model load,
 // since an estimate's cold start is a guess and llama-swap allows a load
 // 15 minutes.
 func hardLimit(estimate time.Duration) time.Duration {

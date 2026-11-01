@@ -42,7 +42,7 @@ func TestBenchDescriber(t *testing.T) {
 	vllm := write("llama-swap/vllm-intel.sh", "#!/usr/bin/env bash\nIMAGE=\"${VLLM_IMAGE:-vllm/vllm-openai-xpu:v0.30.0}\"\nexec docker run \"$IMAGE\" \"$@\"\n", 0o755)
 	// A native llama-server build answers --version without loading anything.
 	sycl := write("llama-swap/llama-server-sycl.sh", "#!/bin/sh\necho 'version: 7000 (575bf29)'\necho 'built with IntelLLVM'\n", 0o755)
-	write("models/huihui-ai/Huihui-Qwen3.8-27B-abliterated/config.json", `{"architectures":["Qwen3_5ForConditionalGeneration"],"torch_dtype":"bfloat16"}`, 0o644)
+	write("models/Qwen/Qwen3.8-27B/config.json", `{"architectures":["Qwen3_5ForConditionalGeneration"],"torch_dtype":"bfloat16"}`, 0o644)
 	config := write("llama-swap/config.yaml", `macros:
   models-dir: `+models+`
   vllm-intel: `+vllm+`
@@ -52,7 +52,7 @@ models:
     name: Qwen3.8-27B FP8 (vLLM 雙卡)
     cmd: |
       ${vllm-intel}
-      --model ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated
+      --model ${models-dir}/Qwen/Qwen3.8-27B
       --host 127.0.0.1 --port ${PORT}
       --tensor-parallel-size 2
       --quantization fp8
@@ -63,7 +63,7 @@ models:
   q6:
     cmd: |
       ${llama-sycl}
-      --model ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-UD-Q6_K_XL.gguf
+      --model ${models-dir}/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q6_K_XL.gguf
       --port ${PORT}
     env:
       - ONEAPI_DEVICE_SELECTOR=level_zero:1
@@ -87,7 +87,7 @@ models:
 		t.Errorf("gpu: %+v", d.Hardware.GPU)
 	}
 	// bf16 on disk; the online fp8 is tuning, not the model.
-	if want := (schema.ModelRef{Format: "safetensors", Repo: "huihui-ai/Huihui-Qwen3.8-27B-abliterated", Quant: "bf16"}); d.Model != want {
+	if want := (schema.ModelRef{Format: "safetensors", Repo: "Qwen/Qwen3.8-27B", Quant: "bf16"}); d.Model != want {
 		t.Errorf("model: %+v", d.Model)
 	}
 	if want := (schema.EngineRef{Key: "vllm", Version: "0.30.0", Image: "vllm/vllm-openai-xpu:v0.30.0"}); d.Engine != want {
@@ -105,7 +105,7 @@ models:
 	if d.Hardware.GPU.Count != 1 || d.Name != "q6" {
 		t.Errorf("one card, named by its id: %+v %q", d.Hardware.GPU, d.Name)
 	}
-	if d.Model.Quant != "UD-Q6_K_XL" || d.Model.Repo != "huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF" {
+	if d.Model.Quant != "UD-Q6_K_XL" || d.Model.Repo != "unsloth/Qwen3.8-27B-GGUF" {
 		t.Errorf("gguf: %+v", d.Model)
 	}
 	if want := (schema.EngineRef{Key: "llamacpp", Version: "b7000"}); d.Engine != want {

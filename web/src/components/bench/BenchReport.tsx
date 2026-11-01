@@ -129,7 +129,7 @@ const tooltipBox = (heading: string, rows: Parameters<typeof Readout>[0]['rows']
   <Readout heading={heading} rows={rows} />
 );
 
-// --- 單人對話 ---------------------------------------------------------------
+// --- Single user (「單人對話」) ---------------------------------------------
 
 /**
  * A 500-token answer as a timeline, one bar per run on one time scale: the
@@ -208,7 +208,7 @@ function Moment({ at, value, what, strong }: { at?: 'start' | 'end'; value: stri
   );
 }
 
-// --- 多人同時 ---------------------------------------------------------------
+// --- Concurrent users (「多人同時」) ----------------------------------------
 
 /** Chart props that are objects, made once: recharts redraws -- and replays
  *  its line animation -- when one of them is a new object, which inline
@@ -342,7 +342,7 @@ const CrowdChart = memo(function CrowdChart({ runs: all }: { runs: RunView[] }) 
   );
 });
 
-// --- 長文 -------------------------------------------------------------------
+// --- Long context (「長文」) ------------------------------------------------
 
 /** Decode against context depth, one line per run that measured more than
  *  one depth; the first-token wait at each depth is in the table beside it
@@ -401,7 +401,7 @@ const LongChart = memo(function LongChart({ runs: all }: { runs: RunView[] }) {
   );
 });
 
-// --- 內容類型 ---------------------------------------------------------------
+// --- Content types (「內容類型」) -------------------------------------------
 
 /** Decode per content type as horizontal bars: a row per content, a bar
  *  per run inside it, every bar on one scale. The acceptance rate is in the
@@ -438,7 +438,7 @@ function ContentChart({ runs }: { runs: RunView[] }) {
   );
 }
 
-// --- 四個區塊 ---------------------------------------------------------------
+// --- The four sections (「四個區塊」) ---------------------------------------
 
 /**
  * One of the four blocks: the situation and the question it answers, the

@@ -52,7 +52,7 @@ models:
   dual:
     cmd: |
       ${vllm-intel}
-      --model ${models-dir}/huihui-ai/x
+      --model ${models-dir}/Qwen/x
       --tensor-parallel-size 2
     env:
       - ONEAPI_DEVICE_SELECTOR=level_zero:0,1

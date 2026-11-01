@@ -25,7 +25,7 @@ import (
 
 // The benchmark's endpoints (api/bench.go). Running one unloads models
 // other people may be using and pauses /v1 for everyone, so everything but
-// the status is the administrator's (D29); the status is what every signed-in
+// the status is the administrator's; the status is what every signed-in
 // page reads for the banner.
 
 // benchGate is the /v1 pause, nil -- admitting everything -- when the
@@ -37,14 +37,14 @@ func (s *Server) benchGate() *bench.Gate {
 	return s.Bench.Gate
 }
 
-// pausedV1 answers a /v1 request while a run holds the API (D27). The body
+// pausedV1 answers a /v1 request while a run holds the API. The body
 // carries the message both where the console's pages read it and where
 // OpenAI clients do, so a terminal agent shows why rather than a bare 503.
 func pausedV1(w http.ResponseWriter, resumeAt time.Time) {
 	wait := time.Until(resumeAt)
 	if wait < time.Minute {
 		// Overrunning, or nearly done: a short wait, but not so short
-		// that a client hammers the console every second (Q14).
+		// that a client hammers the console every second.
 		wait = time.Minute
 	}
 	when := time.Now().Add(wait).Local().Format("15:04")
@@ -225,8 +225,8 @@ func (s *Server) readBenchRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// exportBenchRun is the submission as a file, with nothing local in it
-// (§11.1): no command, no paths.
+// exportBenchRun is the submission as a file, with nothing local in it:
+// no command, no paths.
 func (s *Server) exportBenchRun(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.benchRun(w, r)
 	if !ok {

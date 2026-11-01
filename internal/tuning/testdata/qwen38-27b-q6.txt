@@ -1,19 +1,19 @@
-The qwen38-27b-abliterated-q6 entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+A llama-swap entry from a two-B70 machine.
 -- engine --
 llamacpp
 -- env --
-LLAMA_NAME=llama-intel-qwen38-27b-abliterated-q6
+LLAMA_NAME=llama-intel-qwen38-27b-q6
 ONEAPI_DEVICE_SELECTOR=level_zero:0
 -- cmd --
 ${llama-intel}
---model ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/Huihui-Qwen3.8-27B-abliterated-UD-Q6_K_XL.gguf
+--model ${models-dir}/unsloth/Qwen3.8-27B-GGUF/Qwen3.8-27B-UD-Q6_K_XL.gguf
 --host 127.0.0.1 --port ${PORT}
 --n-gpu-layers 99
 --load-mode none
 --ctx-size 131072
 --jinja
 --chat-template-file ${qwen38-template}
---mmproj ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated-GGUF/mmproj-model-bf16.gguf
+--mmproj ${models-dir}/unsloth/Qwen3.8-27B-GGUF/mmproj-model-bf16.gguf
 --parallel 2
 --cache-ram 24576
 --temperature 1.0

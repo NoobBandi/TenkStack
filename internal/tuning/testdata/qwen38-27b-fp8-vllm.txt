@@ -1,13 +1,13 @@
-The qwen38-27b-abliterated-fp8-vllm entry of ~/ai/llama-swap/config.yaml, 2026-10-07.
+A llama-swap entry from a two-B70 machine.
 -- engine --
 vllm
 -- env --
 ONEAPI_DEVICE_SELECTOR=level_zero:0,1
-VLLM_NAME=vllm-intel-qwen38-27b-abliterated-fp8-vllm
+VLLM_NAME=vllm-intel-qwen38-27b-fp8-vllm
 -- cmd --
 ${vllm-intel}
---model ${models-dir}/huihui-ai/Huihui-Qwen3.8-27B-abliterated
---served-model-name qwen38-27b-abliterated-fp8-vllm
+--model ${models-dir}/Qwen/Qwen3.8-27B
+--served-model-name qwen38-27b-fp8-vllm
 --host 127.0.0.1 --port ${PORT}
 --max-model-len 262144
 --tensor-parallel-size 2

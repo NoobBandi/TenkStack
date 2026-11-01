@@ -21,10 +21,11 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/schema"
 )
 
-// Runner measures one model the way §7.3 says, the same for every engine
-// (D22): OpenAI streaming chat completions, timed from this side, with the
-// engine's own token counts. It talks to llama-swap directly rather than
-// through the console's /v1, which is paused while it runs (D27).
+// Runner measures one model the same way for every engine, so runs on
+// different engines compare: OpenAI streaming chat completions, timed from
+// this side, with the engine's own token counts. It talks to llama-swap
+// directly rather than through the console's /v1, which is paused while it
+// runs.
 type Runner struct {
 	Base   string       // llama-swap, http://127.0.0.1:8080
 	Client *http.Client // nil: one without an overall timeout; each request has its own
@@ -66,7 +67,7 @@ type Outcome struct {
 	Generated                int
 }
 
-// ignoreEOSEngines take ignore_eos (D24). Strata does not; it is given
+// ignoreEOSEngines take ignore_eos. Strata does not; it is given
 // prompts that ask for long output, and short replies do not count.
 var ignoreEOSEngines = map[string]bool{"llamacpp": true, "vllm": true, "sglang": true}
 
@@ -125,7 +126,7 @@ func (r *Runner) Run(ctx context.Context, desc Description, ch Choice, report fu
 			return out, fmt.Errorf("預熱失敗：%w", err)
 		}
 		if i == 0 && !out.Loaded {
-			// From the request to the first usable token (D28); the
+			// From the request to the first usable token; the
 			// loading notices llama-swap streams meanwhile are not tokens.
 			cold := s.toContent
 			if cold <= 0 {
@@ -224,7 +225,7 @@ func (r *Runner) Loaded(ctx context.Context, model string) bool {
 }
 
 // prefix makes every request's prompt start differently, so no engine
-// serves any of it from a prefix cache (D25).
+// serves any of it from a prefix cache.
 func prefix() string {
 	b := make([]byte, 8)
 	rand.Read(b)
@@ -251,7 +252,7 @@ func cut(filler string, n int) string {
 }
 
 // text is a case's request text, its filler sized to reach the case's
-// depth. The size comes from probes (D23): not every engine can tokenize
+// depth. The size comes from probes: not every engine can tokenize
 // on request, but every one reports usage.prompt_tokens.
 func (ru *run) text(ctx context.Context, c schema.BenchCase) (string, error) {
 	s := ru.r.Suite
@@ -334,7 +335,8 @@ func (ru *run) ignoreEOS() bool {
 	return ru.r.Suite.IgnoreEOS && ignoreEOSEngines[ru.desc.Engine.Key] && !ru.dropped["ignore_eos"]
 }
 
-// body is one request under the fixed conditions of §7.2.
+// body is one request under the suite's fixed conditions: its sampling,
+// seed and thinking switch, the same for every engine.
 func (ru *run) body(content string, maxTokens int, stream bool) []byte {
 	s := ru.r.Suite
 	m := map[string]any{
@@ -349,7 +351,7 @@ func (ru *run) body(content string, maxTokens int, stream bool) []byte {
 		m["stream_options"] = map[string]any{"include_usage": true}
 	}
 	if !s.Thinking {
-		// Both: each engine reads the one it knows (D25).
+		// Both: each engine reads the one it knows.
 		m["chat_template_kwargs"] = map[string]any{"enable_thinking": false}
 		m["reasoning_effort"] = "none"
 	}
@@ -672,8 +674,7 @@ type specCount struct{ accepted, drafted float64 }
 
 // specCounters reads vLLM's speculative decoding counters through
 // llama-swap's upstream passthrough; nil for another engine, or when the
-// passthrough or the counters are not there (the accept rate is optional,
-// D22).
+// passthrough or the counters are not there (the accept rate is optional).
 func (ru *run) specCounters(ctx context.Context) *specCount {
 	if ru.desc.Engine.Key != "vllm" {
 		return nil

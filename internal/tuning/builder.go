@@ -294,7 +294,7 @@ func kvType(v string) string {
 }
 
 // draftModel names a draft model by its file or directory alone: the path
-// to it is this machine's (§11.1).
+// to it is this machine's and does not leave it.
 func draftModel(format, v string) *schema.ModelRef {
 	name := path.Base(strings.TrimRight(v, "/"))
 	if format == "gguf" {

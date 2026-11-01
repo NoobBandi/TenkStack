@@ -554,9 +554,12 @@ function buildDocument(source: string, language: string): string {
 
   // Spliced in as early as the document allows, for two reasons: a CSP delivered
   // after a resource has been requested does not apply to it, and the shim has
-  // to be in place before the document's own scripts run.
-  if (/<head[^>]*>/i.test(source)) {
-    return source.replace(/<head[^>]*>/i, (m) => `${m}${PREAMBLE}`);
+  // to be in place before the document's own scripts run. The tag name
+  // has to end where the pattern does, or a document with no <head> but a
+  // <header> would get the preamble spliced into its body.
+  const head = /<head(\s[^>]*)?>/i;
+  if (head.test(source)) {
+    return source.replace(head, (m) => `${m}${PREAMBLE}`);
   }
   if (/<html[^>]*>/i.test(source)) {
     return source.replace(/<html[^>]*>/i, (m) => `${m}<head>${PREAMBLE}</head>`);
