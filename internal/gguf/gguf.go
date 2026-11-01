@@ -56,9 +56,13 @@ var attnK = regexp.MustCompile(`^blk\.(\d+)\.attn_k[._]`)
 // length-prefixed, so a truncated read shows up as ErrShort, never as a
 // plausible wrong value.
 type cursor struct {
-	blob []byte
-	at   int
+	blob  []byte
+	at    int
+	depth int
 }
+
+// maxDepth is how deeply arrays may nest. Real files nest one level.
+const maxDepth = 8
 
 func (c *cursor) take(n int) ([]byte, error) {
 	if n < 0 || c.at+n > len(c.blob) {
@@ -169,6 +173,15 @@ func (c *cursor) value(tag uint32) (any, error) {
 			return fmt.Sprintf("<%d strings>", count), nil
 		}
 		if inner == typeArray {
+			// The count comes from the file. Each element takes at least
+			// its own type and count, so a count the rest of the header
+			// cannot hold is a lie, and allocating for it would take the
+			// process down; so would nesting without end.
+			if count > uint64(len(c.blob)-c.at)/12 || c.depth >= maxDepth {
+				return nil, ErrShort
+			}
+			c.depth++
+			defer func() { c.depth-- }()
 			out := make([]any, 0, count)
 			for i := uint64(0); i < count; i++ {
 				v, err := c.value(typeArray)

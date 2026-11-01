@@ -68,7 +68,7 @@ func (s *Server) readChat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, err := s.Chats.Get(id)
+	c, err := s.Chats.Get(id, callerID(r))
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -93,7 +93,7 @@ func (s *Server) patchChat(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusUnprocessableEntity, "invalid JSON body")
 		return
 	}
-	changed, err := s.Chats.Update(id, in.Title, in.Pinned)
+	changed, err := s.Chats.Update(id, callerID(r), in.Title, in.Pinned)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -110,7 +110,7 @@ func (s *Server) removeChat(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	gone, err := s.Chats.Delete(id)
+	gone, err := s.Chats.Delete(id, callerID(r))
 	if err != nil {
 		fail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -124,6 +124,11 @@ func (s *Server) removeChat(w http.ResponseWriter, r *http.Request) {
 
 // readBlob serves one stored image, cached for a year: the name is the
 // SHA-256 of the contents, so a given URL can never answer differently.
+//
+// An SVG is a document that can carry script, and anyone signed in can
+// store one; opened directly it would run on the console's origin with the
+// reader's session. The sandbox CSP gives it an opaque origin instead, and
+// an <img> still draws it.
 func (s *Server) readBlob(w http.ResponseWriter, r *http.Request) {
 	path, media := s.Blobs.Resolve("blob:" + r.PathValue("digest"))
 	if path == "" {
@@ -131,6 +136,8 @@ func (s *Server) readBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", media)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'")
 	serveFile(w, r, path, immutable)
 }
 

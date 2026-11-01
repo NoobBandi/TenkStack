@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/NoobBandi/TenkStack/internal/api"
@@ -121,9 +122,13 @@ func TestAuthorization(t *testing.T) {
 		{"DELETE", "/api/settings/huggingface"},
 		{"GET", "/api/search/service"},
 		{"POST", "/api/search/restart"},
+		{"POST", "/api/runtimes/card"},
+		{"POST", "/api/runtimes/comfy"},
+		{"POST", "/api/runtimes/action"},
+		{"POST", "/api/runtime/container"},
 		{"POST", "/api/sandbox/build"},
 		{"DELETE", "/api/sandbox"},
-		// A benchmark unloads other people's models and pauses /v1 (D29).
+		// A benchmark unloads other people's models and pauses /v1 for everyone.
 		{"GET", "/api/bench/plan?model=m&tier=quick"},
 		{"POST", "/api/bench/run"},
 		{"POST", "/api/bench/cancel"},
@@ -147,6 +152,25 @@ func TestAuthorization(t *testing.T) {
 	expect("admin's key on /api", code, 403)
 	code, _ = call(as{bearer: adminKey.Secret}, "POST", "/api/users", map[string]string{"username": "z", "password": "1234"})
 	expect("admin's key creates a user", code, 403)
+
+	// The admin's cookie rides along on a request another page on the same
+	// host sends, ComfyUI's included; the request is refused all the same.
+	forged := func(site, origin string) int {
+		req := httptest.NewRequest("POST", "/api/users", strings.NewReader(`{"username":"w","password":"secret-9","role":"admin"}`))
+		req.Header.Set("Content-Type", "text/plain")
+		req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminSession})
+		if site != "" {
+			req.Header.Set("Sec-Fetch-Site", site)
+		}
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	expect("same-site page posts as the admin", forged("same-site", ""), 403)
+	expect("other origin posts as the admin (no Sec-Fetch-Site)", forged("", "http://example.com:8188"), 403)
 
 	// Deleting someone ends their session at once, not in thirty days.
 	code, _ = call(asAdmin, "DELETE", fmt.Sprintf("/api/users/%d", member.ID), nil)

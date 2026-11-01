@@ -102,10 +102,23 @@ func (s *Store) Search(q string, userID *int64, limit int) ([]api.ChatRow, error
 	return scanRows(rows)
 }
 
-func (s *Store) Get(id int64) (*api.Conversation, error) {
+// owned narrows a query on one conversation to the caller's own. A
+// conversation is private to the account that made it, so someone else's
+// answers as if it did not exist. userID is nil only while there are no
+// accounts, the same state in which authentication is off.
+func owned(query string, args []any, userID *int64) (string, []any) {
+	if userID == nil {
+		return query, args
+	}
+	args = append(args, *userID)
+	return query + fmt.Sprintf(" AND user_id = $%d", len(args)), args
+}
+
+func (s *Store) Get(id int64, userID *int64) (*api.Conversation, error) {
 	var c api.Conversation
 	var params string
-	err := s.db.QueryRow("SELECT id, user_id, title, model, params, pinned::int, created_at, updated_at FROM conversations WHERE id = $1", id).
+	query, args := owned("SELECT id, user_id, title, model, params, pinned::int, created_at, updated_at FROM conversations WHERE id = $1", []any{id}, userID)
+	err := s.db.QueryRow(query, args...).
 		Scan(&c.ID, &c.UserID, &c.Title, &c.Model, &params, &c.Pinned, &c.CreatedAt, &c.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -201,7 +214,8 @@ func (s *Store) Save(id *int64, messages []map[string]any, model string, params 
 	} else {
 		conversationID = *id
 		var existing string
-		if err := tx.QueryRow("SELECT title FROM conversations WHERE id = $1", conversationID).Scan(&existing); err == sql.ErrNoRows {
+		query, args := owned("SELECT title FROM conversations WHERE id = $1", []any{conversationID}, userID)
+		if err := tx.QueryRow(query+" FOR UPDATE", args...).Scan(&existing); err == sql.ErrNoRows {
 			return 0, &ErrNoConversation{conversationID}
 		} else if err != nil {
 			return 0, err
@@ -279,7 +293,7 @@ func jsonNoEscape(v any) (string, error) {
 	return strings.TrimSuffix(b.String(), "\n"), nil
 }
 
-func (s *Store) Update(id int64, title *string, pinned *bool) (bool, error) {
+func (s *Store) Update(id int64, userID *int64, title *string, pinned *bool) (bool, error) {
 	var sets []string
 	var args []any
 	if title != nil {
@@ -294,7 +308,8 @@ func (s *Store) Update(id int64, title *string, pinned *bool) (bool, error) {
 		return false, nil
 	}
 	args = append(args, id)
-	res, err := s.db.Exec(fmt.Sprintf("UPDATE conversations SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args)), args...)
+	query, args := owned(fmt.Sprintf("UPDATE conversations SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args)), args, userID)
+	res, err := s.db.Exec(query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -302,8 +317,9 @@ func (s *Store) Update(id int64, title *string, pinned *bool) (bool, error) {
 	return n > 0, nil
 }
 
-func (s *Store) Delete(id int64) (bool, error) {
-	res, err := s.db.Exec("DELETE FROM conversations WHERE id = $1", id)
+func (s *Store) Delete(id int64, userID *int64) (bool, error) {
+	query, args := owned("DELETE FROM conversations WHERE id = $1", []any{id}, userID)
+	res, err := s.db.Exec(query, args...)
 	if err != nil {
 		return false, err
 	}

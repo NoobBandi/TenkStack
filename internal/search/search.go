@@ -12,10 +12,12 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/net/html"
@@ -41,12 +43,46 @@ func (e *Unavailable) Error() string { return e.Msg }
 type Client struct {
 	Base string
 	http *http.Client
+	// page reads what the model asks for, and reaches only the public
+	// internet; http also reaches SearXNG, which is on loopback.
+	page *http.Client
 }
 
 func New(base string) *Client {
 	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	return &Client{Base: base, http: &http.Client{Timeout: 20 * time.Second,
-		Transport: &http.Transport{DialContext: dialer.DialContext}}}
+	public := &net.Dialer{Timeout: 5 * time.Second, Control: publicOnly}
+	return &Client{Base: base,
+		http: &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{DialContext: dialer.DialContext}},
+		page: &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{DialContext: public.DialContext}},
+	}
+}
+
+// errInternal is a page address that is not on the public internet.
+var errInternal = errors.New("不讀這台機器或內部網路上的網址")
+
+// cgnat is 100.64.0.0/10, where Tailscale addresses its nodes.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicOnly refuses a connection to anything but a public address. The URL
+// comes from the model, and a page it read can tell it which one to ask
+// for: this machine's own services and the LAN must not be among them. It
+// runs on the resolved address of every dial, redirects included, so a
+// hostname that resolves inward is caught too.
+func publicOnly(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return err
+	}
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() || cgnat.Contains(ip) {
+		return errInternal
+	}
+	return nil
 }
 
 // Search returns only what is worth sending on: SearXNG's per-result
@@ -454,7 +490,10 @@ func (c *Client) Read(ctx context.Context, pageURL, query string) (map[string]an
 		return nil, &Unavailable{"讀不到這個網址：" + err.Error()}
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TenkStack/1.0)")
-	resp, err := c.http.Do(req)
+	resp, err := c.page.Do(req)
+	if errors.Is(err, errInternal) {
+		return nil, &Unavailable{"讀不到這個網址：" + errInternal.Error()}
+	}
 	if err != nil {
 		return nil, &Unavailable{"讀不到這個網址：" + err.Error()}
 	}

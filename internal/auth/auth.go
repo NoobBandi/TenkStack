@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -24,6 +25,10 @@ import (
 const (
 	CookieName = "ai_console_session"
 	SessionTTL = 30 * 24 * time.Hour
+	// SetupCookie carries the setup token once a setup link was opened.
+	SetupCookie = "tenkstack_setup"
+	// SetupHeader carries it for a program, such as `tenkstack provision`.
+	SetupHeader = "X-Setup-Token"
 )
 
 // Login must be open or nobody could authenticate; health is what a proxy
@@ -44,13 +49,109 @@ type Accounts interface {
 type Auth struct {
 	keyPath  string
 	accounts Accounts
+	// setupPath holds the setup token, beside the signing key.
+	setupPath string
 
-	mu     sync.Mutex
-	secret []byte
+	mu      sync.Mutex
+	secret  []byte
+	setup   string
+	retired bool
 }
 
 func New(keyPath string, accounts Accounts) *Auth {
-	return &Auth{keyPath: keyPath, accounts: accounts}
+	return &Auth{keyPath: keyPath, accounts: accounts, setupPath: filepath.Join(filepath.Dir(keyPath), "setup-token")}
+}
+
+// SetupToken is what admits a caller before the first account exists. Until
+// then there is nobody to sign in as, and whoever reaches the console first
+// would otherwise make themselves its administrator -- on an install that
+// listens on every interface, that could be anyone on the network. The
+// token is in a file only this machine's user can read; the installer
+// prints a link carrying it, and the console logs one.
+func (a *Auth) SetupToken() (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.setup != "" {
+		return a.setup, nil
+	}
+	a.retired = false
+	if b, err := os.ReadFile(a.setupPath); err == nil && len(strings.TrimSpace(string(b))) >= 32 {
+		a.setup = strings.TrimSpace(string(b))
+		return a.setup, nil
+	}
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(b)
+	if err := os.MkdirAll(filepath.Dir(a.setupPath), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(a.setupPath, []byte(token+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	log.Printf("no account exists yet: open the console with ?setup=%s to create the first one (the token is also in %s)", token, a.setupPath)
+	a.setup = token
+	return token, nil
+}
+
+// setupAdmits is whether r carries the setup token.
+func (a *Auth) setupAdmits(r *http.Request) bool {
+	given := r.Header.Get(SetupHeader)
+	if given == "" {
+		if c, err := r.Cookie(SetupCookie); err == nil {
+			given = c.Value
+		}
+	}
+	if given == "" {
+		return false
+	}
+	token, err := a.SetupToken()
+	if err != nil {
+		log.Printf("could not read the setup token; refusing: %v", err)
+		return false
+	}
+	return hmac.Equal([]byte(given), []byte(token))
+}
+
+// retireSetup removes the token once an account exists: from then on the
+// accounts are how anyone gets in.
+func (a *Auth) retireSetup() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.retired {
+		return
+	}
+	a.setup, a.retired = "", true
+	if err := os.Remove(a.setupPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("could not remove the setup token: %v", err)
+	}
+}
+
+// AcceptSetupLink turns a link carrying ?setup= into a cookie and sends
+// the browser on without the token in its address bar or history. It
+// reports whether it answered the request.
+func (a *Auth) AcceptSetupLink(w http.ResponseWriter, r *http.Request) bool {
+	q := r.URL.Query()
+	given := q.Get("setup")
+	if given == "" {
+		return false
+	}
+	q.Del("setup")
+	next := *r.URL
+	next.RawQuery = q.Encode()
+	if !a.Enforced() {
+		if token, err := a.SetupToken(); err == nil && hmac.Equal([]byte(given), []byte(token)) {
+			proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+			http.SetCookie(w, &http.Cookie{
+				Name: SetupCookie, Value: given, Path: "/", MaxAge: int((24 * time.Hour).Seconds()),
+				HttpOnly: true, SameSite: http.SameSiteLaxMode,
+				Secure: strings.EqualFold(strings.TrimSpace(proto), "https"),
+			})
+		}
+	}
+	http.Redirect(w, r, next.RequestURI(), http.StatusFound)
+	return true
 }
 
 func (a *Auth) key() ([]byte, error) {
@@ -60,11 +161,15 @@ func (a *Auth) key() ([]byte, error) {
 		return a.secret, nil
 	}
 	b, err := os.ReadFile(a.keyPath)
-	if err == nil {
+	switch {
+	case err == nil && len(b) >= 32:
 		a.secret = b
 		return b, nil
-	}
-	if !os.IsNotExist(err) {
+	case err == nil:
+		// An empty or truncated key would let anyone sign a session. Every
+		// session it signed ends here, which is the point.
+		log.Printf("the session signing key at %s is too short; replacing it", a.keyPath)
+	case !os.IsNotExist(err):
 		return nil, err
 	}
 	b = make([]byte, 32)
@@ -173,13 +278,17 @@ func (a *Auth) Identify(r *http.Request) *api.Identity {
 	return id
 }
 
-// Enforced is true once any account exists. The first run is open so the
-// owner can create one; a broken store fails closed.
+// Enforced is true once any account exists. Before that, a caller with
+// the setup token may do anything, so the owner can create one; a broken
+// store fails closed.
 func (a *Auth) Enforced() bool {
 	any, err := a.accounts.Any()
 	if err != nil {
 		log.Printf("could not read the user store; failing closed: %v", err)
 		return true
+	}
+	if any {
+		a.retireSetup()
 	}
 	return any
 }
@@ -201,11 +310,24 @@ func (a *Auth) Middleware(next http.Handler) http.Handler {
 		var id *api.Identity
 		if guarded {
 			id = a.Identify(r)
-			if id == nil && !publicPaths[path] && a.Enforced() {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				json.NewEncoder(w).Encode(api.Error{Detail: "authentication required"})
-				return
+			if id == nil && !publicPaths[path] {
+				if a.Enforced() {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnauthorized)
+					json.NewEncoder(w).Encode(api.Error{Detail: "authentication required"})
+					return
+				}
+				if !a.setupAdmits(r) {
+					// Setup tells the page to explain where the link is,
+					// rather than offer a sign-in nobody can pass.
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnauthorized)
+					json.NewEncoder(w).Encode(map[string]any{
+						"detail": "還沒有任何帳號。請用安裝程式最後印出的網址開啟主控台（網址裡帶有 setup token），建立第一個帳號。",
+						"setup":  true,
+					})
+					return
+				}
 			}
 			// A key is pasted into a chat client and travels. It opens the
 			// model API and nothing of the console's own: not accounts,

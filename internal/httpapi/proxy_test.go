@@ -56,3 +56,18 @@ models:
 		t.Errorf("llama.cpp entry is left alone: %v", got)
 	}
 }
+
+// The mux decodes %2F before the handler sees the path, so these are what
+// /v1/..%2Flogs and its relatives arrive as.
+func TestUpstreamPathStaysUnderV1(t *testing.T) {
+	for _, p := range []string{"chat/completions", "models", "audio/transcriptions", "models/qwen3.6-27b"} {
+		if !upstreamPath(p) {
+			t.Errorf("%q should pass", p)
+		}
+	}
+	for _, p := range []string{"../logs", "..", "a/../../api/captures/7", "./x", `..\logs`, "a?b", "a#b", "a%2e%2e"} {
+		if upstreamPath(p) {
+			t.Errorf("%q should be refused", p)
+		}
+	}
+}

@@ -16,14 +16,16 @@ import (
 
 // Provisioner installs engines and ComfyUI instances through a running
 // console's own endpoints, the ones its Engines and ComfyUI pages use. It
-// can only do so before the first account exists: until then the console
-// has no authentication, and after it this reports that it is locked out
-// rather than trying to be clever.
+// can only do so before the first account exists: until then the setup
+// token admits it, and after it this reports that it is locked out rather
+// than trying to be clever.
 type Provisioner struct {
 	Base   string // http://127.0.0.1:8070
 	Client *http.Client
-	Out    io.Writer
-	Lang   Lang
+	// SetupToken is the console's, read from its state directory.
+	SetupToken string
+	Out        io.Writer
+	Lang       Lang
 	// Live: rewrite one progress line in place (a terminal); otherwise
 	// print a line whenever the state changes.
 	Live    bool
@@ -53,6 +55,9 @@ func (p *Provisioner) call(ctx context.Context, method, path string, in, out any
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if p.SetupToken != "" {
+		req.Header.Set("X-Setup-Token", p.SetupToken)
 	}
 	resp, err := p.Client.Do(req)
 	if err != nil {

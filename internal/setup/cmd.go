@@ -167,8 +167,18 @@ func MainProvision(args []string) int {
 	comfy := fs.String("comfyui", "", "comma-separated PCI addresses")
 	vendors := fs.String("vendors", "", "comma-separated vendors (default: read from PCI)")
 	timeout := fs.Duration("timeout", 90*time.Minute, "give up on one item after this long")
+	tokenFile := fs.String("setup-token-file", "", "the console's setup token, which admits this before the first account exists")
 	if err := fs.Parse(args); err != nil {
 		return ExitFailed
+	}
+	token := ""
+	if *tokenFile != "" {
+		b, err := os.ReadFile(*tokenFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return ExitFailed
+		}
+		token = strings.TrimSpace(string(b))
 	}
 	l := ParseLang(*lang)
 	if l == "" {
@@ -178,7 +188,7 @@ func MainProvision(args []string) int {
 	if len(vs) == 0 {
 		vs = Detect(context.Background()).Vendors()
 	}
-	p := &Provisioner{Base: strings.TrimRight(*api, "/"), Client: &http.Client{Timeout: 30 * time.Second},
+	p := &Provisioner{Base: strings.TrimRight(*api, "/"), Client: &http.Client{Timeout: 30 * time.Second}, SetupToken: token,
 		Out: os.Stdout, Lang: l, Live: isTerminal(os.Stdout), Poll: 2 * time.Second, Timeout: *timeout}
 	ctx := context.Background()
 

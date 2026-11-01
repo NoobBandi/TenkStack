@@ -622,6 +622,15 @@ fetch_code() {
   fi
 }
 
+# Whether a downloaded release binary matches the release's SHA256SUMS.
+# The sums come from the same release, so this catches a truncated or
+# altered download on the way, not a release that was itself replaced.
+release_sum_ok() {
+  local file=$1 name=$2 want
+  want=$(curl -fsSL "$RELEASE_URL/SHA256SUMS" 2>/dev/null | awk -v n="$name" '$2 == n || $2 == "*" n { print $1; exit }')
+  [[ -n $want && $(sha256sum "$file" | cut -d' ' -f1) == "$want" ]]
+}
+
 # The console is one static binary, the frontend inside it. A release is
 # downloaded; --source builds the same thing here, which is what a checkout
 # ahead of the last release needs.
@@ -633,6 +642,11 @@ fetch_console() {
 
   if ! $FROM_SOURCE; then
     if run curl -fsSL -o "$bin.new" "$RELEASE_URL/tenkstack-linux-$arch"; then
+      if ! $DRY_RUN && ! release_sum_ok "$bin.new" "tenkstack-linux-$arch"; then
+        rm -f "$bin.new"
+        die "$(L "下載的主控台和 release 的 SHA256SUMS 對不起來。" "The downloaded console does not match the release's SHA256SUMS.")" \
+            "$(L "再跑一次；一直這樣的話請回報。" "Run the installer again; if it keeps happening, please report it.")"
+      fi
       run chmod +x "$bin.new"
       run mv "$bin.new" "$bin"
       ok "$(L 主控台 console) $("$bin" -version 2>/dev/null || echo "($arch)")"
@@ -801,8 +815,13 @@ CADDY"
 		header_up -Connection
 		header_up -Upgrade
 	}
+	# The console's session goes no further than the check above: custom
+	# nodes run third-party code, and must not read it off a request.
 	reverse_proxy 127.0.0.1:{args[0]} {
 		flush_interval -1
+		header_up -Cookie
+		header_up -Authorization
+		header_up -X-Api-Key
 	}
 }
 CADDY"
@@ -1069,12 +1088,18 @@ start_and_verify() {
 }
 
 finish() {
-  local host url; host=$(hostname -f 2>/dev/null || hostname)
+  local host url link token_file="$ROOT/ai-console/setup-token"
+  host=$(hostname -f 2>/dev/null || hostname)
   case $TLS_MODE in
     domain) url="https://$DOMAIN" ;;
     "")     url="http://$host:$CONSOLE_TLS_PORT" ;;
     *)      url="https://$host:$CONSOLE_TLS_PORT" ;;
   esac
+  # Until the first account exists, only a link carrying the console's setup
+  # token gets in: whoever reached it first would otherwise make themselves
+  # its administrator.
+  link=$url
+  if [[ -f $token_file ]]; then link="$url/?setup=$(tr -d '[:space:]' < "$token_file")"; fi
   step "$(L "完成" "Done")"
   if $NEEDS_REBOOT; then
     say "  $(L "還差一次重新開機：$REBOOT_WHY" "One reboot to go: $REBOOT_WHY")"
@@ -1082,10 +1107,13 @@ finish() {
     say ""
     say "  ${C_B}sudo reboot${C_OFF}"
     say ""
-    say "  $(L "回來之後：" "Then: ")$url"
+    say "  $(L "回來之後，這行指令會印出建立第一個帳號用的網址：" "Then this prints the link for creating the first account:")"
+    say "  ${C_B}echo \"$url/?setup=\$(cat $token_file)\"${C_OFF}"
   else
-    say "  $url"
-    say "  ${C_DIM}$(L "（第一次進去是註冊畫面。第一個帳號建立之後才會開始要求登入。）" "(The first visit shows sign-up. Signing in is required once the first account exists.)")${C_OFF}"
+    say "  $link"
+    if [[ $link != "$url" ]]; then
+      say "  ${C_DIM}$(L "（網址裡是一次性的 setup token：只有帶著它才能建立第一個帳號，建好就失效。別分享這個網址。）" "(The link carries a one-time setup token: only it can create the first account, and it stops working once one exists. Do not share it.)")${C_OFF}"
+    fi
   fi
   case $TLS_MODE in
     internal)
@@ -1133,6 +1161,7 @@ setup_ui_fetch() {
   trap 'rm -rf "$SETUP_TMP"' EXIT
   printf '\n  %s\n' "Loading the setup screens / 載入安裝畫面…"
   if ! curl -fsSL -o "$SETUP_TMP/tenkstack" "$RELEASE_URL/tenkstack-linux-$arch"; then return 1; fi
+  if ! release_sum_ok "$SETUP_TMP/tenkstack" "tenkstack-linux-$arch"; then return 1; fi
   # A release from before the setup screens would take `setup` for noise
   # and start serving, so it is recognised by a marker in the file rather
   # than by running it.
@@ -1207,7 +1236,7 @@ ask_language() {
 }
 
 # Engines and ComfyUI, installed by the console itself once it is up and
-# before anyone has signed up -- until then it asks for no password.
+# before anyone has signed up -- until then the setup token admits this.
 provision() {
   if [[ -z $ENGINES && -z $COMFY_CARDS ]]; then return; fi
   step "$(L "⑧ 推論引擎與 ComfyUI" "⑧ Engines and ComfyUI")"
@@ -1215,7 +1244,7 @@ provision() {
     skip "$(L "要等重開機之後，到「推論引擎」與「ComfyUI」頁安裝" "after the reboot, install them from the Engines and ComfyUI pages")"
     return
   fi
-  local args=(provision --api "http://127.0.0.1:$CONSOLE_PORT" --lang "$UI_LANG")
+  local args=(provision --api "http://127.0.0.1:$CONSOLE_PORT" --lang "$UI_LANG" --setup-token-file "$ROOT/ai-console/setup-token")
   if [[ -n $ENGINES ]]; then args+=(--engines "$ENGINES"); fi
   if [[ -n $COMFY_CARDS ]]; then args+=(--comfyui "$COMFY_CARDS"); fi
   run "$ROOT/console/tenkstack" "${args[@]}" \

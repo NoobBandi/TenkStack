@@ -96,8 +96,12 @@ func main() {
 	userStore := users.New(db)
 	prefs := settings.New(db)
 	authn := auth.New(layout.SessionKey, userStore)
+	// Made now rather than on the first request, so the installer can read
+	// it as soon as the console is up.
 	if !authn.Enforced() {
-		log.Print("no accounts exist yet, so authentication is OFF. It switches on by itself as soon as the first user is created.")
+		if _, err := authn.SetupToken(); err != nil {
+			log.Fatalf("no accounts exist yet and the setup token could not be written: %v", err)
+		}
 	}
 
 	// Intel first, then alphabetical: the order decides the global device
@@ -186,11 +190,10 @@ func main() {
 				}
 				return out
 			}),
-		Version:    version,
-		WebDist:    *webDist,
-		Embedded:   webdist.FS(),
-		Started:    time.Now(),
-		DevOrigins: []string{"http://127.0.0.1:5173", "http://localhost:5173"},
+		Version:  version,
+		WebDist:  *webDist,
+		Embedded: webdist.FS(),
+		Started:  time.Now(),
 	}
 
 	// The benchmark describes models and samples resources through the

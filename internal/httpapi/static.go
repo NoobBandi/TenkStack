@@ -106,6 +106,13 @@ func (s *Server) assets() http.Handler {
 
 // spa serves a real file when there is one, otherwise the shell.
 func (s *Server) spa(w http.ResponseWriter, r *http.Request) {
+	if s.Auth != nil && s.Auth.AcceptSetupLink(w, r) {
+		return
+	}
+	// No other page may frame the console: one on another port of this
+	// host counts as the same site and would be sent the session cookie.
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Frame-Options", "DENY")
 	if rel := strings.TrimPrefix(r.URL.Path, "/"); rel != "" && s.serveSite(w, r, rel, revalidate) {
 		return
 	}

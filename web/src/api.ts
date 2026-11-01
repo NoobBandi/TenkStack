@@ -1218,9 +1218,21 @@ export interface AuthState {
   identity: Identity | null;
   /** False only before the first account exists; it flips on by itself then. */
   enforcement: boolean;
+  /** No account exists yet, and this browser has not opened the setup link. */
+  setup?: boolean;
 }
 
-export const fetchAuth = () => get<AuthState>('/auth/me');
+export const fetchAuth = async (): Promise<AuthState> => {
+  const res = await fetch(`${BASE}/auth/me`);
+  if (res.status === 401) {
+    // Before the first account only the installer's setup link gets in; the
+    // backend says so rather than leave a sign-in nobody can pass.
+    const body = await res.clone().json().catch(() => null);
+    if (body?.setup === true) return { identity: null, enforcement: false, setup: true };
+  }
+  if (!res.ok) throw new Error(await failure(res, '/auth/me'));
+  return res.json() as Promise<AuthState>;
+};
 export const login = (username: string, password: string) =>
   send<{ id: number; username: string; role: string }>('/auth/login', 'POST', { username, password });
 export const logout = () => send<{ ok: boolean }>('/auth/logout', 'POST');

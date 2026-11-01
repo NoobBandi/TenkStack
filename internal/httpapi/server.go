@@ -102,8 +102,6 @@ type Server struct {
 	WebDist  string
 	Embedded fs.FS
 	Started  time.Time
-	// DevOrigins get CORS headers with credentials, for the Vite dev server.
-	DevOrigins []string
 }
 
 func (s *Server) Handler() http.Handler {
@@ -267,29 +265,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /assets/", s.assets())
 	mux.HandleFunc("GET /", s.spa)
 
-	return s.cors(s.Auth.Middleware(mux))
-}
-
-func (s *Server) cors(next http.Handler) http.Handler {
-	allowed := map[string]bool{}
-	for _, o := range s.DevOrigins {
-		allowed[o] = true
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if origin := r.Header.Get("Origin"); allowed[origin] {
-			h := w.Header()
-			h.Set("Access-Control-Allow-Origin", origin)
-			h.Set("Access-Control-Allow-Credentials", "true")
-			h.Set("Vary", "Origin")
-			if r.Method == http.MethodOptions {
-				h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-				h.Set("Access-Control-Allow-Headers", r.Header.Get("Access-Control-Request-Headers"))
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-		}
-		next.ServeHTTP(w, r)
-	})
+	// The session cookie is all a browser needs to act as someone, and it
+	// is sent to the console from any page on the same host, ComfyUI's
+	// included. A state-changing request from another origin is refused.
+	// /v1 is exempt: desktop chat clients send an Origin of their own, and
+	// what a forged request could do there is ask for a completion.
+	csrf := http.NewCrossOriginProtection()
+	csrf.AddInsecureBypassPattern("/v1/")
+	return csrf.Handler(s.Auth.Middleware(mux))
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

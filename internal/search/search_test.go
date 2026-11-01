@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -58,5 +59,25 @@ func TestPassagesOverlap(t *testing.T) {
 	}
 	if !strings.HasPrefix(list[1], "word") {
 		t.Errorf("overlap tail did not snap to a word: %q", list[1][:20])
+	}
+}
+
+// The page to read comes from the model; it must not reach this machine or
+// the LAN, by address or by a name that resolves there.
+func TestReadStaysOnThePublicInternet(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:80", "[::1]:80", "10.0.0.1:443", "192.168.1.1:80", "172.16.0.1:80",
+		"169.254.169.254:80", "100.101.102.103:80", "0.0.0.0:80", "[::ffff:127.0.0.1]:80", "[fd00::1]:80", "[fe80::1]:80"} {
+		if publicOnly("tcp", addr, nil) == nil {
+			t.Errorf("%s should be refused", addr)
+		}
+	}
+	for _, addr := range []string{"1.1.1.1:443", "[2606:4700:4700::1111]:443"} {
+		if err := publicOnly("tcp", addr, nil); err != nil {
+			t.Errorf("%s should be allowed: %v", addr, err)
+		}
+	}
+	c := New("http://127.0.0.1:1")
+	if _, err := c.Read(context.Background(), "http://127.0.0.1:1/", ""); err == nil || !strings.Contains(err.Error(), "內部網路") {
+		t.Errorf("reading loopback: %v", err)
 	}
 }

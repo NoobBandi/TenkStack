@@ -166,10 +166,30 @@ func Tag() string {
 	return Repo + ":" + hex.EncodeToString(h.Sum(nil))[:12]
 }
 
+// maxExec bounds what one docker command may print back. The code in a
+// container runs as the same user as client.py and can write to its
+// output, so without a bound a call could fill the console's memory.
+// A file read is at most 50 MB; a run's reply is far less.
+const maxExec = 64 << 20
+
+// capped keeps the first max bytes and drops the rest, so an oversized reply
+// fails to parse instead of being held.
+type capped struct {
+	bytes.Buffer
+	max int
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.max - c.Len(); room > 0 {
+		c.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
 func docker(ctx context.Context, stdin io.Reader, args ...string) ([]byte, string, error) {
 	cmd := exec.CommandContext(ctx, "docker", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, &stdout, &stderr
+	stdout, stderr := &capped{max: maxExec}, &capped{max: 1 << 20}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 	err := cmd.Run()
 	return stdout.Bytes(), strings.TrimSpace(stderr.String()), err
 }
@@ -568,8 +588,8 @@ func (m *Manager) Run(ctx context.Context, owner int64, session, code string) (a
 	timeout, memory := m.Limits()
 	body, _ := json.Marshal(map[string]string{"code": code})
 	cmd := exec.Command("docker", "exec", "-i", b.name, "python", "/opt/kernel/client.py", "run")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(body), &stdout, &stderr
+	stdout, stderr := &capped{max: maxExec}, &capped{max: 1 << 20}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(body), stdout, stderr
 	begun := time.Now()
 	if err := cmd.Start(); err != nil {
 		return out, err

@@ -24,7 +24,7 @@ import Connections from './pages/Connections';
 import Logs from './pages/Logs';
 import About from './pages/About';
 import Bench from './pages/Bench';
-import Login from './pages/Login';
+import Login, { SetupLinkNeeded } from './pages/Login';
 import { StreamProvider, useStream } from './stream';
 import { IdentityProvider, useIsOwner } from './identity';
 import BenchStatusProvider from './components/BenchStatusProvider';
@@ -215,6 +215,14 @@ export default function App() {
         <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>
           <Spin size="large" />
         </div>
+      </ConfigProvider>
+    );
+  }
+
+  if (auth.setup) {
+    return (
+      <ConfigProvider locale={zhTW} theme={darkTheme}>
+        <SetupLinkNeeded />
       </ConfigProvider>
     );
   }

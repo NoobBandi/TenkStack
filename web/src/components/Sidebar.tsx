@@ -61,7 +61,7 @@ export const NAV_GROUPS = [
       { key: '/', icon: <DashboardOutlined />, label: '總覽' },
       { key: '/chat', icon: <MessageOutlined />, label: '對話' },
       { key: '/comfyui', icon: <PictureOutlined />, label: 'ComfyUI' },
-      { key: '/files', icon: <FolderOpenOutlined />, label: '檔案' },
+      { key: '/files', icon: <FolderOpenOutlined />, label: '檔案', adminOnly: true },
     ],
   },
   {
@@ -70,7 +70,7 @@ export const NAV_GROUPS = [
       { key: '/models', icon: <AppstoreOutlined />, label: '模型' },
       { key: '/catalog', icon: <CloudDownloadOutlined />, label: '模型目錄' },
       { key: '/engines', icon: <DeploymentUnitOutlined />, label: '推論引擎' },
-      // Only the administrator can run one or read the records (D29).
+      // Only the administrator can run one or read the records.
       { key: '/bench', icon: <FieldTimeOutlined />, label: '跑分', adminOnly: true },
       { key: '/gpu', icon: <ThunderboltOutlined />, label: '顯示卡' },
       { key: '/connections', icon: <ApiOutlined />, label: '連線' },
@@ -143,7 +143,7 @@ function Footer({ auth, onSignOut, collapsed }: {
       </button>
     </Dropdown>
   ) : (
-    <Tooltip title="還沒有任何帳號，誰都能用；到「使用者」建立第一個帳號後就會開始要求登入" placement="right">
+    <Tooltip title="還沒有任何帳號，只有開過安裝時 setup 網址的瀏覽器進得來；到「使用者」建立第一個帳號後，就改成要登入" placement="right">
       <Link to="/users" style={{
         display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1, overflow: 'hidden',
         padding: '4px 8px 4px 16px', color: ACCENT.warn, fontSize: 12,

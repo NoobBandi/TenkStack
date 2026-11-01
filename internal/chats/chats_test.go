@@ -21,7 +21,7 @@ func TestSaveGetSearch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := s.Get(id)
+	c, err := s.Get(id, &owner)
 	if err != nil || c == nil {
 		t.Fatalf("Get: %v, %v", c, err)
 	}
@@ -42,7 +42,7 @@ func TestSaveGetSearch(t *testing.T) {
 	}
 
 	pin := true
-	if ok, err := s.Update(id, nil, &pin); !ok || err != nil {
+	if ok, err := s.Update(id, &owner, nil, &pin); !ok || err != nil {
 		t.Fatalf("Update: %v, %v", ok, err)
 	}
 	list, err := s.List(&owner, 10)
@@ -54,14 +54,31 @@ func TestSaveGetSearch(t *testing.T) {
 	if _, err := s.Save(&id, []map[string]any{{"role": "user", "content": "x"}}, "m", nil, &owner, nil); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := s.Get(id); len(c.Messages) != 1 || c.Title != "Hello 台北" {
+	if c, _ := s.Get(id, &owner); len(c.Messages) != 1 || c.Title != "Hello 台北" {
 		t.Errorf("after resave: %+v", c)
 	}
 	missing := int64(999)
 	if _, err := s.Save(&missing, nil, "m", nil, &owner, nil); err == nil {
 		t.Error("saving to a missing conversation should fail")
 	}
-	if ok, _ := s.Delete(id); !ok {
+
+	// Someone else's conversation answers as if it did not exist.
+	if c, err := s.Get(id, &other); c != nil || err != nil {
+		t.Errorf("another user read it: %v, %v", c, err)
+	}
+	if ok, _ := s.Update(id, &other, nil, &pin); ok {
+		t.Error("another user changed it")
+	}
+	if _, err := s.Save(&id, []map[string]any{{"role": "user", "content": "y"}}, "m", nil, &other, nil); err == nil {
+		t.Error("another user overwrote it")
+	}
+	if ok, _ := s.Delete(id, &other); ok {
+		t.Error("another user deleted it")
+	}
+	if c, _ := s.Get(id, &owner); c == nil || c.Messages[0]["content"] != "x" {
+		t.Errorf("owner's copy changed: %+v", c)
+	}
+	if ok, _ := s.Delete(id, &owner); !ok {
 		t.Error("Delete")
 	}
 }

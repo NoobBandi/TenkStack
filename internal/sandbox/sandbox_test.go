@@ -92,3 +92,17 @@ func TestTagFollowsRecipe(t *testing.T) {
 		t.Fatal("tag must be stable")
 	}
 }
+
+// Code in the container can write to client.py's output; the console keeps
+// a bounded amount of it and the reply then fails to parse.
+func TestCappedKeepsOnlyMax(t *testing.T) {
+	c := &capped{max: 5}
+	for range 3 {
+		if n, err := c.Write([]byte("abcd")); n != 4 || err != nil {
+			t.Fatalf("Write = %d, %v", n, err)
+		}
+	}
+	if c.String() != "abcda" {
+		t.Fatalf("kept %q", c.String())
+	}
+}

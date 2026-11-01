@@ -99,10 +99,36 @@ func logRequestShape(path string, body []byte, r *http.Request) {
 
 var droppedHeaders = map[string]bool{"host": true, "authorization": true, "x-api-key": true, "cookie": true, "content-length": true, "connection": true}
 
+// maxV1Body bounds one request to the model API. Images arrive inline as
+// base64, so it is generous; it exists so one request cannot exhaust memory.
+const maxV1Body = 256 << 20
+
+// upstreamClient does not follow redirects: a redirect from llama-swap
+// would lead outside /v1, which is all a key or a member may reach.
+var upstreamClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// upstreamPath is whether the decoded path after /v1/ stays under /v1/
+// once llama-swap reads it. The mux has already decoded %2F, so
+// "..%2Flogs" arrives here as "../logs" and would reach the rest of
+// llama-swap's API.
+func upstreamPath(path string) bool {
+	if strings.ContainsAny(path, "\\?#%") {
+		return false
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 // proxyV1 forwards /v1/* to llama-swap behind the console's authentication,
 // streaming the response so a completion arrives token by token.
 func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
-	// While a benchmark runs, outside requests wait (D27); those let in
+	// While a benchmark runs, outside requests wait; those let in
 	// are counted until their response has streamed, which is what a run
 	// drains before it starts.
 	leave, resumeAt, admitted := s.benchGate().Enter()
@@ -112,9 +138,13 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 	}
 	defer leave()
 	path := r.PathValue("path")
-	body, err := io.ReadAll(r.Body)
+	if !upstreamPath(path) {
+		fail(w, http.StatusNotFound, "not a model API path")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxV1Body))
 	if err != nil {
-		fail(w, http.StatusBadRequest, err.Error())
+		fail(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	}
 	logRequestShape(path, body, r)
@@ -171,7 +201,7 @@ func (s *Server) proxyV1(w http.ResponseWriter, r *http.Request) {
 			upstream.Header.Add(key, v)
 		}
 	}
-	resp, err := (&http.Client{}).Do(upstream)
+	resp, err := upstreamClient.Do(upstream)
 	if err != nil {
 		fail(w, http.StatusBadGateway, "llama-swap unreachable: "+err.Error())
 		return
