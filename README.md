@@ -6,17 +6,19 @@
 # TenkStack
 
 A self-hosted control panel for a machine with one or more GPUs that runs
-language models and generates images. It sits on top of
-[llama.cpp](https://github.com/ggml-org/llama.cpp) (through
-[llama-swap](https://github.com/mostlygeek/llama-swap)) and
-[ComfyUI](https://github.com/comfyanonymous/ComfyUI), and adds what neither has:
-a dashboard that reads every card, a chat with an agent that can run code and
-search, a model catalogue that downloads from Hugging Face, accounts and API
-keys, and an OpenAI- and Anthropic-compatible endpoint that Claude Code, Codex
-and anything else can point at.
+language models and generates images. Language models are served by
+[llama.cpp](https://github.com/ggml-org/llama.cpp),
+[vLLM](https://github.com/vllm-project/vllm) or
+[SGLang](https://github.com/sgl-project/sglang), all started and stopped
+through [llama-swap](https://github.com/mostlygeek/llama-swap); images by
+[ComfyUI](https://github.com/comfyanonymous/ComfyUI). The console adds what
+none of them has: a dashboard that reads every card, a chat with an agent that
+can run code and search, a model catalogue that downloads from Hugging Face,
+accounts and API keys, and an OpenAI- and Anthropic-compatible endpoint that
+Claude Code, Codex and anything else can point at.
 
-Each card is told what it is for — models, images, both, or nothing — and every
-surface reports per card rather than per machine. Intel, NVIDIA and AMD are
+Each card can run models, draw images, both, or nothing, and every surface
+reports per card rather than per machine. Intel, NVIDIA and AMD are
 three records in `internal/vendors/`; a machine with one vendor or three needs
 nothing edited.
 
@@ -63,11 +65,28 @@ Engines and ComfyUI are installed last, by the console itself once it is up
 and before the first account exists: `--engines llamacpp,vllm` and
 `--comfyui 0000:0c:00.0` (PCI addresses, as `lspci -D` prints them)
 pre-answer those screens. Anything left out, or anything that fails, is
-installed later from the console's Engines and ComfyUI pages. On Intel,
+installed later from the console's 推論引擎 and ComfyUI pages. On Intel,
 ComfyUI needs `xpu-smi` present for the console to see the cards.
 
-Other flags: `--lang en|zh-TW`, `--dir PATH` (default `~/tenkstack`),
-`--no-tui`, `--yes`, `--dry-run`, `--help`.
+Other flags:
+
+| | |
+|---|---|
+| `--lang en\|zh-TW` | The installer's language; otherwise asked first, defaulting to the locale. |
+| `--dir PATH` | Install directory (default `~/tenkstack`). |
+| `--source` | Build from a git checkout instead of downloading a release binary; installs Go and Node. |
+| `--code PATH` | Where that checkout goes (default `~/dev/tenkstack`). |
+| `--no-searxng` | Pre-answer "no" to SearXNG. |
+| `--no-tui` | Plain questions instead of the setup screens. |
+| `--yes`, `-y` | Take every default and ask nothing. |
+| `--dry-run` | Print what would be done and do none of it. |
+| `--help`, `-h` | The list, in the chosen language. |
+
+The environment variables it reads are `TENKSTACK_REPO` (the git URL `--source`
+clones), `TENKSTACK_REF` (the branch or tag, default `main`),
+`TENKSTACK_RELEASE` (where release binaries are downloaded from) and the ports
+`CONSOLE_PORT`, `CONSOLE_TLS_PORT`, `CONSOLE_API_PORT`,
+`CONSOLE_LLAMA_SWAP_PORT` and `CONSOLE_SEARXNG_PORT`.
 
 ### Uninstall
 
@@ -85,17 +104,22 @@ AMD cards need the vendor's compute stack already present.
 
 ## What it does
 
-- **Dashboard** — one block per GPU: power, VRAM, clock and tokens/sec, live,
+The sidebar names are the interface's own, in Traditional Chinese.
+
+- **Dashboard** (總覽) — one block per GPU: power, VRAM, clock and tokens/sec, live,
   with needle-less gauges for host CPU, memory and disk beside them and a chart
   that switches cards from a dropdown. GPU telemetry comes from `xpu-smi` and
   `nvidia-smi` together, because llama-swap probes only for the latter and
   reports nothing on Intel.
-- **Chat** — streaming, with server-measured throughput, context-window usage,
+- **Chat** (對話) — streaming, with server-measured throughput, context-window usage,
   image attachments and a composer that shades ``` code fences as you type.
   Sampling settings are seeded from the model's own llama-swap entry, so the
-  config and the panel cannot disagree.
-- **Agent** — the model runs Python to answer, up to eight steps, choosing what
-  to do next from what came back, and searches the web the same way. One trace
+  config and the panel cannot disagree, and a control the model's engine does
+  not take is hidden rather than sent.
+- **Agent** — the model runs Python to answer, up to eight steps by default,
+  choosing what to do next from what came back, and searches the web the same
+  way. The Python runs on the server in a gVisor container when the machine
+  has one, otherwise in the browser (see the design notes below). One trace
   above the reply carries the working in the order it happened: each thought,
   each program, its output, its figures, and the pages a search actually read —
   a citation nobody can follow is decoration.
@@ -104,25 +128,41 @@ AMD cards need the vendor's compute stack already present.
   source. React is transpiled in the frame instead of being posted to a compiler
   service; Python is CPython on WebAssembly. Nothing in a frame can reach the
   host, which is what the button is allowed to promise.
-- **Models** — add, edit and remove models; optionally delete their weights from
-  disk; spot orphaned files and interrupted downloads. One vision projector can
-  serve several models, and each entry says which it is using. On a machine
-  where more than one card can run a model, an entry also says which card —
-  and the field appears only there, because a single usable card is not a
-  choice.
-- **Catalog** — search Hugging Face and download GGUFs, segmented and resumable,
-  into per-repo folders so two publishers' identically named quants stay
-  distinct. Split uploads are listed as one model rather than as the fragments
-  they arrive in, since no fragment is usable alone. Any quant can be asked what
-  it would generate at *on this card* before the download starts, worked out
-  from the file's own header.
-- **GPU roles** — one row per card with two switches: run models, draw images.
-  Neither is a stored preference. The first reads whether a configured
-  llama-server can actually enumerate that card, the second whether a container
-  bound to it is up, so the page cannot come to disagree with the machine.
-  Turning either on for the first time installs what it needs — the official
-  llama.cpp image for the vendor, or a ComfyUI instance with its own port,
-  storage and Caddy site block — in the background, with a bar.
+- **Models** (模型) — add, edit and remove models for any installed engine: a
+  GGUF file for llama.cpp, or a safetensors folder for vLLM or SGLang with its
+  context, card count, memory share and optional on-the-fly quantisation;
+  optionally delete their weights from disk; spot orphaned files and
+  interrupted downloads. One vision projector can serve several llama.cpp
+  models, and each entry says which it is using. On a machine where more than
+  one card can run a model, an entry also says which card — and the field
+  appears only there, because a single usable card is not a choice.
+- **Quantise** (量化, a button on 模型) — turn a bf16 safetensors folder into
+  a smaller one beside it, FP8, Int8 or AutoRound Int4, for vLLM. The tool is
+  Intel's auto-round in a container derived from the installed vLLM image,
+  built on first use; one job runs at a time, on the card picked. GGUF stays
+  with llama.cpp's own tools and the quants publishers already ship.
+- **Catalog** (模型目錄) — search Hugging Face and download either a GGUF file
+  or a whole safetensors folder, segmented and resumable, into per-repo folders
+  so two publishers' identically named quants stay distinct; a file the Hub
+  lists a SHA256 for is checked against it before it is kept. Split GGUF
+  uploads are listed as one model rather than as the fragments they arrive in,
+  since no fragment is usable alone. Any GGUF quant can be asked what it would
+  generate at *on this card* before the download starts, worked out from the
+  file's own header. An access token for gated models is set under 設定.
+- **Engines** (推論引擎) — the inference engines, one card each: what it is good
+  at, which model files it runs, and whether it runs on this machine's cards.
+  Installing one pulls the vendor's official image (llama.cpp, vLLM, SGLang)
+  and writes a launcher that llama-swap starts it through; a build not yet run
+  on a vendor's card is marked 未驗證. Each launcher shows which tag of its
+  image it runs, offers any other tag the registry has, and notices when a
+  moving tag such as `latest` has moved. Engines are records, not code:
+  [internal/providers/engines](internal/providers/engines/README.md).
+- **Cards** (顯示卡) — one tile per GPU: what it is doing, what is on it
+  (models and containers, by name) and how it is connected, with the vendor
+  tool's full report folded underneath. Which job a card has is not a stored
+  preference: it runs models when an installed engine can use it, and draws
+  images when a ComfyUI container bound to it is up, so the page cannot come to
+  disagree with the machine.
 - **ComfyUI** — for whoever wants a picture: is it free, the button that opens
   it, and the three steps once inside, including where the pictures land. For
   the administrator, below that: the container's CPU, memory, the card as the
@@ -135,16 +175,19 @@ AMD cards need the vendor's compute stack already present.
   drops the Manager's loopback-listener test on every start -- a test that can
   never pass in a container, where ComfyUI must bind 0.0.0.0 and the
   console's login is what actually gates the UI. Remove the
-  `# managed by TenkStack` line to take the hook over.
-- **Files** — laid out the way a file manager is: locations down the left,
+  `# managed by TenkStack` line to take the hook over. A card with no instance
+  is listed with a 建立實例 button, which pulls the vendor's image and gives
+  the instance its own port, storage and Caddy site block, with a bar.
+- **Files** (檔案) — laid out the way a file manager is: locations down the left,
   the path as crumbs, the folder in the middle, and what the selection is on
   the right; opening a text file adds a tab with Monaco underneath. The whole
   disk rather than one application's folders: declared
   roots, a deny list the console cannot be talked out of, and previews for
   images, text, and weights — a GGUF or safetensors header is read in place, so
   a 20 GB file answers what it is without being moved. Uploads are chunked and
-  resumable, streamed to disk rather than buffered.
-- **Logs** — one stream for every part of the platform: the user units from
+  resumable, streamed to disk rather than buffered. Administrator only, and
+  only from a signed-in browser: an API key never opens it.
+- **Logs** (日誌) — one stream for every part of the platform: the user units from
   the systemd journal, the ComfyUI containers from `docker logs`. The window
   on screen is read from those stores, so an hour is an hour of history
   whatever the console has been doing, and a week answers in about a second
@@ -153,8 +196,21 @@ AMD cards need the vendor's compute stack already present.
   lines it put in the window, which is the answer to "is this being recorded
   at all". The console's own polling of llama-swap and Caddy is flagged and
   hidden by default.
-- **Users** — accounts, roles and API keys for the API below.
-- **About** — what this is and where it comes from, and whether there is a
+- **Benchmark** (跑分) — a fixed suite run against one model: time to first
+  token, prompt and generation speed, and how much slower each gets with a
+  longer context or several users at once. Runs are kept, and up to three can
+  be set side by side, which is how a change of KV cache type, speculative
+  decoding or memory share is judged. Administrator only, because a run
+  unloads other models and pauses `/v1` while it measures.
+- **Users** (使用者) — accounts, roles and API keys for the API below. An
+  administrator changes the machine for everyone; a member chats, loads and
+  unloads models, and manages their own password and keys.
+- **Settings** (設定) — what a reasonable owner would want different and
+  nothing else can derive: model locations, the agent's step limit and Python
+  sandbox, the Hugging Face token, how language models and ComfyUI share a
+  card's memory, how much history is kept, and the llama-swap config file
+  itself. Administrator only.
+- **About** (關於) — what this is and where it comes from, and whether there is a
   newer one: each installation asks GitHub for the latest release itself, a
   few times a day, and marks the version in the sidebar when there is. The
   administrator updates with one press: the release's binary for this
@@ -162,10 +218,10 @@ AMD cards need the vendor's compute stack already present.
   in under the running process and the service restarted — the same file the
   installer would fetch, in the same place, with the old one kept beside it as
   `tenkstack.prev`. Nothing phones home.
-  A release can also move an engine to another image; the Engines page then
+  A release can also move an engine to another image; the 推論引擎 page then
   offers the new one for each launcher the console wrote, and leaves a
   launcher edited by hand alone.
-- **Connections** — one row per way in: the address, who may reach it, whether
+- **Connections** (連線) — one row per way in: the address, who may reach it, whether
   it is open, and a client configuration example. `/v1/chat/completions` speaks
   OpenAI and `/v1/messages` speaks Anthropic, both proxied to the same models,
   so Claude Code and Codex point here as readily as anything else.
@@ -177,38 +233,54 @@ Caddy ──┬── :8443 https  console (UI + API + /v1 proxy)
         ├── :8000 http   /v1 only, for clients that cannot trust a private CA
         └── :8444 https  ComfyUI, gated by forward_auth against the console
                 │
-        tenkstack :8070 ┬── llama-swap :8080 ──> llama-server per model
-                        │                        native build, or the vendor's
-                        │                        official image in a container
-                        ├── ComfyUI :8188+, one instance per GPU
-                        └── SearXNG :8090, what the agent's searches go through
+        tenkstack :8070 ┬── llama-swap :8080 ──> one server per loaded model:
+                        │                        llama-server (a native build, or
+                        │                        the vendor's image in a container),
+                        │                        vLLM or SGLang (the vendor's image
+                        │                        in a container)
+                        ├── ComfyUI :8188+, one container per GPU
+                        ├── SearXNG :8090, what the agent's searches go through
+                        ├── the agent's Python: a gVisor container per
+                        │   conversation, no network
+                        └── PostgreSQL, a container reached only by unix socket
 ```
 
 Everything except Caddy binds to loopback, so the network cannot bypass
 authentication. ComfyUI has no auth of its own; publishing it on `0.0.0.0`
-would hand the GPU to anyone who can reach the host.
+would hand the GPU to anyone who can reach the host. (Loopback is not a
+boundary between users of the same machine; [SECURITY.md](SECURITY.md) says
+what that means.)
 
 The backend is deliberately thin. llama-swap owns model lifecycle and ComfyUI
 owns image generation; this process exists to merge their state with the GPU
-telemetry neither can produce on Intel, to own the two jobs neither does at all
-(downloads, accounts), and to serve the result over one SSE stream.
+telemetry neither can produce on Intel, to own the jobs none of them does at
+all (downloads, accounts, installing engines), and to serve the result over
+one SSE stream.
 
 ## Design notes worth knowing
 
 **Model configuration is `llama-swap`'s `config.yaml`.** There is no management
 API for adding models, but there is `-watch-config`, so the file *is* the
-interface. It is written with `ruamel.yaml` in round-trip mode: the file carries
-comments explaining the VRAM policy, and `safe_dump` would delete every one of
-them on the first edit made through the UI. Rendered YAML is parsed back before
-it replaces the real file — emptying a commented mapping makes ruamel print
-orphaned comments above a bare `{}` at column zero, which is unparseable.
+interface — for every engine, since a vLLM or SGLang entry is a llama-swap
+model like any other, its command a launcher macro followed by one flag per
+line. The file is read into a `gopkg.in/yaml.v3` node tree and written back
+from it (`internal/llamaswap/config.go`), not decoded into structs: the file
+carries comments explaining the VRAM policy, and a struct round-trip would
+delete every one of them on the first edit made through the UI. yaml.v3 keeps
+comments, order and block scalars but drops a blank line that touches no
+comment, so blank lines are turned into marker comments before parsing and
+back afterwards. The new file replaces the old one by rename, so llama-swap
+never reads half of it.
 
-Parsing is not enough, though, and finding that out cost an afternoon: a file
-that is valid YAML but the wrong shape makes llama-swap log one warning and
-keep serving the config it read last, so every edit through the console appears
-to work and none of them apply. Only llama-swap knows its own schema, so it is
-asked — the write is bracketed by a journal cursor, and a config it will not
-take is rolled back rather than left in place.
+Valid YAML is not enough, though, and finding that out cost an afternoon: a
+file that is valid YAML but the wrong shape makes llama-swap log one warning
+and keep serving the config it read last, so every edit through the console
+appears to work and none of them apply. Only llama-swap knows its own schema,
+so it is asked: the write is bracketed by a cursor into llama-swap's user
+journal (the console reads the unit the installer writes and the name older
+installs used), and a config it reports it will not take is rolled back rather
+than left in place. When no verdict arrives within ten seconds — the journal
+cannot be read, say — the new file stays.
 
 **Downloads are segmented.** A single TCP stream to Hugging Face's Xet CDN
 measured ~8 MiB/s from Taiwan (60 ms RTT, heavy packet reordering); eight
@@ -234,8 +306,8 @@ magnitude. The estimate lands on the model measured here to within 0.3%; where a
 file is known to break the assumption, the row says so instead of carrying a
 correction factor.
 
-**A card's job is derived, never stored.** Whether a card can run a model is
-whether a configured launcher enumerates it — asked by running
+**A card's job is derived, never stored.** Whether a card can run a llama.cpp
+model is whether a configured launcher enumerates it — asked by running
 `llama-server --list-devices`, not by consulting a table. Whether it draws
 images is whether a container bound to it is up, and which card a container
 holds is read from its device bindings rather than from its name, since
@@ -262,7 +334,8 @@ host and cannot be anywhere else; everything above it belongs in the image.
 **Capabilities are measured, not declared.** Vision support is read from
 llama-server's `/props`, because a `--mmproj` flag pointing at a missing file
 still appears on the command line. Stopped models fall back to what the config
-declares, and the response says which of the two it is.
+declares, and the response says which of the two it is. A vLLM or SGLang model
+has no `/props`; what it takes is read from the folder's own `config.json`.
 
 **A sandboxed frame has no origin.** The frames that run code carry
 `sandbox="allow-scripts"` and deliberately not `allow-same-origin`, so their
@@ -297,19 +370,30 @@ the string the browser is handed, which is where `pnpm check:frames` looks.
 
 **Numbers come from the source that owns them.** Throughput is llama-server's
 own `timings`, not tokens divided by browser wall-clock, which would include
-network and queue time. Time-to-first-token is measured in the browser, because
-that is the thing the user actually waits for.
+network and queue time. vLLM and SGLang report nothing per request, so for
+them the reply is measured on its way through the console's proxy, from the
+token counts the engine is asked to put on every chunk — counting chunks
+instead would read a third of the real rate under speculative decoding.
+Time-to-first-token is measured in the browser, because that is the thing the
+user actually waits for.
 
 ## Requirements
 
 - A GPU and its vendor's tooling for telemetry: `xpu-smi` for Intel,
-  `nvidia-smi` for NVIDIA, `rocm-smi` for AMD. Cards from more than one vendor
-  in the same machine are the case this is written for, not an afterthought.
-- Docker, and for NVIDIA the container toolkit. Both ComfyUI and — unless a
-  card has a native build — llama-server run in containers, which is what keeps
-  a second vendor from meaning a second userspace toolchain on the host. The
-  console can install either from the official images; nothing has to be pulled
-  by hand.
+  `nvidia-smi` for NVIDIA, and for AMD `amd-smi`, with `rocm-smi` as the
+  fallback for older ROCm installs. Cards from more than one vendor in the same
+  machine are the case this is written for, not an afterthought. Intel and
+  NVIDIA are run here daily; **AMD is unverified** — its telemetry and
+  container recipes were written from the tools' documentation without an AMD
+  card to run them on, and a report from someone who has one is welcome.
+- Docker, and for NVIDIA the container toolkit. ComfyUI, vLLM, SGLang and —
+  unless a card has a native build — llama-server run in containers, which is
+  what keeps a second vendor from meaning a second userspace toolchain on the
+  host. The console installs each from the official images; nothing has to be
+  pulled by hand.
+- [gVisor](https://gvisor.dev/) (`runsc` registered with Docker) if the agent's
+  Python should run on the server. Optional: without it the chat runs Python
+  in the browser instead.
 - A native `llama.cpp` build is optional and worth it for one card: the one
   whose owner is measuring it. On Intel that means the SYCL backend **and
   oneDNN** — `GGML_SYCL_DNN` defaults to ON but silently compiles itself out
@@ -344,48 +428,89 @@ this was first built on.
 | Variable | Default | What it is |
 |---|---|---|
 | `CONSOLE_AI_DIR` | `~/ai` (installer: `~/tenkstack`) | Everything below is derived from this |
-| `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | Session key and the database (`postgres/`, `backups/`); the only thing the console writes |
+| `CONSOLE_STATE_DIR` | `$CONSOLE_AI_DIR/ai-console` | The console's own state: `session.key`, the database (`postgres/`, `backups/`), chat images (`blobs/`), `huggingface-token`, the build contexts of the sandbox and quantisation images (`sandbox/`, `quant/`), and a few JSON files of history and preferences |
 | `CONSOLE_DATABASE_URL` | unset | Another PostgreSQL to use instead of the console's own, which is then not set up |
 | `CONSOLE_MODELS_DIR` | `$CONSOLE_AI_DIR/models` | The primary model location: GGUF and safetensors weights |
 | `CONSOLE_LLAMA_SWAP_DIR` | `$CONSOLE_AI_DIR/llama-swap` | |
 | `CONSOLE_LLAMA_SWAP_CONFIG` | `$CONSOLE_LLAMA_SWAP_DIR/config.yaml` | |
 | `CONSOLE_LLAMA_SWAP_BIN` | `$CONSOLE_LLAMA_SWAP_DIR/llama-swap` | Read for its version |
+| `CONSOLE_LLAMA_SWAP_ACTIVITY` | `$CONSOLE_LLAMA_SWAP_DIR/activity.sqlite` | llama-swap's own per-request history, opened read-only |
 | `CONSOLE_LLAMA_CPP_DIR` | `$CONSOLE_AI_DIR/llama.cpp` | Read for its commit |
 | `CONSOLE_COMFYUI_DIR` | `$CONSOLE_AI_DIR/comfyui` | Holds `storage-models/`, `storage-user/` |
 | `CONSOLE_CADDY_DIR` | `$CONSOLE_AI_DIR/caddy` | Channel files the console switches |
 | `CONSOLE_CADDY_BIN` | `~/.local/bin/caddy` | Installed per-user, so not under the root above |
 | `CONSOLE_ONEAPI_DIR` | `/opt/intel/oneapi` | Version panel only; absent is fine |
 
-Only a layout that differs from that one needs any of them set. Nothing is
-created — a missing directory is reported as missing, because turning "not set
-up" into "set up and empty" hides the difference.
+Only a layout that differs from that one needs any of them set. Nothing in
+that table is created — a missing directory is reported as missing, because
+turning "not set up" into "set up and empty" hides the difference.
+
+The state directory is not the only thing the console writes, though. It
+edits llama-swap's `config.yaml` and writes the engine launchers beside it,
+switches Caddy's channel files, downloads models into the model locations,
+creates ComfyUI's storage, writes its own PostgreSQL unit under
+`~/.config/systemd/user/`, and, when the administrator updates from 關於,
+replaces its own binary.
+
+Ports, from `internal/ports`:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `CONSOLE_PORT` | `8070` | The console behind Caddy; `install.sh` writes it into the unit's `-listen` and the Caddyfile |
+| `CONSOLE_TLS_PORT` | `8443` | Caddy's entry for the interface and the encrypted `/v1` |
+| `CONSOLE_API_PORT` | `8000` | Caddy's plain-HTTP `/v1` |
+| `CONSOLE_LLAMA_SWAP_PORT` | `8080` | Where llama-swap answers; `/v1` is proxied here |
+| `CONSOLE_COMFYUI_PORT` | `8188` | The first loopback port a ComfyUI instance publishes on |
+| `CONSOLE_COMFYUI_COUNT` | `4` | How many instances a machine may have, one port each from the first |
+| `CONSOLE_COMFYUI_PUBLIC_PORT` | `8444` | The first port Caddy serves ComfyUI on, one per instance |
+
+The unit the installer writes carries the ports it chose for the console,
+llama-swap, Caddy's two entries and SearXNG; the ComfyUI ones keep their
+defaults unless given to `tenkstack-console.service` in a drop-in.
+
+The process itself:
+
+| Variable | Default | What it is |
+|---|---|---|
+| `CONSOLE_LISTEN` | `127.0.0.1:8071` | Where the binary serves; the `-listen` flag overrides it, and the installed unit passes `-listen 127.0.0.1:$CONSOLE_PORT` |
+| `CONSOLE_WEB_DIST` | unset | Serve the frontend from this directory instead of the copy embedded in the binary (same as `-web`) |
+| `TENKSTACK_REPO` | `NoobBandi/TenkStack` | The GitHub repository the update check asks for releases |
+| `TENKSTACK_RELEASE_API` | `https://api.github.com` | The API it asks, for a mirror or a test server |
+
+`install.sh` reads a `TENKSTACK_REPO` of its own, and there it is a git URL
+for `--source`, not `owner/repo`: set it for one or the other, not both.
 
 Models can live in up to five directories. The primary is
-`CONSOLE_MODELS_DIR`; the others are added under Settings → 模型存放位置, and
+`CONSOLE_MODELS_DIR`; the others are added under 設定 → 模型存放 → 存放位置, and
 each becomes a llama-swap macro, `models-dir-2` to `models-dir-5`, so an entry
 names a file in one as `${models-dir-2}/owner/repo/file.gguf`. GGUF and
 safetensors each have a default location new downloads land in, which lets
-llama.cpp and vLLM weights live on different disks. Container launchers mount
+llama.cpp and vLLM or SGLang weights live on different disks. Container launchers mount
 every location, read at start from `model-locations` beside them.
 
 Three more live with the code that reads them rather than in `paths`, because
 none of them names a single location: `CONSOLE_FILE_ROOTS` declares what the file
 browser may reach (`label=path`, separated by `;`, `ro:` in front of a path to
-refuse writes) and replaces the defaults rather than adding to them, since
-narrowing the set is the only reason to write it; `CONSOLE_FILE_DENY` adds paths
-that are refused from every root; and `CONSOLE_SEARXNG_URL` says where searches
-go, defaulting to `http://127.0.0.1:8090`.
+refuse writes) and replaces the default roots rather than adding to them, since
+narrowing the set is the only reason to write it — the model locations and
+ComfyUI's directories are still offered; `CONSOLE_FILE_DENY` adds paths that
+are refused from every root, separated by `:` like `PATH`, `~/` allowed, on top
+of a built-in list (the state directory, `~/.ssh`, `~/.gnupg`, `~/.aws`,
+`~/.docker`, `~/.kube` and a few more); and `CONSOLE_SEARXNG_URL` says where
+searches go, defaulting to `http://127.0.0.1:8090`.
 
-Authentication switches itself on once the first account exists — requiring a
-login before any account is created would lock the owner out with no way back
-in.
+Before the first account exists there is nobody to sign in as, so the console
+admits only a browser that opened its setup link: the address the installer
+prints at the end, with `?setup=<token>` on it. The token is in `setup-token`
+in the state directory and in the console's log; it stops working once the
+first account is created, and from then on signing in is required.
 
 ## Not included
 
 Operational configuration lives outside this repository, under the install
-root: the `Caddyfile`, llama-swap's `config.yaml`, and the ComfyUI and SearXNG
-launch scripts all carry host-specific addresses and flags. The installer
-creates that tree with a skeleton config; the console then edits the config in
+root: the `Caddyfile`, llama-swap's `config.yaml` and the engine launchers
+beside it all carry host-specific addresses and flags. The installer creates
+that tree with a skeleton config; the console then edits the config in
 place. One such tree, the machine this was built on, is versioned separately
 as [TenkStack-Host](https://github.com/NoobBandi/TenkStack-Host) — useful as a
 worked example of what a tuned config looks like, not as something to copy.

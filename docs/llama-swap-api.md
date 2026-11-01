@@ -17,15 +17,17 @@ backend talks to, so it is written from observation rather than from the docs.
 | GET | `/ui` | 307 to the bundled web UI |
 | GET | `/upstream` | 302 to the active upstream |
 
-Paths that do **not** exist, despite being plausible: `/api/models`,
+Paths that did **not** exist in v247, despite being plausible: `/api/models`,
 `/api/metrics`, `/api/status`, `/api/running`, `/api/config`, `/api/unload`,
-`/api/activity`.
+`/api/activity`. Later releases added `POST /api/models/unload/<id>`, which
+unloads one model and leaves the others resident; the console uses it, and
+`GET /unload` for everything.
 
 `/running` example:
 
 ```json
 {"running":[{"model":"qwen3-4b","state":"ready",
-  "cmd":"...\n--model /home/tenk/ai/models/qwen3-4b-q4.gguf\n--host 127.0.0.1 --port 5801\n...",
+  "cmd":"...\n--model /home/someone/models/qwen3-4b-q4.gguf\n--host 127.0.0.1 --port 5801\n...",
   "proxy":"http://localhost:5801","ttl":1800,
   "name":"Qwen3 4B (Q4_K_M)","description":"..."}]}
 ```
@@ -58,7 +60,7 @@ States seen: `stopped`, `starting`, `ready`, `stopping`.
 ```
 
 `operation` is `snapshot` or `upsert`. **`remote_ip` is what makes per-person
-usage visible** once family members are on the box.
+usage visible** once several users are on the box.
 
 ### `logData`
 
@@ -98,9 +100,14 @@ Idle baseline on the B70 is ~46 W at 400 MHz.
 
 ## Consequences for the console design
 
-- The event stream covers models, requests and logs, so the backend does not
-  need to poll llama-swap at all — only `xpu-smi`.
+- The event stream covers models, requests and logs. The backend holds one
+  subscription to it, reconnecting with backoff, for llama-server's timing
+  lines and request progress; which models are loaded it asks instead: the
+  backend calls `GET /running` whenever it needs that answer — the model list
+  (which the browser refreshes every 15 seconds), the VRAM check before a
+  load, the card page's occupants, the connections page. The client is
+  `internal/llamaswap/client.go`.
 - `-watch-config` means the backend can manage models by **rewriting
   `config.yaml`**, with no IPC to build. Config is the single source of truth.
 - `n_slots = 4` in llama-server means one loaded model already serves four
-  concurrent requests, which is what covers concurrent family use.
+  concurrent requests, which is what covers several users at once.
