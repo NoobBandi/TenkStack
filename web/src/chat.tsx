@@ -13,6 +13,7 @@ import {
   describeCall, describePage, describeResult, describeSearch, MAX_STEPS, parseCode,
   SANDBOX_TOOL, SEARCH_TOOLS, serverSandboxTool,
 } from './sandboxTool';
+import { CHECK_EVERY, isLooping } from './loopGuard';
 
 /**
  * The conversation, held above the router.
@@ -222,6 +223,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const seededFor = useRef<string | undefined>(undefined);
   // The model's sampling names, from its engine: see ChatOptions.paramNames.
   const paramNames = useRef<Record<string, string> | null | undefined>(undefined);
+  // The reasoning_effort levels the model's template takes, from the same place.
+  const effortLevels = useRef<string[] | null | undefined>(undefined);
   const [streaming, setStreaming] = useState(false);
   // Off by default. Offering the sandbox changes what an answer costs and how
   // long it takes, which is not something to switch on for somebody without
@@ -347,6 +350,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     let reasoning = '';
     let calls: ToolCall[] | undefined;
     let lastFlush = 0;
+    // A loop is stopped here rather than by the user: the stream gets a
+    // signal of its own, so stopping it ends this reply and not the run, and
+    // the reply is kept and saved like any other with finish_reason 'loop'.
+    const stream = new AbortController();
+    const relay = () => stream.abort();
+    controller.signal.addEventListener('abort', relay);
+    let looped = false;
+    let checkedReasoning = 0;
+    let checkedContent = 0;
 
     const flush = () => {
       lastFlush = performance.now();
@@ -361,38 +373,58 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       });
     };
 
-    for await (const delta of chatStream({
-      model: activeModel,
-      messages,
-      params,
-      paramNames: paramNames.current,
-      signal: controller.signal,
-      // Search only when the service answered. A tool that is offered and
-      // then always fails is worse than one never mentioned -- the model
-      // spends a step discovering it and often a second one retrying.
-      ...(pythonTool
-        ? { tools: [pythonTool, ...(searchable ? SEARCH_TOOLS : [])] }
-        : {}),
-    })) {
-      if ((delta.content || delta.reasoning) && ttft === undefined) {
-        ttft = performance.now() - startedAt;
-        // Show the first token at once; the moment the user is watching for
-        // should not wait for the next tick.
-        lastFlush = 0;
+    try {
+      for await (const delta of chatStream({
+        model: activeModel,
+        messages,
+        params,
+        paramNames: paramNames.current,
+        effortLevels: effortLevels.current,
+        signal: stream.signal,
+        // Search only when the service answered. A tool that is offered and
+        // then always fails is worse than one never mentioned -- the model
+        // spends a step discovering it and often a second one retrying.
+        ...(pythonTool
+          ? { tools: [pythonTool, ...(searchable ? SEARCH_TOOLS : [])] }
+          : {}),
+      })) {
+        if ((delta.content || delta.reasoning) && ttft === undefined) {
+          ttft = performance.now() - startedAt;
+          // Show the first token at once; the moment the user is watching for
+          // should not wait for the next tick.
+          lastFlush = 0;
+        }
+        if (delta.reasoning && reasoningAt === undefined) {
+          reasoningAt = performance.now();
+        }
+        if (delta.content && reasoningAt !== undefined && thinkingMs === undefined) {
+          thinkingMs = performance.now() - reasoningAt;
+        }
+        if (delta.content) content += delta.content;
+        if (delta.reasoning) reasoning += delta.reasoning;
+        if (delta.tool_calls) calls = delta.tool_calls;
+        if (delta.usage) pending.usage = delta.usage;
+        if (delta.timings) pending.timings = delta.timings;
+        if (delta.finish_reason) pending.finish_reason = delta.finish_reason;
+        if (reasoning.length - checkedReasoning >= CHECK_EVERY) {
+          checkedReasoning = reasoning.length;
+          looped = isLooping(reasoning, 'reasoning');
+        }
+        if (!looped && content.length - checkedContent >= CHECK_EVERY) {
+          checkedContent = content.length;
+          looped = isLooping(content, 'content');
+        }
+        if (looped) {
+          pending.finish_reason = 'loop';
+          stream.abort();
+          break;
+        }
+        if (performance.now() - lastFlush >= FLUSH_INTERVAL_MS) flush();
       }
-      if (delta.reasoning && reasoningAt === undefined) {
-        reasoningAt = performance.now();
-      }
-      if (delta.content && reasoningAt !== undefined && thinkingMs === undefined) {
-        thinkingMs = performance.now() - reasoningAt;
-      }
-      if (delta.content) content += delta.content;
-      if (delta.reasoning) reasoning += delta.reasoning;
-      if (delta.tool_calls) calls = delta.tool_calls;
-      if (delta.usage) pending.usage = delta.usage;
-      if (delta.timings) pending.timings = delta.timings;
-      if (delta.finish_reason) pending.finish_reason = delta.finish_reason;
-      if (performance.now() - lastFlush >= FLUSH_INTERVAL_MS) flush();
+    } catch (err) {
+      if (!(looped && (err as Error).name === 'AbortError')) throw err;
+    } finally {
+      controller.signal.removeEventListener('abort', relay);
     }
     if (ttft !== undefined) decodeMs = performance.now() - startedAt - ttft;
     flush();
@@ -659,6 +691,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Kept even when the values are not reseeded: which controls the engine
     // takes can change while the model stays the same, when its entry does.
     paramNames.current = info.capabilities?.params;
+    effortLevels.current = info.capabilities?.reasoning_effort?.levels;
     if (!force && seededFor.current === info.id) return;
     seededFor.current = info.id;
     setParams((current) => ({
@@ -668,6 +701,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       system: current.system,
       thinking: current.thinking,
       reasoning_budget_tokens: current.reasoning_budget_tokens,
+      reasoning_effort: current.reasoning_effort,
       ...(info.sampling ?? {}),
     }));
   }, []);

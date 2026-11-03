@@ -145,6 +145,18 @@ type Capabilities struct {
 	// Params is the chat panel's sampling controls the model's engine
 	// takes, each under the name the engine wants it sent by.
 	Params map[string]string `json:"params"`
+	// ReasoningEffort is the reasoning_effort the model's chat template
+	// takes, nil when it takes none.
+	ReasoningEffort *ReasoningEffort `json:"reasoning_effort"`
+}
+
+// ReasoningEffort is how hard a model may be asked to think, as its chat
+// template names the levels.
+type ReasoningEffort struct {
+	Levels []string `json:"levels"`
+	// Default is what the template uses when nothing is sent; "" when it
+	// does not say.
+	Default string `json:"default"`
 }
 
 // QuantTool is the quantisation image for one vendor and whether it is here.

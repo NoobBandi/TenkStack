@@ -70,3 +70,23 @@ func TestExperts(t *testing.T) {
 		t.Errorf("dense: %+v", dense)
 	}
 }
+
+// Qwen3.8-27B's file sets three samplers; the rest are off, not the panel's.
+func TestGeneration(t *testing.T) {
+	got := Generation([]byte(`{"do_sample": true, "temperature": 1.0, "top_k": 20, "top_p": 0.95}`))
+	want := map[string]any{"temperature": 1.0, "top_k": 20, "top_p": 0.95, "min_p": 0.0, "repeat_penalty": 1.0, "presence_penalty": 0.0}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+	if got := Generation([]byte(`{"bos_token_id": 1, "eos_token_id": 2}`)); got != nil {
+		t.Errorf("a file with no sampling should say nothing, got %v", got)
+	}
+	if got := Generation([]byte(`not json`)); got != nil {
+		t.Errorf("garbage should say nothing, got %v", got)
+	}
+}

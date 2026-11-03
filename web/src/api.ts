@@ -52,6 +52,10 @@ export interface ModelInfo {
    *  this console does -- so the panel seeds itself from these instead, and the
    *  config and the interface cannot say different things. */
   sampling?: Partial<ChatParams> | null;
+  /** Where `sampling` came from: 'generation_config' (the weights folder's
+   *  generation_config.json) and/or 'config' (the llama-swap entry's flags,
+   *  which win). */
+  sampling_from?: string[];
   /** The files this entry is made of. Two entries differing only in
    *  quantisation carry the same name and the same everything else, so this is
    *  what tells them apart -- and what says how much of the card each wants. */
@@ -92,6 +96,9 @@ export interface ModelCapabilities {
   /** The panel's sampling controls this model's engine takes, each under the
    *  name the engine wants. A control that is absent does not exist there. */
   params?: Record<string, string> | null;
+  /** The reasoning_effort the model's chat template takes, by the template's
+   *  own level names; absent when it takes none. */
+  reasoning_effort?: { levels: string[]; default: string } | null;
 }
 
 export interface ComfyDevice {
@@ -1289,6 +1296,10 @@ export interface ChatParams {
   /** Sampling-level cap on thinking tokens. -1 defers to the server default,
    *  0 ends thinking immediately, N>0 allows that many. */
   reasoning_budget_tokens: number;
+  /** Template-level: how hard the model is asked to think, for a model whose
+   *  chat template takes reasoning_effort. Sent only when the model offers
+   *  this level; otherwise the template's own default applies. */
+  reasoning_effort: string;
   system: string;
 }
 
@@ -1313,6 +1324,11 @@ export const DEFAULT_PARAMS: ChatParams = {
   seed: -1,
   thinking: true,
   reasoning_budget_tokens: -1,
+  // Qwen3.8's template defaults to xhigh, which adds "validate key
+  // assumptions, consider plausible alternatives" to the system prompt. For
+  // a chat that is more deliberation than most questions want, and the long
+  // tail is where the model starts going round in circles.
+  reasoning_effort: 'medium',
   system: '',
 };
 
@@ -1327,6 +1343,9 @@ export interface ChatOptions {
   /** The model's `capabilities.params`: which sampling controls to send and
    *  under what names. Unknown means every control by llama-server's name. */
   paramNames?: Record<string, string> | null;
+  /** The reasoning_effort levels the model's template takes; none means the
+   *  field is not sent at all. */
+  effortLevels?: string[] | null;
 }
 
 /** The panel's sampling controls, by llama-server's names. */
@@ -1451,7 +1470,12 @@ export async function* chatStream(options: ChatOptions): AsyncGenerator<ChatDelt
       model: options.model,
       ...samplingFor(options.params, options.paramNames),
       max_tokens: options.params.max_tokens,
-      chat_template_kwargs: { enable_thinking: options.params.thinking },
+      chat_template_kwargs: {
+        enable_thinking: options.params.thinking,
+        ...(options.params.thinking && options.effortLevels?.includes(options.params.reasoning_effort)
+          ? { reasoning_effort: options.params.reasoning_effort }
+          : {}),
+      },
       // A message with images has to use the content-parts form; plain text
       // stays a plain string, because some servers reject the array form when
       // no mmproj is loaded.

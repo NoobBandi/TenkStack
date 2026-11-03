@@ -214,3 +214,47 @@ func SeesImages(architecture string) bool {
 	}
 	return false
 }
+
+// Generation is the sampling a model's generation_config.json asks for, by
+// the chat panel's names, or nil when the file says nothing it can use.
+//
+// A sampler the file leaves out is off in the library that reads it, so
+// min_p and the penalties are filled in as off rather than left for the
+// panel's own defaults to decide: a panel that sends min_p 0.05 for a model
+// whose publisher never set one is not running the model as published.
+func Generation(raw []byte) map[string]any {
+	var g struct {
+		Temperature       *float64 `json:"temperature"`
+		TopP              *float64 `json:"top_p"`
+		TopK              *int     `json:"top_k"`
+		MinP              *float64 `json:"min_p"`
+		RepetitionPenalty *float64 `json:"repetition_penalty"`
+		PresencePenalty   *float64 `json:"presence_penalty"`
+	}
+	if json.Unmarshal(raw, &g) != nil {
+		return nil
+	}
+	if g.Temperature == nil && g.TopP == nil && g.TopK == nil {
+		return nil
+	}
+	out := map[string]any{"min_p": 0.0, "repeat_penalty": 1.0, "presence_penalty": 0.0}
+	if g.Temperature != nil {
+		out["temperature"] = *g.Temperature
+	}
+	if g.TopP != nil {
+		out["top_p"] = *g.TopP
+	}
+	if g.TopK != nil {
+		out["top_k"] = *g.TopK
+	}
+	if g.MinP != nil {
+		out["min_p"] = *g.MinP
+	}
+	if g.RepetitionPenalty != nil {
+		out["repeat_penalty"] = *g.RepetitionPenalty
+	}
+	if g.PresencePenalty != nil {
+		out["presence_penalty"] = *g.PresencePenalty
+	}
+	return out
+}

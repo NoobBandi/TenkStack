@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/NoobBandi/TenkStack/internal/api"
+	"github.com/NoobBandi/TenkStack/internal/hfmodel"
 	"github.com/NoobBandi/TenkStack/internal/providers"
 )
 
@@ -575,21 +576,42 @@ func (m *Models) Refused() map[string][]string {
 	return out
 }
 
-// SamplingDefaults is each model's sampling flags, so the chat panel
-// starts from what the model was configured with.
-func (m *Models) SamplingDefaults() map[string]map[string]any {
-	out := map[string]map[string]any{}
+// SamplingDefaults is each model's sampling as configured, so the chat panel
+// starts from what the model runs with: the generation_config.json its
+// weights folder ships, under the sampling flags its command line sets,
+// which win. from says which of the two each entry's values came from.
+func (m *Models) SamplingDefaults() (values map[string]map[string]any, from map[string][]string) {
+	values, from = map[string]map[string]any{}, map[string][]string{}
 	entries, _, err := m.entries()
 	if err != nil {
 		log.Printf("could not read the config while reading sampling defaults: %v", err)
-		return out
+		return values, from
 	}
 	for _, e := range entries {
-		if found := samplingIn(e.cmd, nil); len(found) > 0 {
-			out[e.id] = found
+		found := map[string]any{}
+		for _, dir := range dirsInCmd(e.cmd) {
+			p := m.resolve(dir)
+			if p == "" {
+				continue
+			}
+			if raw, err := os.ReadFile(filepath.Join(p, "generation_config.json")); err == nil {
+				if g := hfmodel.Generation(raw); g != nil {
+					found = g
+					from[e.id] = append(from[e.id], "generation_config")
+				}
+			}
+		}
+		if flags := samplingIn(e.cmd, nil); len(flags) > 0 {
+			for k, v := range flags {
+				found[k] = v
+			}
+			from[e.id] = append(from[e.id], "config")
+		}
+		if len(found) > 0 {
+			values[e.id] = found
 		}
 	}
-	return out
+	return values, from
 }
 
 // Weights is every model's GGUF files with sizes and who else points at

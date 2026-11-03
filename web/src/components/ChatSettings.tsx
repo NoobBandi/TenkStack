@@ -1,4 +1,4 @@
-import { Button, Divider, Input, InputNumber, Slider, Space, Switch, Tooltip, Typography } from 'antd';
+import { Button, Divider, Input, InputNumber, Segmented, Slider, Space, Switch, Tooltip, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import { DEFAULT_PARAMS, type ChatParams, type ModelInfo } from '../api';
 import { MONO } from '../theme';
@@ -9,8 +9,13 @@ const { Text } = Typography;
 const PANEL_CONTROLS: [string, string][] = [
   ['temperature', 'TEMPERATURE'], ['reasoning_budget_tokens', 'REASONING BUDGET'],
   ['top_p', 'TOP P'], ['top_k', 'TOP K'], ['min_p', 'MIN P'],
-  ['repeat_penalty', 'REPEAT PENALTY'], ['seed', 'SEED'],
+  ['repeat_penalty', 'REPEAT PENALTY'], ['presence_penalty', 'PRESENCE PENALTY'], ['seed', 'SEED'],
 ];
+
+/** The levels templates use, in words; a level not listed shows its own name. */
+const EFFORT_NAMES: Record<string, string> = {
+  xhigh: '最深', high: '深', medium: '中等', low: '簡短', minimal: '最少', none: '不思考',
+};
 
 /**
  * The sampling panel.
@@ -81,8 +86,10 @@ export default function ChatSettings({ params, onChange, model, onReset, context
     system: params.system,
     thinking: params.thinking,
     reasoning_budget_tokens: params.reasoning_budget_tokens,
+    reasoning_effort: params.reasoning_effort,
     ...(model?.sampling ?? {}),
   };
+  const effort = model?.capabilities?.reasoning_effort;
   const ctxPercent = ctxLimit ? Math.min(100, (contextUsed / ctxLimit) * 100) : 0;
   // Which controls the model's engine takes. A control it lacks is hidden and
   // not sent; an older server that does not say shows everything, as before.
@@ -151,6 +158,27 @@ export default function ChatSettings({ params, onChange, model, onReset, context
         </Space>
       </Row>
 
+      {params.thinking && effort && effort.levels.length > 1 && (
+        <Row
+          label="REASONING EFFORT"
+          hint={`模板層：要模型想多深。越深越常反覆檢查，也越容易在思考裡繞圈；一般問題用中等就夠${effort.default ? `。模型預設是 ${effort.default}` : ''}`}
+        >
+          <Segmented
+            size="small" block
+            value={effort.levels.includes(params.reasoning_effort) ? params.reasoning_effort : effort.default}
+            onChange={(v) => set('reasoning_effort', String(v))}
+            options={effort.levels.map((level) => ({
+              value: level,
+              label: (
+                <Tooltip title={level === effort.default ? `${level}（模型預設）` : level}>
+                  {EFFORT_NAMES[level] ?? level}
+                </Tooltip>
+              ),
+            }))}
+          />
+        </Row>
+      )}
+
       {takes('reasoning_budget_tokens') && (
         <Row
           label="REASONING BUDGET"
@@ -200,6 +228,15 @@ export default function ChatSettings({ params, onChange, model, onReset, context
                    min={1} max={1.5} step={0.01} />
         </Row>
       )}
+      {takes('presence_penalty') && (
+        <Row
+          label="PRESENCE PENALTY"
+          hint="已出現過的 token 再出現時扣分。模型在思考裡反覆繞圈時，調到 1–1.5 通常能打斷；太高可能讓它混用語言"
+        >
+          <Numeric value={params.presence_penalty} onChange={(v) => set('presence_penalty', v)}
+                   min={0} max={2} step={0.05} />
+        </Row>
+      )}
       {takes('seed') && (
         <Row label="SEED" hint="-1 為隨機。固定後同樣的輸入會得到同樣的輸出">
           <Numeric value={params.seed} onChange={(v) => set('seed', v)}
@@ -236,7 +273,9 @@ export default function ChatSettings({ params, onChange, model, onReset, context
         <Text style={{
           display: 'block', marginTop: 6, fontSize: 10, opacity: 0.4, lineHeight: 1.6,
         }}>
-          取樣預設值來自 llama-swap 設定裡的 {model.id}
+          取樣預設值來自{model.sampling_from?.includes('generation_config')
+            ? `模型資料夾的 generation_config.json${model.sampling_from.includes('config') ? '，再套上 llama-swap 設定裡的參數' : ''}`
+            : ` llama-swap 設定裡的 ${model.id}`}
         </Text>
       )}
     </div>

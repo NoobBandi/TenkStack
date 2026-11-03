@@ -603,6 +603,14 @@ function ChatInner() {
                           </Tooltip>
                         )}
 
+                        {answer?.finish_reason === 'loop' && (
+                          <Tooltip title="同一段內容反覆出現，再生成下去只是浪費時間，所以停下了。可以重新生成；常發生的話，把右側的思考程度調低，或把 presence penalty 調到 1–1.5。">
+                            <Tag color="warning" style={{ marginTop: 10 }}>
+                              模型陷入重複，已自動停止
+                            </Tag>
+                          </Tooltip>
+                        )}
+
                         <Space size={2} wrap style={{ marginTop: 8, width: '100%' }}>
                           <span className="turn-act">
                             <Tooltip title="複製">

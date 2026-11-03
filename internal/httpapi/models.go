@@ -69,7 +69,8 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 	}
 	declared := s.Models.DeclaredVision()
 	chatParams := s.Models.ChatParams()
-	sampling := s.Models.SamplingDefaults()
+	sampling, samplingFrom := s.Models.SamplingDefaults()
+	efforts := s.Models.ReasoningEfforts()
 	weights := s.Models.Weights()
 
 	out := make([]map[string]any, 0, len(models))
@@ -98,8 +99,10 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 			row["ctx_size"] = c
 		}
 		row["sampling"] = nil
+		row["sampling_from"] = []string{}
 		if sm := sampling[id]; len(sm) > 0 {
 			row["sampling"] = sm
+			row["sampling_from"] = samplingFrom[id]
 		}
 		row["weights"] = []api.Weight{}
 		if wl, ok := weights[id]; ok {
@@ -109,7 +112,7 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		if sl, ok := slots[id]; ok && sl != nil {
 			row["slots"] = sl
 		}
-		caps := api.Capabilities{Source: "config", Vision: declared[id], Params: chatParams[id]}
+		caps := api.Capabilities{Source: "config", Vision: declared[id], Params: chatParams[id], ReasoningEffort: efforts[id]}
 		// A server engine has no /props to ask. Tool calling is a launch
 		// flag its record's recommended flags write, so the record says.
 		if p := providers.Get(providerOf[id]); p != nil && p.Tools {
@@ -121,6 +124,11 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 			caps.Audio, _ = modalities["audio"].(bool)
 			tpl, _ := live["chat_template"].(string)
 			caps.Tools = tpl != ""
+			// What the server actually loaded, which for a GGUF is the
+			// template inside the file and readable nowhere else.
+			if effort := llamaswap.ReasoningEffortIn(tpl); effort != nil {
+				caps.ReasoningEffort = effort
+			}
 		}
 		row["capabilities"] = caps
 		// Which inference engine starts the entry, so the list can be
