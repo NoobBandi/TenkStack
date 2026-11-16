@@ -10,13 +10,13 @@ public issue for it.
 
 Say what an attacker needs to start with (network reach to which port, a
 member account, an administrator account, a local OS account on the host),
-what they get, and the steps or a proof of concept. The version from the 關於
+what they get, and the steps or a proof of concept. The version from the About
 page or `tenkstack -version` helps. This is a project maintained in spare
 time, so there is no fixed response time, but a private report is read before
 anything else.
 
 Only the latest release is supported; a fix ships as a new release, which
-every installation is offered on its 關於 page.
+every installation is offered on its About page.
 
 ## The security model
 

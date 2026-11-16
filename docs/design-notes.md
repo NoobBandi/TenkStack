@@ -147,7 +147,7 @@ time limit gets SIGINT and keeps them, and only one that ignores it costs the
 container. Without runsc nothing runs on the server at all and the chat falls
 back to Pyodide in the browser: the plain Docker runtime is not offered as a
 weaker alternative. The image is built here from `internal/sandbox/image`,
-tagged by a hash of those files, from 設定 → 對話 → Python 沙箱.
+tagged by a hash of those files, from Settings → Chat → Python sandbox.
 
 ## The documents injected into those frames are checked before every build
 

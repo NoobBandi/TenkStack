@@ -10,7 +10,7 @@ engines/
 ```
 
 The directories are compiled into the console. An engine added here shows up
-on the 推論引擎 page, can be installed on the cards it has a build for, and
+on the Engines page, can be installed on the cards it has a build for, and
 its models are edited and launched with nothing else in the code changed. The
 tests in `internal/providers` refuse a record that is incomplete or
 contradicts itself, and they say why.
@@ -23,7 +23,7 @@ name: SGLang
 order: 20                   # place in the store; the default engine comes first
 default: false              # exactly one engine is the default (llama.cpp)
 program: sglang serve       # for the launcher script's header
-summary: 多人同時對話、長對話……  # the one line a newcomer reads to choose (Chinese, like the UI)
+summary: Many users at once, long chats…  # the one line a newcomer reads to choose; written in Traditional Chinese, like the UI
 category: llm
 formats: [safetensors]      # gguf and/or safetensors
 site: https://github.com/sgl-project/sglang
@@ -60,7 +60,7 @@ builds:                     # one per vendor key in internal/vendors
     command: [sglang, serve, --device, xpu]    # run inside the image before llama-swap's flags
     cache_dir: /root/.cache/…                  # kept on the host between runs
     precisions: [bf16, fp8] # stored precisions a model has loaded in on this build;
-                            # the catalog marks any other 未驗證 rather than refusing it
+                            # the catalog marks any other as unverified rather than refusing it
     multi_card:             # optional: only when an entry's selector names several cards
       note: …               # why, copied into the launcher as a comment
       setup: fix.py         # beside this file (.py or .sh), run in the image before the server
@@ -68,12 +68,12 @@ builds:                     # one per vendor key in internal/vendors
       flags: [--ipc, host]  # docker run flags added for such an entry
 
 online_quantization:        # applied to bf16 weights while they load
-  - {value: fp8, label: FP8（線上量化）, note: 顯存減半, shrink: 0.5}
+  - {value: fp8, label: FP8 (online), note: Half the VRAM, shrink: 0.5}   # label and note in Traditional Chinese
 
 recommended:                # flags a model family needs, offered when its folder is picked
   - match: ^Qwen3           # regular expression against config.json's architecture
     flags: [--reasoning-parser qwen3]
-    note: 思考過程與工具呼叫分開回傳
+    note: Returns reasoning and tool calls separately   # in Traditional Chinese
   - match: ^Qwen3_5
     vendors: [intel]        # optional: only for these vendors' builds
     flags: [--max-num-seqs 4]
@@ -129,8 +129,8 @@ issue first.
 ## Before a pull request
 
 1. `go test ./internal/providers ./internal/llamaswap ./internal/backends`.
-2. Install it from the 推論引擎 page on a real card, create a model entry for
-   it on the 模型 page, load it and chat with it.
+2. Install it from the Engines page on a real card, create a model entry for
+   it on the Models page, load it and chat with it.
 3. Report what you ran: the card, the model, its precision and context, and
    tokens per second. Set `verified: true` on that vendor's build in the same
    pull request, and only on that one.

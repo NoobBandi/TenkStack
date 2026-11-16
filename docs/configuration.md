@@ -35,7 +35,7 @@ missing, so "not set up" never looks like "set up and empty".
 Besides its state directory, the console writes to llama-swap's
 `config.yaml` and the launchers beside it, Caddy's channel files, the model
 locations, ComfyUI's storage, its own PostgreSQL unit under
-`~/.config/systemd/user/`, and its own binary when updated from 關於.
+`~/.config/systemd/user/`, and its own binary when updated from the About page.
 
 ## Ports
 
@@ -84,7 +84,7 @@ together, or uninstall and install again with the new value.
 ## Model locations
 
 Models can live in up to five directories. The primary is
-`CONSOLE_MODELS_DIR`; add others under 設定 → 模型存放 → 存放位置. Each becomes
+`CONSOLE_MODELS_DIR`; add others under Settings → Model storage → Locations. Each becomes
 a llama-swap macro, `models-dir-2` to `models-dir-5`, so a model entry names
 a file as `${models-dir-2}/owner/repo/file.gguf`. GGUF and safetensors each
 have their own default download location, so llama.cpp and vLLM weights can

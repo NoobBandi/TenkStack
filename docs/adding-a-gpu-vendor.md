@@ -150,14 +150,14 @@ numbers. `nvidiaOrdinal` in `vendors.go` shows the conversion.
 **Unverified until you have run it on real hardware.** Two flags say so, and
 both stay false in a first pull request: `Comfy.Verified` on the vendor
 record's ComfyUI image, and `verified:` on each engine build for your vendor in
-`internal/providers/engines/*/engine.yaml`. It is not paperwork: the 推論引擎
-page says 未驗證 beside an unverified build and its install button, which is
+`internal/providers/engines/*/engine.yaml`. It is not paperwork: the Engines
+page marks an unverified build and its install button as unverified, which is
 worth saying before a seven gigabyte download rather than after. Set each one
 true in the pull request that reports the measurement for it, and only that
 one.
 
 **`Comfy: nil` is a legitimate answer.** The ComfyUI page then lists your card
-as having no image for its vendor with its 建立實例 button disabled, and the rest
+as having no image for its vendor with its Create instance button disabled, and the rest
 of the console handles that already.
 
 **`Claims` is the inverse of `DeviceFlags`, not a copy of it.** Given a
@@ -178,7 +178,7 @@ Then the parts only real hardware can answer, and these are what a pull request
 should report:
 
 1. `/api/runtimes` lists your card with `llm` and `images` reflecting reality.
-2. Installing llama.cpp for your vendor on the 推論引擎 page installs and
+2. Installing llama.cpp for your vendor on the Engines page installs and
    enables a launcher, and `llama-server --list-devices` through it
    enumerates your card.
 3. A model pinned to your card writes your selector into `config.yaml`, and
