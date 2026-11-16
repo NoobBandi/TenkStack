@@ -49,6 +49,14 @@ type Store struct {
 	aliasMu    sync.Mutex
 	aliases    map[string]string
 	aliasStamp time.Time
+
+	// The remote entries of the config, cached between changes exactly as
+	// the aliases are: the guard in makeRoom asks on every /v1 request, and
+	// parsing the YAML there would be a cost per request for something that
+	// changes once a config edit.
+	proxyMu    sync.Mutex
+	proxies    map[string]string
+	proxyStamp time.Time
 }
 
 func NewStore(path string) *Store { return &Store{Path: path} }
@@ -306,18 +314,36 @@ func EnvMap(n *yaml.Node) map[string]string {
 // one that uses a macro is somebody's own arrangement; both keep the
 // behaviour of any other entry.
 func (s *Store) RemoteProxy(modelID string) string {
-	c, err := s.Load()
+	st, err := os.Stat(s.Path)
 	if err != nil {
 		return ""
 	}
-	models := c.Root().Map("models")
-	if models == nil {
-		return ""
+	s.proxyMu.Lock()
+	defer s.proxyMu.Unlock()
+	if !st.ModTime().Equal(s.proxyStamp) {
+		c, err := s.Load()
+		if err != nil {
+			log.Printf("could not read the config while looking for remote entries: %v", err)
+			return ""
+		}
+		out := map[string]string{}
+		if models := c.Root().Map("models"); models != nil {
+			for _, id := range models.Keys() {
+				if spec := models.Map(id); spec != nil {
+					if p := remoteProxyURL(spec); p != "" {
+						out[id] = p
+					}
+				}
+			}
+		}
+		s.proxies, s.proxyStamp = out, st.ModTime()
 	}
-	entry := models.Map(modelID)
-	if entry == nil {
-		return ""
-	}
+	return s.proxies[modelID]
+}
+
+// remoteProxyURL is an entry's proxy when it names a server the console
+// does not start (the rule is documented on RemoteProxy), "" otherwise.
+func remoteProxyURL(entry *Mapping) string {
 	raw := strings.TrimSpace(Scalar(entry.Get("proxy")))
 	if raw == "" || strings.Contains(raw, "${") {
 		return ""
