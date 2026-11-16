@@ -574,8 +574,15 @@ export interface ModelSpec {
   /** The launcher macro the entry starts through: llama-sycl, vllm-intel.
    *  Empty on save keeps the entry's launcher, or takes the default. */
   runtime?: string;
-  /** Which software that launcher is, read back with a spec. */
-  provider?: 'llamacpp' | 'vllm' | string;
+  /** Which software that launcher is, read back with a spec. "remote" is a
+   *  server on another machine (docs/remote-models.md), named by endpoint
+   *  rather than by a launcher. */
+  provider?: 'llamacpp' | 'vllm' | 'remote' | string;
+  /** A remote entry: the URL /v1 requests go to, and the model name that
+   *  server is sent -- vLLM, SGLang and Yunshu all refuse the entry's own
+   *  id if the name is not theirs. */
+  endpoint?: string;
+  upstream_name?: string;
   /** What the entry's weights are: a GGUF file or a safetensors directory. */
   format?: 'gguf' | 'safetensors';
   /** vLLM only. Empty quantisation serves the weights as published. */

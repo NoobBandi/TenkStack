@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -41,8 +42,9 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 	for id, entry := range byID {
 		proxy, _ := entry["proxy"].(string)
 		// /props and /slots are llama-server's; another provider answers
-		// 404 twice a poll, which is noise in its log for nothing.
-		if proxy == "" || formOf(providerOf[id]) != providers.FormLlama {
+		// 404 twice a poll, which is noise in its log for nothing. So does
+		// a server on another machine, which is not llama-server either.
+		if proxy == "" || s.Config.RemoteProxy(id) != "" || formOf(providerOf[id]) != providers.FormLlama {
 			continue
 		}
 		wg.Add(1)
@@ -118,6 +120,14 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		if p := providers.Get(providerOf[id]); p != nil && p.Tools {
 			caps.Tools = true
 		}
+		// The servers people host elsewhere -- vLLM, SGLang, llama.cpp, an
+		// engine like Yunshu -- all carry tools once started with them, and
+		// the console cannot ask a server it does not start. Assuming true
+		// keeps the chat panel's switch available; a remote without tools
+		// answers with the error, which the panel already shows.
+		if providerOf[id] == llamaswap.RemoteKey {
+			caps.Tools = true
+		}
 		if live != nil {
 			caps.Source = "live"
 			caps.Vision, _ = modalities["vision"].(bool)
@@ -133,6 +143,9 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		row["capabilities"] = caps
 		// Which inference engine starts the entry, so the list can be
 		// grouped by it; an entry named by hand is llama.cpp.
+		// A server on another machine answers for its own engine, not for
+		// llama.cpp's; grouping it under llama.cpp would be a lie the Models
+		// page tells about where the weights are.
 		key := providerOf[id]
 		if key == "" {
 			key = providers.DefaultProvider().Key
@@ -140,6 +153,8 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 		row["provider"] = key
 		if p := providers.Get(key); p != nil {
 			row["provider_name"] = p.Name
+		} else if key == llamaswap.RemoteKey {
+			row["provider_name"] = "遠端模型"
 		}
 		out = append(out, row)
 	}
@@ -231,13 +246,19 @@ func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	spec := api.ModelSpec{CtxSize: 16384, NGpuLayers: 99, TTL: 900, Group: strp("large")}
-	if _, has := raw["model_file"]; !has {
-		fail(w, http.StatusUnprocessableEntity, "model_file is required")
-		return
-	}
 	body, _ := json.Marshal(raw)
 	if err := json.Unmarshal(body, &spec); err != nil || spec.ID == "" {
 		fail(w, http.StatusUnprocessableEntity, "id is required")
+		return
+	}
+	if spec.Endpoint != "" {
+		u, err := url.Parse(spec.Endpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			fail(w, http.StatusUnprocessableEntity, "endpoint 必須是完整的 http(s) URL")
+			return
+		}
+	} else if spec.ModelFile == "" {
+		fail(w, http.StatusUnprocessableEntity, "model_file is required")
 		return
 	}
 	chosen, present := chosenDevices(spec.Device)

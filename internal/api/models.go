@@ -24,6 +24,12 @@ type ModelSpec struct {
 	// card it pre-allocates.
 	Quantization         string  `json:"quantization"`
 	GpuMemoryUtilization float64 `json:"gpu_memory_utilization"`
+	// Endpoint makes the entry a server on another machine (docs/remote-
+	// models.md): the URL /v1 requests go to. UpstreamName is the model
+	// name that server is sent, which the ones that check it (vLLM, SGLang,
+	// Yunshu's single-model mode) otherwise refuse the entry's id against.
+	Endpoint     string `json:"endpoint"`
+	UpstreamName string `json:"upstream_name"`
 }
 
 // ModelSpecOut is a configured entry parsed back into the editor's fields.
@@ -48,6 +54,10 @@ type ModelSpecOut struct {
 	Group                *string        `json:"group"`
 	Sampling             map[string]any `json:"sampling"`
 	Extra                string         `json:"extra"`
+	// Endpoint and UpstreamName are set for a remote entry (the Provider is
+	// then "remote"): the server's URL and the name it is sent.
+	Endpoint     string `json:"endpoint"`
+	UpstreamName string `json:"upstream_name"`
 }
 
 type ModelFile struct {

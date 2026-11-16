@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,14 @@ type Store struct {
 	aliasMu    sync.Mutex
 	aliases    map[string]string
 	aliasStamp time.Time
+
+	// The remote entries of the config, cached between changes exactly as
+	// the aliases are: the guard in makeRoom asks on every /v1 request, and
+	// parsing the YAML there would be a cost per request for something that
+	// changes once a config edit.
+	proxyMu    sync.Mutex
+	proxies    map[string]string
+	proxyStamp time.Time
 }
 
 func NewStore(path string) *Store { return &Store{Path: path} }
@@ -292,6 +301,91 @@ func EnvMap(n *yaml.Node) map[string]string {
 		out[name] = value
 	}
 	return out
+}
+
+// RemoteProxy is the proxy URL of an entry that names a server on another
+// machine rather than one this machine starts: an explicit proxy with no
+// ${PORT} in it, pointing somewhere that is not this host. llama-swap
+// still wants a cmd such an entry can hang its lifecycle on (see
+// docs/remote-models.md for the recipe), but the console starts nothing
+// for it: there is no load to size against a card, no llama-server to
+// ask /props, and no room to make by evicting ComfyUI. An entry whose
+// proxy names loopback is a locally started server on a fixed port, and
+// one that uses a macro is somebody's own arrangement; both keep the
+// behaviour of any other entry.
+func (s *Store) RemoteProxy(modelID string) string {
+	st, err := os.Stat(s.Path)
+	if err != nil {
+		return ""
+	}
+	s.proxyMu.Lock()
+	defer s.proxyMu.Unlock()
+	if !st.ModTime().Equal(s.proxyStamp) {
+		c, err := s.Load()
+		if err != nil {
+			log.Printf("could not read the config while looking for remote entries: %v", err)
+			return ""
+		}
+		out := map[string]string{}
+		if models := c.Root().Map("models"); models != nil {
+			for _, id := range models.Keys() {
+				if spec := models.Map(id); spec != nil {
+					if p := remoteProxyURL(spec); p != "" {
+						out[id] = p
+					}
+				}
+			}
+		}
+		s.proxies, s.proxyStamp = out, st.ModTime()
+	}
+	return s.proxies[modelID]
+}
+
+// RemoteCmd is the placeholder llama-swap needs to hang a remote model's
+// lifecycle on (it insists every entry has a cmd; docs/remote-models.md
+// explains the form) and the mark that lets a loopback proxy -- an ssh
+// tunnel onto this machine, say -- count as remote too.
+const RemoteCmd = "sleep 3600"
+
+// RemoteKey names the pseudo-provider of a remote entry wherever a provider
+// key is read from (the Models page groups by it, the chat panel asks by
+// it). It is not a providers.All() record: there is no engine to install.
+const RemoteKey = "remote"
+
+// remoteProxyURL is an entry's proxy when it names a server the console
+// does not start (the rule is documented on RemoteProxy), "" otherwise.
+func remoteProxyURL(entry *Mapping) string {
+	raw := strings.TrimSpace(Scalar(entry.Get("proxy")))
+	if raw == "" || strings.Contains(raw, "${") {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	switch u.Hostname() {
+	case "":
+		return ""
+	case "localhost", "127.0.0.1", "0.0.0.0", "::1":
+		// Loopback with no placeholder is somebody's own server on a fixed
+		// port of this machine; keep treating it as one of the local ones.
+		if firstCmdLine(Scalar(entry.Get("cmd"))) != RemoteCmd {
+			return ""
+		}
+	}
+	return raw
+}
+
+// firstCmdLine is the first meaningful line of a cmd block: llama-swap's
+// own comment stripping, so a comment in the block does not hide what the
+// entry runs.
+func firstCmdLine(cmd string) string {
+	for _, line := range strings.Split(cmd, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			return t
+		}
+	}
+	return ""
 }
 
 // CanonicalModel follows aliases to the config key a request's model names,

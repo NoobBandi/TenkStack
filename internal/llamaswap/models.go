@@ -176,6 +176,39 @@ func (s *Store) Upsert(ctx context.Context, spec api.ModelSpec, env map[string]s
 		}
 		entry.Set("name", Str(name))
 		entry.Set("description", Str(spec.Description))
+		// Was this the remote form before the write? Only then are its keys
+		// the console's to remove when an entry moves back to a local
+		// server; a hand-written proxy for a fixed local port stays alone,
+		// being somebody else's arrangement.
+		wasRemote := remoteProxyURL(entry) != ""
+		// Remote: the console writing the form docs/remote-models.md
+		// describes. Nothing here concerns a card or a container: the
+		// placeholder is what llama-swap starts, health-checks and kills;
+		// proxy is where requests go; useModelName is the name a server that
+		// checks its model field (vLLM, SGLang, Yunshu) expects, the entry's
+		// id otherwise.
+		if spec.Endpoint != "" {
+			entry.Set("cmd", Literal("# served elsewhere; this only anchors llama-swap's lifecycle\n"+RemoteCmd+"\n"))
+			entry.Set("proxy", Str(spec.Endpoint))
+			up := spec.UpstreamName
+			if up == "" {
+				up = spec.ID
+			}
+			entry.Set("useModelName", Str(up))
+			entry.Set("checkEndpoint", Str("/health"))
+			entry.Set("ttl", Int(0))
+			entry.Delete("cmdStop")
+			entry.Delete("env")
+			// No group: a server elsewhere occupies no card here, and group
+			// membership is what the eviction policy reads.
+			syncGroupMembership(c, spec.ID, nil)
+			return nil
+		}
+		if wasRemote {
+			entry.Delete("proxy")
+			entry.Delete("useModelName")
+			entry.Delete("checkEndpoint")
+		}
 		if wrapper == "" {
 			wrapper = WrapperIn(Scalar(entry.Get("cmd")))
 		}
@@ -539,6 +572,13 @@ func (m *Models) ProviderKeys() map[string]string {
 	}
 	for _, e := range entries {
 		p, _, _ := ProviderOf(e.cmd)
+		if remoteProxyURL(e.spec) != "" {
+			// Read as remote by the same rule RemoteProxy applies, so the
+			// Models page groups it where makeRoom and readModels already
+			// treat it.
+			out[e.id] = RemoteKey
+			continue
+		}
 		out[e.id] = p.Key
 	}
 	return out
@@ -1052,6 +1092,21 @@ func (m *Models) ReadSpec(modelID string) *api.ModelSpecOut {
 	}
 	if e == nil || e.spec == nil {
 		return nil
+	}
+	if proxy := remoteProxyURL(e.spec); proxy != "" {
+		out := &api.ModelSpecOut{
+			ID: modelID, Provider: RemoteKey, Endpoint: proxy,
+			UpstreamName: Scalar(e.spec.Get("useModelName")),
+			Name:         Scalar(e.spec.Get("name")),
+			Description:  Scalar(e.spec.Get("description")),
+		}
+		if out.Name == "" {
+			out.Name = modelID
+		}
+		if ttl := e.spec.Get("ttl"); ttl != nil && ttl.Kind == yaml.ScalarNode {
+			out.TTL, _ = strconv.Atoi(ttl.Value)
+		}
+		return out
 	}
 	p, _, _ := ProviderOf(e.cmd)
 	patterns, owns := argPatterns, managed
