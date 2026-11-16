@@ -16,7 +16,8 @@ sits behind one web console with accounts and one OpenAI- and
 Anthropic-compatible API.
 
 It is one binary with the web interface built in. The interface is in
-Traditional Chinese.
+Traditional Chinese; the installer, the API and these documents are in
+English.
 
 ## Features
 
@@ -88,14 +89,29 @@ journalctl --user -u tenkstack-console | grep -o "setup=[0-9a-f]*" | tail -1
 | `--domain NAME` | HTTPS with a Let's Encrypt certificate. Ports 80 and 443 must be reachable from the internet |
 
 Other useful flags: `--dir PATH`, `--engines llamacpp,vllm`, `--searxng`,
-`--yes` (accept every default), `--dry-run`, and `--lang en|zh-TW`.
-`install.sh --help` lists them all.
+`--port N`, `--yes` (accept every default), `--dry-run`, and
+`--lang en|zh-TW`. `install.sh --help` lists them all.
+
+### Ports
+
+The defaults are 8443 for the console, 8000 for plain-HTTP `/v1`, and
+8070, 8080, 8090 and 8188 on loopback for the services behind them. If
+another program already holds one, the installer moves to the next free port
+and lists every change in its plan and in the final message, so read the
+address it prints rather than assuming 8443.
+
+To choose a port yourself, pass `--port N` (the console) or `--api-port N`
+(plain-HTTP `/v1`), or set the variables listed in
+[docs/configuration.md](docs/configuration.md#ports). A port you choose is
+used as given; if it is taken, the installer stops and names the program
+holding it. Running the installer again over an existing install keeps the
+ports it already uses.
 
 ### Update and uninstall
 
 The console checks GitHub for new releases. The administrator updates from
-the 關於 (About) page with one click; the downloaded binary is checked against
-the release's SHA256SUMS first.
+the About page with one click; the downloaded binary is checked against the
+release's SHA256SUMS first.
 
 To uninstall, run the install command again and choose uninstall, or pass
 `--uninstall`. This removes TenkStack's services, containers and programs but
@@ -117,8 +133,9 @@ if you ask for it, [SearXNG](https://github.com/searxng/searxng).
 
 ## Using the API
 
-Create an API key under 使用者 (Users). The 連線 (Connections) page shows
-ready-to-paste settings for Claude Code, Codex and other clients.
+Create an API key on the Users page. The Connections page shows
+ready-to-paste settings for Claude Code, Codex and other clients, with this
+machine's address and ports filled in.
 
 ```bash
 curl https://your-host:8443/v1/chat/completions \
@@ -146,8 +163,8 @@ Caddy ──┬── :8443  console and /v1
                     └── PostgreSQL, in a container on a unix socket
 ```
 
-Everything except Caddy listens only on loopback, so nothing is reachable
-without signing in.
+These are the default ports (see [Ports](#ports)). Everything except Caddy
+listens only on loopback, so nothing is reachable without signing in.
 
 ## Documentation
 

@@ -50,6 +50,16 @@ ROOT_DEFAULT="$HOME/tenkstack"
 # The checkout, which is code rather than data and so sits apart from it.
 CODE_DEFAULT="$HOME/dev/tenkstack"
 
+# Ports named in the environment (or by --port/--api-port below) are used as
+# given or not at all; the rest are defaults, and move to the next free port
+# when something else already holds one (see choose_ports).
+PORTS_GIVEN=""
+for __v in CONSOLE_PORT CONSOLE_LLAMA_SWAP_PORT CONSOLE_TLS_PORT CONSOLE_API_PORT \
+           CONSOLE_SEARXNG_PORT CONSOLE_COMFYUI_PORT CONSOLE_COMFYUI_PUBLIC_PORT; do
+  if [[ -n ${!__v:-} ]]; then PORTS_GIVEN+=" $__v"; fi
+done
+unset __v
+
 CONSOLE_PORT="${CONSOLE_PORT:-8070}"
 LLAMA_SWAP_PORT="${CONSOLE_LLAMA_SWAP_PORT:-8080}"
 
@@ -108,6 +118,11 @@ TLS_KEY=""
 DOMAIN=""
 CONSOLE_TLS_PORT="${CONSOLE_TLS_PORT:-8443}"
 API_PORT="${CONSOLE_API_PORT:-8000}"
+# ComfyUI: a range of loopback ports for the containers, and the same number
+# of ports Caddy publishes them on.
+COMFY_PORT="${CONSOLE_COMFYUI_PORT:-8188}"
+COMFY_PUBLIC_PORT="${CONSOLE_COMFYUI_PUBLIC_PORT:-8444}"
+COMFY_COUNT="${CONSOLE_COMFYUI_COUNT:-4}"
 
 # Findings, filled in by the survey.
 OS_ID=""; OS_PRETTY=""
@@ -244,6 +259,10 @@ TenkStack installer
   --tls CERT,KEY      HTTPS with your own certificate
   --domain NAME       a public domain, certificate from Let's Encrypt (80/443 reachable)
                       none of the three = plain HTTP on :$CONSOLE_TLS_PORT, for a proxy in front
+  --port N            the port the console is reached on (default $CONSOLE_TLS_PORT)
+  --api-port N        the plain-HTTP /v1 port (default $API_PORT)
+                      a default port that is taken moves to the next free one; a port
+                      given here or in the environment is used as given, or not at all
   --searxng           install SearXNG (Docker, loopback :$SEARXNG_PORT: web search for the models)
   --no-searxng        do not
   --engines LIST      inference engines to install once the console is up: llamacpp,vllm,sglang
@@ -257,7 +276,8 @@ TenkStack installer
   --dry-run           print what would be done, do none of it
   --help
 
-Environment: TENKSTACK_REPO, TENKSTACK_REF, CONSOLE_PORT, CONSOLE_TLS_PORT, CONSOLE_API_PORT
+Environment: TENKSTACK_REPO, TENKSTACK_REF, CONSOLE_PORT, CONSOLE_TLS_PORT, CONSOLE_API_PORT,
+  CONSOLE_LLAMA_SWAP_PORT, CONSOLE_SEARXNG_PORT, CONSOLE_COMFYUI_PORT, CONSOLE_COMFYUI_PUBLIC_PORT
 EOF
     return
   fi
@@ -272,6 +292,10 @@ TenkStack 安裝程式
   --tls CERT,KEY      用你自己的憑證檔做 HTTPS
   --domain NAME       用公開網域，Let's Encrypt 自動簽（需要 80/443 對外可達）
                       三個都不給 = 純 HTTP :$CONSOLE_TLS_PORT，外面已有反向代理時選這個
+  --port N            連到主控台的連接埠（預設 $CONSOLE_TLS_PORT）
+  --api-port N        純 HTTP /v1 的連接埠（預設 $API_PORT）
+                      預設的連接埠被佔用時會自動換到下一個空的；用參數或環境變數
+                      指定的連接埠只用那一個，被佔用就停下來
   --searxng           裝 SearXNG（Docker，loopback :$SEARXNG_PORT，讓模型能上網搜尋）
   --no-searxng        不裝
   --engines LIST      主控台啟動後要裝的推論引擎：llamacpp,vllm,sglang
@@ -285,7 +309,8 @@ TenkStack 安裝程式
   --dry-run           印出會做什麼，不執行任何動作
   --help
 
-環境變數：TENKSTACK_REPO、TENKSTACK_REF、CONSOLE_PORT、CONSOLE_TLS_PORT、CONSOLE_API_PORT
+環境變數：TENKSTACK_REPO、TENKSTACK_REF、CONSOLE_PORT、CONSOLE_TLS_PORT、CONSOLE_API_PORT、
+  CONSOLE_LLAMA_SWAP_PORT、CONSOLE_SEARXNG_PORT、CONSOLE_COMFYUI_PORT、CONSOLE_COMFYUI_PUBLIC_PORT
 EOF
 }
 
@@ -310,6 +335,8 @@ while [[ $# -gt 0 ]]; do
         *)        die "$(L "不認得的 --tls 值：$2" "Unknown --tls value: $2")" "$(L "用 internal，或 憑證檔,金鑰檔。" "Use internal, or cert-file,key-file.")" ;;
       esac
       shift 2 ;;
+    --port)        CONSOLE_TLS_PORT=${2:?$(L "--port 需要一個連接埠" "--port needs a port")}; PORTS_GIVEN+=" CONSOLE_TLS_PORT"; shift 2 ;;
+    --api-port)    API_PORT=${2:?$(L "--api-port 需要一個連接埠" "--api-port needs a port")}; PORTS_GIVEN+=" CONSOLE_API_PORT"; shift 2 ;;
     --domain)      DOMAIN=${2:?$(L "--domain 需要一個網域名稱" "--domain needs a domain name")}; TLS_MODE=domain; shift 2 ;;
     --yes|-y)      ASSUME_YES=true; shift ;;
     --dry-run)     DRY_RUN=true; shift ;;
@@ -439,19 +466,183 @@ survey_deps() {
     warn "$(L "家目錄只剩 ${free}G，模型權重通常要幾十 G。" "Only ${free}G free in the home directory; model weights usually take tens of GB.")"
   fi
 
-  local listening; listening=$(ss -ltn 2>/dev/null || true)
-  for p in "$CONSOLE_PORT" "$LLAMA_SWAP_PORT" "$CONSOLE_TLS_PORT" "$API_PORT"; do
-    if grep -q ":$p " <<<"$listening"; then
-      # A survey finding, not a failure, while nothing is being changed --
-      # --dry-run on a machine that already runs this stack would otherwise
-      # stop before printing the plan it was asked for.
-      if $DRY_RUN; then
-        warn "$(L "連接埠 $p 已經被佔用（dry-run，繼續）" "Port $p is in use (dry run, carrying on)")"
-      else
-        die "$(L "連接埠 $p 已經被佔用。" "Port $p is in use.")" "$(L "換一個（CONSOLE_PORT=…）或把佔用它的東西停掉。" "Pick another (CONSOLE_PORT=…) or stop what holds it.")"
+}
+
+# --------------------------------------------------------------------------
+# Ports
+#
+# Caddy listens on the console's port, the plain-HTTP /v1 port and one port
+# per published ComfyUI; the console, llama-swap, SearXNG and the ComfyUI
+# containers listen on loopback. Defaults like 8000 and 8080 are taken on
+# many machines already, so each port is settled here, before anything is
+# written:
+#
+# - An install of this stack that is already here keeps the ports its
+#   console unit names. Its own services hold them, so running the installer
+#   over it is an update, not a conflict -- and its Caddyfile, which is not
+#   rewritten, still points at them.
+# - A port named in the environment or by a flag is used as given. If
+#   something else holds it, the install stops and says what.
+# - Any other port is a default, and moves to the next free one when taken.
+# --------------------------------------------------------------------------
+
+declare -A PORT_BUSY=() PORT_CLAIMED=()
+# "VAR text" per port that moved off its default, in the order they settled.
+PORT_MOVED=()
+CONSOLE_UNIT="$HOME/.config/systemd/user/tenkstack-console.service"
+# The console unit of an install already here, or empty.
+INSTALLED=""
+# The install directory, when it was kept by --uninstall and its Caddy files
+# are reused (see adopt_kept_root).
+KEPT_ROOT=""
+
+# What the installed console unit sets ENV to, or nothing. For an install
+# from before a line existed, the default it ran with.
+installed_port() {
+  local env=$1 fallback=$2 v=""
+  [[ -r $CONSOLE_UNIT ]] || return 0
+  if [[ $env == CONSOLE_SEARXNG_PORT ]]; then
+    v=$(sed -n 's/^Environment=CONSOLE_SEARXNG_URL=.*:\([0-9]*\)\/\{0,1\}$/\1/p' "$CONSOLE_UNIT" | tail -1)
+  else
+    v=$(sed -n "s/^Environment=$env=\([0-9]*\)$/\1/p" "$CONSOLE_UNIT" | tail -1)
+  fi
+  printf '%s' "${v:-$fallback}"
+}
+
+# Who listens on a port, as far as this user can see.
+port_holder() {
+  local who
+  who=$(ss -ltnpH "sport = :$1" 2>/dev/null | grep -oP 'users:\(\("\K[^"]+' | head -1 || true)
+  printf '%s' "${who:-$(L "另一個使用者或 root 的程式" "a process of another user or root")}"
+}
+
+# Whether ports FIRST .. FIRST+WIDTH-1 are free and not given out already.
+ports_free() {
+  local p
+  for ((p = $1; p < $1 + $2; p++)); do
+    if ((p > 65535)) || [[ -n ${PORT_BUSY[$p]:-} || -n ${PORT_CLAIMED[$p]:-} ]]; then return 1; fi
+  done
+}
+
+claim_ports() {
+  local p
+  for ((p = $1; p < $1 + $2; p++)); do PORT_CLAIMED[$p]=1; done
+}
+
+# settle_port VAR ENV WIDTH LABEL
+settle_port() {
+  local var=$1 env=$2 width=$3 label=$4 want=${!1} p
+  [[ $want =~ ^[0-9]+$ ]] && ((want >= 1 && want + width - 1 <= 65535)) ||
+    die "$(L "$env=$want 不是有效的連接埠。" "$env=$want is not a valid port.")" "$(L "用 1 到 65535 之間的數字。" "Use a number from 1 to 65535.")"
+
+  if [[ $PORTS_GIVEN == *" $env"* ]]; then
+    for ((p = want; p < want + width; p++)); do
+      if [[ -n ${PORT_CLAIMED[$p]:-} ]]; then
+        die "$(L "連接埠 $p 指定給了兩個地方。" "Port $p is given to two things.")" "$(L "$label 換一個（$env=…）。" "Give $label another ($env=…).")"
       fi
+      # The installed stack's own services hold the ports it already uses.
+      if [[ -n ${PORT_BUSY[$p]:-} && ! ( -n $INSTALLED && $want == "$(installed_port "$env" "")" ) ]]; then
+        local hint
+        local how="$env=…"
+        case $env in CONSOLE_TLS_PORT) how="--port N" ;; CONSOLE_API_PORT) how="--api-port N" ;; esac
+        hint=$(L "換一個（$how），或不指定讓安裝程式自己挑。" "Give another ($how), or leave it out and the installer picks a free one.")
+        if [[ -n $KEPT_ROOT ]]; then
+          hint=$(L "這是保留下來的 $KEPT_ROOT/caddy 用的連接埠：把佔用它的東西停掉，或刪掉 $KEPT_ROOT/caddy 讓安裝程式重寫。" "The Caddy files kept in $KEPT_ROOT/caddy use this port: stop what holds it, or delete $KEPT_ROOT/caddy and the installer writes them again.")
+        fi
+        if $DRY_RUN; then warn "$(L "連接埠 $p 已經被 $(port_holder "$p") 佔用（dry-run，繼續）" "Port $p is held by $(port_holder "$p") (dry run, carrying on)")"
+        else die "$(L "$label 的連接埠 $p 已經被 $(port_holder "$p") 佔用。" "Port $p, for $label, is held by $(port_holder "$p").")" "$hint"; fi
+      fi
+    done
+    claim_ports "$want" "$width"
+    return
+  fi
+
+  if [[ -n $INSTALLED ]]; then
+    want=$(installed_port "$env" "$want")
+    printf -v "$var" '%s' "$want"
+    claim_ports "$want" "$width"
+    return
+  fi
+
+  for ((p = want; p <= want + 200; p++)); do
+    if ports_free "$p" "$width"; then
+      if ((p != want)); then
+        PORT_MOVED+=("$var $label: $want → $p ($(L "$want 被 $(port_holder "$want") 佔用" "$want is held by $(port_holder "$want")"))")
+        printf -v "$var" '%s' "$p"
+      fi
+      claim_ports "$p" "$width"
+      return
     fi
   done
+  die "$(L "$label 在 $want 之後找不到空的連接埠。" "No free port for $label from $want on.")" "$(L "用 $env=… 指定一個。" "Name one with $env=….")"
+}
+
+choose_ports() {
+  local p
+  while read -r p; do [[ -n $p ]] && PORT_BUSY[$p]=1; done < <(ss -ltnH 2>/dev/null | awk '{n = split($4, a, ":"); print a[n]}')
+  if [[ -r $CONSOLE_UNIT ]]; then INSTALLED=$CONSOLE_UNIT; fi
+  settle_ports
+  if [[ -n $INSTALLED ]]; then
+    ok "$(L "沿用已安裝的連接埠（$INSTALLED）" "keeping the installed ports ($INSTALLED)")"
+  elif [[ ${#PORT_MOVED[@]} -eq 0 ]]; then
+    ok "$(L "預設連接埠都是空的" "the default ports are free")"
+  else
+    while read -r p; do warn "$(L "換了連接埠：" "moved: ")$p"; done < <(moved_ports)
+  fi
+}
+
+# The ports that moved, one per line, leaving out SearXNG's once it is not wanted.
+moved_ports() {
+  local m
+  for m in "${PORT_MOVED[@]}"; do
+    if [[ ${m%% *} == SEARXNG_PORT && $WANT_SEARXNG == n ]]; then continue; fi
+    printf '%s\n' "${m#* }"
+  done
+}
+
+# Every port, in the order they claim: the ones people type first, so a
+# default that has to move is one nobody sees.
+settle_ports() {
+  PORT_CLAIMED=()
+  PORT_MOVED=()
+  # In domain mode Caddy needs 80 and 443 themselves; check_choices checks those.
+  settle_port CONSOLE_TLS_PORT  CONSOLE_TLS_PORT            1 "$(L "主控台" "the console")"
+  settle_port API_PORT          CONSOLE_API_PORT            1 "$(L "純 HTTP /v1" "plain-HTTP /v1")"
+  settle_port CONSOLE_PORT      CONSOLE_PORT                1 "$(L "主控台後端" "the console backend")"
+  settle_port LLAMA_SWAP_PORT   CONSOLE_LLAMA_SWAP_PORT     1 "llama-swap"
+  settle_port SEARXNG_PORT      CONSOLE_SEARXNG_PORT        1 "SearXNG"
+  settle_port COMFY_PORT        CONSOLE_COMFYUI_PORT        "$COMFY_COUNT" "ComfyUI"
+  settle_port COMFY_PUBLIC_PORT CONSOLE_COMFYUI_PUBLIC_PORT "$COMFY_COUNT" "$(L "ComfyUI 對外" "ComfyUI, published")"
+}
+
+# An install directory kept by --uninstall still has its Caddy files, which
+# write_caddy does not rewrite, and they name the ports that install used --
+# so a reinstall into it takes those ports as given. They are in ports.env,
+# or for an install from before that file, in the Caddy files themselves.
+adopt_kept_root() {
+  [[ -z $INSTALLED && -e $ROOT/caddy/Caddyfile ]] || return 0
+  KEPT_ROOT=$ROOT
+  local key val api
+  if [[ -r $ROOT/ports.env ]]; then
+    while IFS='=' read -r key val; do
+      case $key in
+        CONSOLE_PORT|CONSOLE_TLS_PORT|SEARXNG_PORT|COMFY_PORT|COMFY_PUBLIC_PORT|COMFY_COUNT|LLAMA_SWAP_PORT|API_PORT)
+          [[ $val =~ ^[0-9]+$ ]] && printf -v "$key" '%s' "$val" ;;
+      esac
+    done < "$ROOT/ports.env"
+  else
+    val=$(grep -oP 'reverse_proxy 127\.0\.0\.1:\K[0-9]+' "$ROOT/caddy/Caddyfile" | head -1 || true)
+    if [[ -n $val ]]; then CONSOLE_PORT=$val; fi
+    val=$(grep -oP '^https?://[^ ,{]+:\K[0-9]+' "$ROOT/caddy/Caddyfile" | head -1 || true)
+    if [[ -n $val ]]; then CONSOLE_TLS_PORT=$val; fi
+    api=$(ls "$ROOT"/caddy/channels/api-http.caddy "$ROOT"/caddy/channels/disabled/api-http.caddy 2>/dev/null | head -1 || true)
+    val=$( [[ -n $api ]] && grep -oP '^http://:\K[0-9]+' "$api" | head -1 || true)
+    if [[ -n $val ]]; then API_PORT=$val; fi
+    COMFY_PUBLIC_PORT=${CONSOLE_COMFYUI_PUBLIC_PORT:-8444}
+  fi
+  PORTS_GIVEN+=" CONSOLE_PORT CONSOLE_TLS_PORT CONSOLE_API_PORT CONSOLE_COMFYUI_PUBLIC_PORT"
+  settle_ports
+  ok "$(L "沿用 $ROOT/caddy 裡的連接埠（主控台 :$CONSOLE_TLS_PORT）" "keeping the ports in $ROOT/caddy (console on :$CONSOLE_TLS_PORT)")"
 }
 
 # --------------------------------------------------------------------------
@@ -462,6 +653,7 @@ survey_deps() {
 # SearXNG are decided there -- the survey above only checks what is true of
 # the machine before anyone has chosen anything.
 check_choices() {
+  adopt_kept_root
   case $TLS_MODE in
     cert)
       [[ -r $TLS_CERT ]] || die "$(L "讀不到憑證檔 $TLS_CERT" "Cannot read the certificate $TLS_CERT")" "$(L "--tls 要的是 憑證檔,金鑰檔。" "--tls takes cert-file,key-file.")"
@@ -477,13 +669,13 @@ check_choices() {
   esac
 
   local listening; listening=$(ss -ltn 2>/dev/null || true)
-  local extra=()
-  if [[ $TLS_MODE == domain ]]; then extra+=(80 443); fi
-  if [[ $WANT_SEARXNG == y ]]; then extra+=("$SEARXNG_PORT"); fi
+  local extra=() p
+  # Caddy holds 80 and 443 itself on an install that already uses a domain.
+  if [[ $TLS_MODE == domain && -z $INSTALLED ]]; then extra+=(80 443); fi
   for p in "${extra[@]}"; do
     if grep -q ":$p " <<<"$listening"; then
       if $DRY_RUN; then warn "$(L "連接埠 $p 已經被佔用（dry-run，繼續）" "Port $p is in use (dry run, carrying on)")"
-      else die "$(L "連接埠 $p 已經被佔用。" "Port $p is in use.")" "$(L "換一個，或把佔用它的東西停掉。" "Pick another, or stop what holds it.")"; fi
+      else die "$(L "連接埠 $p 已經被 $(port_holder "$p") 佔用。" "Port $p is held by $(port_holder "$p").")" "$(L "--domain 需要 80 和 443：把佔用它的東西停掉，或改用 --tls internal。" "--domain needs 80 and 443: stop what holds it, or use --tls internal instead.")"; fi
     fi
   done
 }
@@ -509,6 +701,8 @@ show_plan() {
     cert)     say "  $(L "對外          " "Access        ")https://$host:$CONSOLE_TLS_PORT（$TLS_CERT）" ;;
     domain)   say "  $(L "對外          " "Access        ")https://$DOMAIN$(L "（Let's Encrypt，會 setcap caddy）" " (Let's Encrypt; runs setcap on caddy)")" ;;
   esac
+  local moved
+  while read -r moved; do say "  $(L "換了連接埠    " "Moved port    ")$moved"; done < <(moved_ports)
   if [[ ${#MISSING_PKGS[@]}   -gt 0 ]]; then say "  $(L "會安裝        " "Installs      ")${MISSING_PKGS[*]}"; fi
   if [[ ${#MISSING_GROUPS[@]} -gt 0 ]]; then say "  $(L "會加入群組    " "Joins groups  ")${MISSING_GROUPS[*]}"; fi
   if $NEEDS_REBOOT; then
@@ -934,6 +1128,9 @@ Environment=CONSOLE_LLAMA_SWAP_PORT=$LLAMA_SWAP_PORT
 Environment=CONSOLE_API_PORT=$API_PORT
 Environment=CONSOLE_TLS_PORT=$CONSOLE_TLS_PORT
 Environment=CONSOLE_SEARXNG_URL=http://127.0.0.1:$SEARXNG_PORT
+Environment=CONSOLE_COMFYUI_PORT=$COMFY_PORT
+Environment=CONSOLE_COMFYUI_PUBLIC_PORT=$COMFY_PUBLIC_PORT
+Environment=CONSOLE_COMFYUI_COUNT=$COMFY_COUNT
 ExecStart=$ROOT/console/tenkstack -listen 127.0.0.1:$CONSOLE_PORT
 Restart=on-failure
 RestartSec=5
@@ -1009,6 +1206,12 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 UNIT"
+  # The ports, for a reinstall into this directory after --uninstall
+  # (adopt_kept_root): the Caddy files it keeps name them.
+  run bash -c "printf '%s\n' '# Written by the TenkStack installer: the ports this install uses.' \
+    CONSOLE_PORT=$CONSOLE_PORT CONSOLE_TLS_PORT=$CONSOLE_TLS_PORT API_PORT=$API_PORT \
+    LLAMA_SWAP_PORT=$LLAMA_SWAP_PORT SEARXNG_PORT=$SEARXNG_PORT \
+    COMFY_PORT=$COMFY_PORT COMFY_PUBLIC_PORT=$COMFY_PUBLIC_PORT COMFY_COUNT=$COMFY_COUNT > '$ROOT/ports.env'"
   ok "$(L "寫好 systemd unit" "wrote the systemd units")"
 }
 
@@ -1123,6 +1326,13 @@ finish() {
       say "  ${C_DIM}$(L "（純 HTTP：密碼和 API key 在網路上是明文。若這台會被區網以外連到，" "(Plain HTTP: passwords and API keys cross the network in the clear. If this is reachable beyond the LAN,")"
       say "    $(L "重跑並加 --tls internal 或 --domain，或在前面放一個負責 TLS 的代理。）" "run again with --tls internal or --domain, or put a TLS-terminating proxy in front.)")${C_OFF}" ;;
   esac
+  local moved
+  moved=$(moved_ports)
+  if [[ -n $moved ]]; then
+    say "  $(L "預設連接埠被佔用，改用了：" "Default ports were taken, so these moved:")"
+    local m
+    while read -r m; do say "    $m"; done <<<"$moved"
+  fi
   say "  ${C_DIM}$(L "純 /v1 的 HTTP 入口在 :$API_PORT，給不信任私有 CA 的 CLI 工具用；連線頁可以關掉它。" "A plain-HTTP /v1 entrance is on :$API_PORT for CLI tools that do not trust a private CA; the Connections page can close it.")${C_OFF}"
   say ""
   say "  $(L "接下來在主控台裡：" "Next, in the console:")"
@@ -1191,11 +1401,13 @@ setup_ui_start() {
 
 # What the survey found, for the confirmation to list every change.
 write_facts() {
-  local listening busy=() p
-  listening=$(ss -ltn 2>/dev/null || true)
-  for p in 80 443 "$SEARXNG_PORT"; do
-    if grep -q ":$p " <<<"$listening"; then busy+=("$p"); fi
-  done
+  local busy=() p
+  # The other ports are settled already (choose_ports); these two cannot move.
+  if [[ -z $INSTALLED ]]; then
+    for p in 80 443; do
+      if [[ -n ${PORT_BUSY[$p]:-} ]]; then busy+=("$p"); fi
+    done
+  fi
   {
     printf 'MISSING_PKGS="%s"\nMISSING_GROUPS="%s"\n' "${MISSING_PKGS[*]}" "${MISSING_GROUPS[*]}"
     printf 'NEEDS_REBOOT="%s"\nREBOOT_WHY="%s"\n' "$NEEDS_REBOOT" "$REBOOT_WHY"
@@ -1262,6 +1474,7 @@ main() {
   survey_cards
   survey_drivers
   survey_deps
+  choose_ports
 
   step "$(L "② 選項" "② Choices")"
   if $screens && setup_ui_install; then

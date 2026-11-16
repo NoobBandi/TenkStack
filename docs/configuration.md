@@ -48,9 +48,23 @@ locations, ComfyUI's storage, its own PostgreSQL unit under
 | `CONSOLE_COMFYUI_PORT` | `8188` | The first loopback port of a ComfyUI instance |
 | `CONSOLE_COMFYUI_COUNT` | `4` | How many ComfyUI instances, one port each |
 | `CONSOLE_COMFYUI_PUBLIC_PORT` | `8444` | The first port Caddy serves ComfyUI on |
+| `CONSOLE_SEARXNG_PORT` | `8090` | SearXNG, on loopback (installer only; the console reads `CONSOLE_SEARXNG_URL`) |
 
-The installer writes the console, llama-swap, Caddy and SearXNG ports into
-the unit. The ComfyUI ports keep their defaults unless set in a drop-in.
+The installer settles every port before it writes anything:
+
+- A default port that something else already holds moves to the next free
+  one. The plan and the final message list each port that moved.
+- A port set in the environment, or with `--port` (the console) or
+  `--api-port` (plain-HTTP `/v1`), is used as given. If it is taken, the
+  install stops and names the process holding it.
+- Running the installer over an existing install keeps the ports its console
+  unit names, since its own services hold them.
+- Reinstalling into a directory kept by `--uninstall` keeps the ports in its
+  `ports.env`, because the Caddy files there are reused as they are.
+
+It writes every port into the console's unit and into `ports.env` in the
+install directory. To change one later, edit the unit and the Caddy files
+together, or uninstall and install again with the new value.
 
 ## Other settings
 
