@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, App as AntApp, Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input,
-  InputNumber, Modal, Popconfirm, Popover, Select, Space, Table, Tag, Tooltip, Typography,
+  InputNumber, Modal, Popconfirm, Popover, Segmented, Select, Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   DeleteOutlined, EditOutlined, ImportOutlined, PlayCircleOutlined, PlusOutlined,
@@ -267,7 +267,10 @@ export default function Models() {
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
-  const [form] = Form.useForm<ModelSpec>();
+  // `kind` is the form's own question -- local entry or remote server --
+  // not a field of the stored spec; the save handler drops the answer into
+  // the one or the other shape.
+  const [form] = Form.useForm<ModelSpec & { kind?: 'local' | 'remote' }>();
   /**
    * The cards a llama-server here can actually drive.
    *
@@ -291,6 +294,12 @@ export default function Models() {
   const [runtimes, setRuntimes] = useState<Runtime[]>([]);
   const [engineCards, setEngineCards] = useState<ProviderCard[]>([]);
   const runtime = Form.useWatch('runtime', form);
+  // A remote model is a server on another machine (docs/remote-models.md):
+  // the entry names where requests go, not what this machine starts, so
+  // the form's local half -- file, card, context, sampling, quantisation
+  // -- has nothing to say about it and the fields go with it.
+  const kind = Form.useWatch('kind', form);
+  const remote = (kind ?? 'local') === 'remote';
   const current = runtimes.find((r) => r.macro === runtime) ?? runtimes[0];
   const provider = current?.provider ?? 'llamacpp';
   const formEngine = engineCards.find((e) => e.key === provider);
@@ -470,11 +479,12 @@ export default function Models() {
       await saveModel({
         ...values,
         name: values.name || values.id,
-        device: devices.length > 1 ? values.device ?? [] : undefined,
+        device: remote ? undefined : (devices.length > 1 ? values.device ?? [] : undefined),
         // The only launcher is sent too: the entry then says which it uses,
-        // rather than falling back to whatever the config's default is.
-        runtime: values.runtime || runtimes[0]?.macro || '',
-        quantization: folder?.quantized ? '' : values.quantization,
+        // rather than falling back to whatever the config's default is. A
+        // remote entry has no launcher at all.
+        runtime: remote ? '' : (values.runtime || runtimes[0]?.macro || ''),
+        quantization: remote ? '' : (folder?.quantized ? '' : values.quantization),
       });
       message.success('已寫入設定，llama-swap 會自動重載');
       setOpen(false);
@@ -528,7 +538,10 @@ export default function Models() {
     try {
       const spec = await fetchModelSpec(id);
       const device = deviceOf(spec.env);
-      form.setFieldsValue({ ...spec, device });
+      form.setFieldsValue({
+        ...EMPTY, ...spec, device,
+        kind: spec.provider === 'remote' ? 'remote' : 'local',
+      });
       setEditing(id);
       setOpen(true);
     } catch (error) {
@@ -709,7 +722,7 @@ export default function Models() {
             </Button>
             <Button size="small" type="primary" icon={<PlusOutlined />}
                     onClick={() => {
-                      form.setFieldsValue({ ...EMPTY, runtime: runtimes[0]?.macro ?? '' });
+                      form.setFieldsValue({ ...EMPTY, kind: 'local', runtime: runtimes[0]?.macro ?? '' });
                       setEditing(null);
                       setOpen(true);
                     }}>
@@ -1187,6 +1200,37 @@ export default function Models() {
           </Form.Item>
           <Form.Item name="name" label="顯示名稱"><Input /></Form.Item>
           <Form.Item name="description" label="說明"><Input.TextArea rows={2} /></Form.Item>
+          {/* Where the model lives decides the rest of the form: this
+              machine starts a local one and owns its card, layers and
+              eviction; a remote one is a URL, and everything else is the
+              other machine's business. */}
+          <Form.Item name="kind" label="模型來源" style={{ marginBottom: 4 }}>
+            <Segmented
+              disabled={!!editing}
+              options={[
+                { value: 'local', label: '本機模型' },
+                { value: 'remote', label: '遠端服務器' },
+              ]}
+            />
+          </Form.Item>
+          {remote && (
+          <>
+            <Form.Item name="endpoint" label="服務器 URL" rules={[{ required: true, type: 'url', message: '請輸入完整的 URL（含 http://）' }]}
+                       extra="這台機器之外的 OpenAI 兼容服務器，例如 http://192.168.1.30:8000；/v1 的請求原樣轉發過去。走本機通道（ssh -L、tailscale serve）時寫 http://127.0.0.1:… 也可以。">
+              <Input placeholder="http://192.168.1.30:8000" style={{ fontFamily: MONO, fontSize: 12 }} />
+            </Form.Item>
+            <Form.Item name="upstream_name" label="對方認識的模型名"
+                       extra="伺服器會檢查 model 欄位：vLLM、SGLang、Yunshu 都只認自己啟動時的名字，其餘的請求會被它們拒絕。這裡填對方的名字，留空就用上面的 ID。">
+              <Input placeholder="Qwen3-4B-MLX-4bit" />
+            </Form.Item>
+            <Alert type="info" showIcon style={{ marginBottom: 16 }}
+                   message="遠端模型不由這台機器管理"
+                   description="啟動、停止、載入多少都歸那台伺服器；這裡的卸載只影響轉發它的那一側。顯存的取捨也不會為它發生。"
+            />
+          </>
+          )}
+          {!remote && (
+          <>
           {noServerEngine && files.some((f) => f.format === 'safetensors') && (
             <Alert
               type="info"
@@ -1393,6 +1437,8 @@ export default function Models() {
                          ]), '--temp']}
             />
           </Form.Item>
+          )}
+          </>
           )}
         </Form>
       </Drawer>

@@ -57,10 +57,10 @@ running, so the eviction guard is tested by unit tests only there.
 
 - Works: the console's `/v1/chat/completions` and `/v1/messages`, the
   chat panel, API keys, the model id appearing in `/v1/models`.
-- Not managed: the Engines and Models pages never install, size,
-  benchmark, quantise or GPU-place it; the Models page may group it
-  under llama.cpp and its load/unload buttons act on the placeholder,
-  not on the real server.
+- Not managed: the console never installs, sizes, benchmarks, quantises
+  or GPU-places it. It is grouped under its own 遠端模型 engine rather
+  than mistaken for llama.cpp, and the load/unload buttons act on the
+  placeholder and the forwarding side only, never on the other machine.
 - No credential: a model entry cannot send an `Authorization` header.
   Serve the remote endpoint on a network you trust (LAN, Tailscale), or
   bring your own tunnel. llama-swap's `peers` can reach a machine behind
@@ -70,12 +70,21 @@ running, so the eviction guard is tested by unit tests only there.
   and never dies on its own, the Models page shows the entry as loaded
   once anything has referenced it until llama-swap is told to unload it.
 
-## Why this is not "an engine"
+## Why this is not "an engine", and how it joins the model list anyway
 
 `internal/providers/engines/README.md` explains the engine record: an
 image, a launcher, cards. A server on another machine has none of those
-to manage. The console does not yet have a form for adding these from
-the Models page; that is a separate design — until it exists, this file
-is the supported way, and it is what anyone porting to a platform the
-console's container story does not cover (see the MLX section of
-`docs/adding-a-gpu-vendor.md`) should be pointed at first.
+to manage, which is why it is a kind of model and not a row on the
+Engines page -- but it is not filed under llama.cpp either: the Models
+page gives it its own group, 遠端模型, so the list says where the
+weights are rather than implying they are here.
+
+The Models page can add and edit these itself: 新增模型 → 模型來源 →
+遠端服務器 asks for the server's URL and the name the server is sent,
+and writes the placeholder, proxy, `useModelName` and health check as
+above; editing such an entry reads the same fields back. The
+hand-written form remains the way to reach what the form does not ask
+for -- aliases, a custom `checkEndpoint`, timeouts -- and the MLX
+section of `docs/adding-a-gpu-vendor.md` points here because until
+that port exists, this is how a server on another platform joins the
+machine.
