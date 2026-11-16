@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -292,6 +293,44 @@ func EnvMap(n *yaml.Node) map[string]string {
 		out[name] = value
 	}
 	return out
+}
+
+// RemoteProxy is the proxy URL of an entry that names a server on another
+// machine rather than one this machine starts: an explicit proxy with no
+// ${PORT} in it, pointing somewhere that is not this host. llama-swap
+// still wants a cmd such an entry can hang its lifecycle on (see
+// docs/remote-models.md for the recipe), but the console starts nothing
+// for it: there is no load to size against a card, no llama-server to
+// ask /props, and no room to make by evicting ComfyUI. An entry whose
+// proxy names loopback is a locally started server on a fixed port, and
+// one that uses a macro is somebody's own arrangement; both keep the
+// behaviour of any other entry.
+func (s *Store) RemoteProxy(modelID string) string {
+	c, err := s.Load()
+	if err != nil {
+		return ""
+	}
+	models := c.Root().Map("models")
+	if models == nil {
+		return ""
+	}
+	entry := models.Map(modelID)
+	if entry == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(Scalar(entry.Get("proxy")))
+	if raw == "" || strings.Contains(raw, "${") {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	switch u.Hostname() {
+	case "", "localhost", "127.0.0.1", "0.0.0.0", "::1":
+		return ""
+	}
+	return raw
 }
 
 // CanonicalModel follows aliases to the config key a request's model names,

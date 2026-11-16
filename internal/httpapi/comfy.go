@@ -833,6 +833,13 @@ func (s *Server) makeRoom(ctx gocontext.Context, modelID string) (int, string) {
 	// An aliased name is a different string for a model that may already be
 	// loaded; resolved so every Codex request does not look like a cold load.
 	modelID = s.Config.CanonicalModel(modelID)
+	// An entry that names a server on another machine (docs/remote-models.md)
+	// is nobody's load on this one: without this a request to it would free
+	// -- or wait on -- every ComfyUI on the machine for a model that needs
+	// no card at all.
+	if s.Config.RemoteProxy(modelID) != "" {
+		return 0, ""
+	}
 	for _, entry := range s.LlamaSwap.Running(ctx) {
 		if m, _ := entry["model"].(string); m == modelID {
 			return 0, ""

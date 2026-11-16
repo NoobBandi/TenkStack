@@ -41,8 +41,9 @@ func (s *Server) readModels(w http.ResponseWriter, r *http.Request) {
 	for id, entry := range byID {
 		proxy, _ := entry["proxy"].(string)
 		// /props and /slots are llama-server's; another provider answers
-		// 404 twice a poll, which is noise in its log for nothing.
-		if proxy == "" || formOf(providerOf[id]) != providers.FormLlama {
+		// 404 twice a poll, which is noise in its log for nothing. So does
+		// a server on another machine, which is not llama-server either.
+		if proxy == "" || s.Config.RemoteProxy(id) != "" || formOf(providerOf[id]) != providers.FormLlama {
 			continue
 		}
 		wg.Add(1)

@@ -13,6 +13,28 @@ import (
 	"github.com/NoobBandi/TenkStack/internal/store/storetest"
 )
 
+// A model served by another machine (docs/remote-models.md) needs no card
+// here, so the guard in makeRoom returns before anything that could free
+// or wait on ComfyUI: with no probe wired up at all, asking for room for
+// a remote model answering cleanly is the point of this test, since the
+// unguarded path reaches the nil probe.
+func TestMakeRoomSkipsRemote(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	os.WriteFile(path, []byte(`models:
+  mac:
+    cmd: sleep 3600
+    proxy: http://192.168.1.30:8000
+    aliases:
+      - mac-alias
+`), 0o644)
+	s := &Server{Config: llamaswap.NewStore(path)}
+	for _, id := range []string{"mac", "mac-alias"} {
+		if status, detail := s.makeRoom(context.Background(), id); status != 0 || detail != "" {
+			t.Errorf("makeRoom(%s): %d %s", id, status, detail)
+		}
+	}
+}
+
 // busyB70s is the two cards as they were on 2026-10-10 20:13: card 1 with
 // 9.4 GiB of idle ComfyUI on it.
 type busyB70s struct{ twoB70s }

@@ -243,6 +243,10 @@ VRAM policy that has to be rethought rather than parameterised. That is a port,
 and it should be opened as one — with the unified-memory question answered
 first, because everything else follows from it.
 
+Until that port exists, an inference server on such a machine can already be
+used from a console on a supported one: a hand-written proxy entry, described
+in [remote-models.md](remote-models.md).
+
 ## Where to look in the code
 
 | Question | File |
