@@ -21,14 +21,22 @@ What it changes, in the installed vLLM:
   3. v1/worker/mamba_utils.py: two device addresses stored in an int64 array
      are reinterpreted like the others there, since a worker's addresses can
      sit above 2**63.
+  4. v1/executor/multiproc_executor.py (0.33 and later): the workers are
+     started one after another again. 0.33 starts them from parallel threads,
+     and edit 1 sets ZE_AFFINITY_MASK in this process's environment around
+     each start, so both workers inherited the last card: two workers on one
+     card, twice the weights in its memory, and oneCCL, seeing two ranks with
+     one device UUID, refusing its SYCL kernels ("Oversubscription is not
+     allowed"), whose fallback cannot be recorded into an XPU graph ("sched
+     algorithms do not support sycl_graph recording").
 The launcher also sets oneCCL's simple-algorithm thresholds so no collective
 opens the other card's memory (https://github.com/intel/llm-scaler/issues/594).
 
 Two workers only: that is what was measured. With more, the patch changes
 nothing and says so. Written against intel/llm-scaler-vllm:0.26.0-b2 and
 applies unchanged to vllm/vllm-openai-xpu:v0.30.0 (host RAM 11.8 GB for the
-same FP8 27B), and to vllm/vllm-openai-xpu:v0.31.0 less the check it no
-longer has. If an anchor is missing the script exits non-zero and the
+same FP8 27B), to vllm/vllm-openai-xpu:v0.31.0 less the check it no longer
+has, and to v0.33.0 with edit 4. If an anchor is missing the script exits non-zero and the
 container stops, since a half-applied patch hangs at start instead of
 failing -- unless the edit is to a check upstream has since removed. Run as
 a script, so it patches the installed vLLM even from the v0.30.0 image's
@@ -90,6 +98,16 @@ EDITS = [
         "                dst_ptrs_np[offset] = state[dest_block_id].data_ptr()\n",
         "                src_ptrs_np[offset] = _reinterpret_u64_as_i64(copy_spec.start_addr)  # TENKSTACK_MULTI_CARD\n"
         "                dst_ptrs_np[offset] = _reinterpret_u64_as_i64(state[dest_block_id].data_ptr())\n",
+    ),
+    (
+        "v1/executor/multiproc_executor.py",
+        "            if self._can_start_workers_concurrently(inherited_fds):\n",
+        "            # TENKSTACK_MULTI_CARD: one at a time, since each start sets ZE_AFFINITY_MASK.\n"
+        "            if self._can_start_workers_concurrently(inherited_fds) and not (\n"
+        "                os.environ.get(\"TENKSTACK_MULTI_CARD\") == \"1\" and self.local_world_size == 2\n"
+        "            ):\n",
+        # Optional: before 0.33 the workers were always started in turn.
+        "self._can_start_workers_concurrently(inherited_fds)",
     ),
 ]
 
