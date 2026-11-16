@@ -69,6 +69,11 @@ running, so the eviction guard is tested by unit tests only there.
 - One llama-swap quirk to know: because the placeholder "loads" instantly
   and never dies on its own, the Models page shows the entry as loaded
   once anything has referenced it until llama-swap is told to unload it.
+- Bench works -- over the network. A run against one of these drives the
+  same /v1 path every client uses, so it times the whole way: the other
+  machine's speed plus the link between. It does not touch the other
+  machine's GPU directly, and it still takes its usual turn of pausing
+  /v1 and unloading the models sharing the llama-swap.
 
 ## Why this is not "an engine", and how it joins the model list anyway
 
