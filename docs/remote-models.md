@@ -18,31 +18,40 @@ lifecycle on a placeholder and points its `proxy` at the other machine:
 ```yaml
 models:
   mac-qwen:
-    name: Qwen3.8 on the Mac
+    name: Qwen3.4B on the Mac
     cmd: sleep 3600
     proxy: http://192.168.1.30:8000
+    useModelName: Qwen3-4B-MLX-4bit
     checkEndpoint: /v1/models
     ttl: 0
     aliases:
       - qwen-mac
 ```
 
-`proxy` is where every `/v1` request for this id goes; `checkEndpoint` is
-what llama-swap probes before forwarding (use `none` to skip it); the
-placeholder process is what llama-swap starts, health-checks and kills on
-unload, which is why `ttl: 0` is the plain reading — there is nothing to
-time out. The console recognises an entry as remote when its `proxy` is
-explicit, names something other than a loopback address, and contains no
-`${PORT}` or macro; that is what keeps it out of the card and VRAM
-arithmetic.
+`proxy` is where every `/v1` request for this id goes; `checkEndpoint`
+is what llama-swap probes before forwarding (use `none` to skip it);
+`useModelName` is what the server is sent in the `model` field, which
+servers that validate it (vLLM, SGLang, Yunshu's single-model mode)
+otherwise refuse; the placeholder process is what llama-swap starts,
+health-checks and kills on unload, which is why `ttl: 0` is the plain
+reading — there is nothing to time out. The console recognises an entry
+as remote when its `proxy` is explicit, names something other than a
+loopback address, and contains no `${PORT}` or macro; that is what keeps
+it out of the card and VRAM arithmetic.
 
-Measured on llama-swap v273 (container image `cpu`, built 2026-11-15):
-with that entry, `GET /v1/models` lists the id and
-`POST /v1/chat/completions` for it answers from the other machine.
-Nothing here has been run against a real Mac yet — the forwarding target
-was a local stub speaking the OpenAI API, so treat the Yunshu pairing as
-written-from-the-protocol until someone says otherwise, and say so in
-your report if you do run it.
+Measured on llama-swap v273 (container image `cpu`, built 2026-11-15)
+against a real Mac running Yunshu 0.1.8.dev4 with
+`lmstudio-community/Qwen3-4B-MLX-4bit`, through a console on a Linux
+box: `GET /v1/models` listed the id and a request by its alias answered
+from the Mac; chat answered streaming and not, as did the legacy
+`/v1/completions`, Anthropic `/v1/messages` with `count_tokens`, and a
+tool-call round trip; unloading the entry killed the placeholder and the
+next request health-checked and answered again. Two console accounts
+were tried against it — the member was refused the model editor and its
+API key worked on `/v1`, while an administrator's key got 403 on `/api`.
+The Models page was refreshed for two minutes and the Mac saw nothing.
+On the ComfyUI question this was not a GPU machine and ComfyUI was not
+running, so the eviction guard is tested by unit tests only there.
 
 ## What works and what does not
 
