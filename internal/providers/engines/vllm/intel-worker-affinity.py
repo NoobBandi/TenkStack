@@ -20,7 +20,7 @@ What it changes, in the installed vLLM:
      dropped that check, so there the edit has nothing to do).
   3. v1/worker/mamba_utils.py: two device addresses stored in an int64 array
      are reinterpreted like the others there, since a worker's addresses can
-     sit above 2**63.
+     sit above 2**63 (upstream does this itself by the 0.34 nightlies).
   4. v1/executor/multiproc_executor.py (0.33 and later): the workers are
      started one after another again. 0.33 starts them from parallel threads,
      and edit 1 sets ZE_AFFINITY_MASK in this process's environment around
@@ -98,6 +98,8 @@ EDITS = [
         "                dst_ptrs_np[offset] = state[dest_block_id].data_ptr()\n",
         "                src_ptrs_np[offset] = _reinterpret_u64_as_i64(copy_spec.start_addr)  # TENKSTACK_MULTI_CARD\n"
         "                dst_ptrs_np[offset] = _reinterpret_u64_as_i64(state[dest_block_id].data_ptr())\n",
+        # Optional: by the 0.34 nightlies upstream reinterprets the addresses itself.
+        "src_ptrs_np[offset] = copy_spec.start_addr",
     ),
     (
         "v1/executor/multiproc_executor.py",
